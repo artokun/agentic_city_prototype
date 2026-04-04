@@ -68,7 +68,7 @@ pub enum BountyState {
     Completed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BountyObjective {
     /// Hide the given item inside any structure's inventory.
     HideItem(ItemType),
@@ -76,6 +76,12 @@ pub enum BountyObjective {
     FindItem(ItemType),
     /// Work at the building that posted this job.
     WorkAtBuilding,
+    /// Buy items from warehouse and deliver to a building.
+    RestockDelivery {
+        item: ItemType,
+        quantity: u32,
+        destination: String,
+    },
 }
 
 #[derive(Debug, Clone)]

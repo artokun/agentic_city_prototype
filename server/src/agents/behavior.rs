@@ -366,6 +366,73 @@ pub fn agent_behavior_system(
                         }
                     }
 
+                    BountyObjective::RestockDelivery { item, quantity, ref destination } => {
+                        if !has_path {
+                            // Step 1: Buy from warehouse if we don't have enough items.
+                            if !inv.has(item, quantity) {
+                                // Find the warehouse.
+                                let warehouse = structure_list.iter()
+                                    .find(|(_, _, s)| s == "warehouse");
+
+                                if let Some((_we, w_entrance, _)) = warehouse {
+                                    if at_pos(pos, w_entrance) {
+                                        // Buy items from warehouse.
+                                        let (gold_per, units_per) = item.wholesale_price().unwrap_or((1, 1));
+                                        let batches = (quantity + units_per - 1) / units_per;
+                                        let cost = batches * gold_per;
+
+                                        if inv.has(ItemType::GoldCoin, cost) {
+                                            inv.remove(ItemType::GoldCoin, cost);
+                                            inv.add(item, quantity);
+                                            thought.0 = format!("Bought {} {} from warehouse for {}g", quantity, item, cost);
+                                            tracing::info!("{} bought {} {} for {}g", name.0, quantity, item, cost);
+                                        } else {
+                                            thought.0 = format!("Can't afford warehouse purchase ({}g needed)", cost);
+                                            // Abandon bounty — can't complete.
+                                            *goal = AgentGoal::Idle;
+                                            continue;
+                                        }
+                                    } else {
+                                        thought.0 = format!("Going to warehouse to buy {} {}...", quantity, item);
+                                        if let Some(p) = pathfinding::bfs(&map, *pos, *w_entrance) {
+                                            commands.entity(agent_entity).insert(Path(p));
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // Step 2: Deliver to destination.
+                            if inv.has(item, quantity) {
+                                let dest = structure_list.iter()
+                                    .find(|(_, _, s)| s == destination);
+
+                                if let Some((de, d_entrance, dname)) = dest {
+                                    if at_pos(pos, d_entrance) {
+                                        // Deliver the goods.
+                                        if inv.remove(item, quantity) {
+                                            if let Ok((_, _, _, mut sinv)) = structures.get_mut(*de) {
+                                                sinv.add(item, quantity);
+                                            }
+                                            thought.0 = format!("Delivered {} {} to {}!", quantity, item, dname);
+                                            tracing::info!("{} delivered {} {} to {}", name.0, quantity, item, dname);
+                                            bounty_registry.mark_completed(bounty_id);
+                                            *goal = AgentGoal::ReturningToBoard(bounty_id);
+                                            if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                                                commands.entity(agent_entity).insert(Path(p));
+                                            }
+                                        }
+                                    } else {
+                                        thought.0 = format!("Delivering {} {} to {}...", quantity, item, dname);
+                                        if let Some(p) = pathfinding::bfs(&map, *pos, *d_entrance) {
+                                            commands.entity(agent_entity).insert(Path(p));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     BountyObjective::WorkAtBuilding => {
                         if !has_path {
                             // Find the building mentioned in the bounty description.

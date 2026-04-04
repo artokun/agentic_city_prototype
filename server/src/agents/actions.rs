@@ -3,7 +3,9 @@ use bevy::prelude::*;
 use super::components::{AgentAnimation, AnimState, ThoughtBubble};
 use super::needs::Needs;
 use crate::items::{Inventory, ItemType};
+use crate::world::economy::GoldReserve;
 use crate::world::services::ServiceEffects;
+use crate::world::structures::InsideBuilding;
 
 /// While this component is present, the agent is busy and cannot act.
 #[derive(Component)]
@@ -26,13 +28,23 @@ pub fn action_timer_system(
         &mut AgentAnimation,
         &mut ThoughtBubble,
         &super::components::AgentName,
+        Option<&InsideBuilding>,
     )>,
+    mut building_reserves: Query<&mut GoldReserve>,
 ) {
-    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name) in &mut agents {
-        // Pay gold on first tick.
+    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name, inside) in &mut agents {
+        // Pay gold on first tick — credit the building's reserve.
         if !timer.paid && timer.gold_cost > 0 {
             if inv.has(ItemType::GoldCoin, timer.gold_cost) {
                 inv.remove(ItemType::GoldCoin, timer.gold_cost);
+
+                // Credit building revenue.
+                if let Some(inside) = inside {
+                    if let Ok(mut reserve) = building_reserves.get_mut(inside.0) {
+                        reserve.0 += timer.gold_cost as i32;
+                    }
+                }
+
                 timer.paid = true;
             } else {
                 // Can't afford — cancel action.

@@ -1,5 +1,6 @@
 pub mod bounty;
 pub mod bounty_contract;
+pub mod economy;
 pub mod jobs;
 pub mod map;
 pub mod services;
@@ -18,6 +19,7 @@ impl Plugin for WorldPlugin {
             .init_resource::<ContractBoard>()
             .add_systems(Update, bounty::advance_board_queue)
             .add_systems(Update, jobs::job_posting_system)
-            .add_systems(Update, bounty_contract::bounty_expiry_system);
+            .add_systems(Update, bounty_contract::bounty_expiry_system)
+            .add_systems(Update, economy::auto_restock_system);
     }
 }

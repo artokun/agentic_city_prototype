@@ -6,6 +6,41 @@ use std::fmt;
 pub enum ItemType {
     GoldCoin,
     GoldEgg,
+    Coffee,
+    Muffin,
+    Rations,
+    Sandwich,
+    Soup,
+}
+
+impl ItemType {
+    /// Wholesale price at the warehouse (gold per unit).
+    pub fn wholesale_price(&self) -> Option<(u32, u32)> {
+        match self {
+            ItemType::Coffee => Some((1, 10)),   // 1g per 10 coffee
+            ItemType::Muffin => Some((1, 5)),    // 1g per 5 muffins
+            ItemType::Rations => Some((1, 10)),  // 1g per 10 rations
+            ItemType::Sandwich => Some((1, 5)),  // 1g per 5 sandwiches
+            ItemType::Soup => Some((1, 8)),      // 1g per 8 soup
+            _ => None,
+        }
+    }
+
+    /// Retail price when a customer buys one.
+    pub fn retail_price(&self) -> u32 {
+        match self {
+            ItemType::Coffee => 1,
+            ItemType::Muffin => 1,
+            ItemType::Sandwich => 1,
+            ItemType::Soup => 1,
+            ItemType::Rations => 0, // free at apartments
+            _ => 0,
+        }
+    }
+
+    pub fn is_food(&self) -> bool {
+        matches!(self, ItemType::Coffee | ItemType::Muffin | ItemType::Rations | ItemType::Sandwich | ItemType::Soup)
+    }
 }
 
 impl fmt::Display for ItemType {
@@ -13,6 +48,11 @@ impl fmt::Display for ItemType {
         match self {
             ItemType::GoldCoin => write!(f, "gold_coin"),
             ItemType::GoldEgg => write!(f, "gold_egg"),
+            ItemType::Coffee => write!(f, "coffee"),
+            ItemType::Muffin => write!(f, "muffin"),
+            ItemType::Rations => write!(f, "rations"),
+            ItemType::Sandwich => write!(f, "sandwich"),
+            ItemType::Soup => write!(f, "soup"),
         }
     }
 }
@@ -25,6 +65,15 @@ pub struct Inventory {
 impl Inventory {
     pub fn add(&mut self, item: ItemType, count: u32) {
         *self.items.entry(item).or_insert(0) += count;
+    }
+
+    pub fn add_capped(&mut self, item: ItemType, count: u32, max: u32) -> u32 {
+        let current = self.count(item);
+        let can_add = (max - current).min(count);
+        if can_add > 0 {
+            self.add(item, can_add);
+        }
+        can_add
     }
 
     pub fn remove(&mut self, item: ItemType, count: u32) -> bool {

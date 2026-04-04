@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::items::{Inventory, ItemType};
 use crate::world::bounty::*;
+use crate::world::economy::{GoldReserve, RetailConfig, StockItem, Warehouse};
 use crate::world::jobs::{Employer, JobTemplate};
 use crate::world::map::{city_buildings, GridPos};
 
@@ -43,14 +44,20 @@ fn spawn_structures(mut commands: Commands) {
 
     for bld in &buildings {
         let entrance = bld.entrance_pos();
+        // Inventory is set per-building in the economy block below.
         let mut entity_cmds = commands.spawn((
             StructureId(Uuid::new_v4()),
             GridPos { x: bld.x, y: bld.y },
             SpriteType(bld.name.into()),
             Entrance(entrance),
-            Inventory::default(),
             Interactable,
         ));
+
+        // Default empty inventory for buildings without special stock.
+        let has_custom_inv = matches!(bld.name, "cafe" | "restaurant" | "diner" | "market" | "warehouse" | "apartments");
+        if !has_custom_inv {
+            entity_cmds.insert(Inventory::default());
+        }
 
         if bld.name == "google" {
             entity_cmds.insert(GoogleBuilding);
@@ -112,6 +119,85 @@ fn spawn_structures(mut commands: Commands) {
                     post_interval: 350,
                     last_posted_tick: 0,
                 });
+            }
+            _ => {}
+        }
+
+        // Attach economy components.
+        match bld.name {
+            "cafe" => {
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Coffee, 5);
+                inv.add(ItemType::Muffin, 5);
+                entity_cmds.insert(inv);
+                entity_cmds.insert(GoldReserve(5));
+                entity_cmds.insert(RetailConfig {
+                    stock: vec![
+                        StockItem { item: ItemType::Coffee, max: 20, reorder_at: 2, reorder_qty: 10 },
+                        StockItem { item: ItemType::Muffin, max: 20, reorder_at: 2, reorder_qty: 5 },
+                    ],
+                });
+            }
+            "restaurant" => {
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Sandwich, 5);
+                inv.add(ItemType::Soup, 5);
+                entity_cmds.insert(inv);
+                entity_cmds.insert(GoldReserve(5));
+                entity_cmds.insert(RetailConfig {
+                    stock: vec![
+                        StockItem { item: ItemType::Sandwich, max: 20, reorder_at: 2, reorder_qty: 5 },
+                        StockItem { item: ItemType::Soup, max: 20, reorder_at: 2, reorder_qty: 8 },
+                    ],
+                });
+            }
+            "diner" => {
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Coffee, 5);
+                inv.add(ItemType::Sandwich, 5);
+                entity_cmds.insert(inv);
+                entity_cmds.insert(GoldReserve(3));
+                entity_cmds.insert(RetailConfig {
+                    stock: vec![
+                        StockItem { item: ItemType::Coffee, max: 15, reorder_at: 2, reorder_qty: 10 },
+                        StockItem { item: ItemType::Sandwich, max: 15, reorder_at: 2, reorder_qty: 5 },
+                    ],
+                });
+            }
+            "market" => {
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Coffee, 5);
+                inv.add(ItemType::Muffin, 5);
+                inv.add(ItemType::Sandwich, 5);
+                inv.add(ItemType::Rations, 5);
+                entity_cmds.insert(inv);
+                entity_cmds.insert(GoldReserve(8));
+                entity_cmds.insert(RetailConfig {
+                    stock: vec![
+                        StockItem { item: ItemType::Coffee, max: 20, reorder_at: 2, reorder_qty: 10 },
+                        StockItem { item: ItemType::Muffin, max: 20, reorder_at: 2, reorder_qty: 5 },
+                        StockItem { item: ItemType::Sandwich, max: 20, reorder_at: 2, reorder_qty: 5 },
+                        StockItem { item: ItemType::Rations, max: 20, reorder_at: 2, reorder_qty: 10 },
+                    ],
+                });
+            }
+            "warehouse" => {
+                // Unlimited wholesale supplier.
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Coffee, 999);
+                inv.add(ItemType::Muffin, 999);
+                inv.add(ItemType::Rations, 999);
+                inv.add(ItemType::Sandwich, 999);
+                inv.add(ItemType::Soup, 999);
+                entity_cmds.insert(inv);
+                entity_cmds.insert(Warehouse);
+                entity_cmds.insert(GoldReserve(0));
+            }
+            "apartments" => {
+                // Free rations at home.
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Rations, 999);
+                entity_cmds.insert(inv);
             }
             _ => {}
         }
