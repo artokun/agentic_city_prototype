@@ -1,3 +1,4 @@
+pub mod agent_relay;
 pub mod broadcast;
 pub mod commands;
 pub mod serializer;
@@ -7,19 +8,24 @@ use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use tokio::sync::mpsc;
 
+use self::agent_relay::AgentRelays;
 use self::broadcast::BroadcastTx;
 use self::commands::CommandReceiver;
 use self::ws::AppState;
+use crate::agents::ai::AgentRelaysResource;
 
 pub struct NetworkPlugin;
 
 impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
+        let relays = AgentRelays::default();
 
         app.init_resource::<BroadcastTx>()
             .insert_resource(CommandReceiver { rx: cmd_rx })
             .insert_resource(CommandSenderHolder(cmd_tx))
+            .insert_resource(AgentRelaysResource(relays.clone()))
+            .insert_resource(RelaysHolder(relays))
             .add_systems(Startup, spawn_axum)
             .add_systems(Update, broadcast::broadcast_state)
             .add_systems(Update, commands::process_commands_system);
@@ -29,15 +35,20 @@ impl Plugin for NetworkPlugin {
 #[derive(Resource)]
 struct CommandSenderHolder(mpsc::Sender<commands::GameCommand>);
 
+#[derive(Resource, Clone)]
+struct RelaysHolder(AgentRelays);
+
 fn spawn_axum(
     runtime: ResMut<TokioTasksRuntime>,
     broadcast_tx: Res<BroadcastTx>,
     cmd_sender: Res<CommandSenderHolder>,
+    relays: Res<RelaysHolder>,
 ) {
     let state = AppState {
         broadcast_tx: broadcast_tx.sender.clone(),
         command_tx: cmd_sender.0.clone(),
         stripe_secret: std::env::var("STRIPE_SECRET_KEY").ok(),
+        agent_relays: relays.0.clone(),
     };
 
     runtime.spawn_background_task(|_ctx| async move {

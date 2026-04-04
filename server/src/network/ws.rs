@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
+use super::agent_relay::{self, AgentRelays};
 use super::commands::GameCommand;
 
 #[derive(Clone)]
@@ -20,6 +21,7 @@ pub struct AppState {
     pub broadcast_tx: Arc<broadcast::Sender<Bytes>>,
     pub command_tx: mpsc::Sender<GameCommand>,
     pub stripe_secret: Option<String>,
+    pub agent_relays: AgentRelays,
 }
 
 pub async fn start_server(state: AppState) {
@@ -29,6 +31,10 @@ pub async fn start_server(state: AppState) {
         .route("/api/bounties", post(create_bounty))
         .route("/api/bounties", get(list_bounties))
         .route("/api/contracts", post(create_contract))
+        .route("/agent/{id}/ws", get({
+            let relays = state.agent_relays.clone();
+            move |ws, path| agent_relay::agent_ws_handler(ws, path, axum::extract::State(relays))
+        }))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")

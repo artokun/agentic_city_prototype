@@ -1,10 +1,12 @@
 use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
+use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::agents::ai_decision::{self, AgentAction};
-use crate::agents::claude;
 use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
@@ -15,51 +17,165 @@ use crate::tick::TickCount;
 use crate::world::bounty::BountyRegistry;
 use crate::world::map::{GridPos, WorldMap};
 use crate::world::structures::{Entrance, SpriteType, StructureId};
+use crate::network::agent_relay::AgentRelays;
 
 use super::actions::ActionTimer;
 use super::pathfinding;
 use super::personality::Personality;
 
-/// Bevy resource: tracks pending AI decisions per agent.
+/// Bevy resource: tracks sessions per agent.
 #[derive(Resource, Default)]
 pub struct AgentSessions {
-    pub sessions: std::collections::HashMap<Entity, SessionState>,
+    pub sessions: HashMap<Entity, SessionState>,
 }
 
 pub struct SessionState {
+    pub prompt_tx: mpsc::Sender<String>,
+    pub response_rx: Arc<Mutex<mpsc::Receiver<String>>>,
     pub last_decision_tick: u64,
-    /// If Some, a Claude response is being awaited.
-    pub pending_response: Option<Arc<Mutex<Option<String>>>>,
+    pub pending: bool,
     pub system_prompt: String,
 }
 
-const DECISION_INTERVAL: u64 = 50; // 5 seconds between decisions
+/// Bevy resource wrapping AgentRelays for Axum.
+#[derive(Resource, Clone)]
+pub struct AgentRelaysResource(pub AgentRelays);
 
-/// System: initialize session state for agents that don't have one.
+const DECISION_INTERVAL: u64 = 50;
+
+/// System: spawn Claude sessions via --sdk-url for agents.
 pub fn spawn_sessions_system(
+    runtime: ResMut<TokioTasksRuntime>,
     mut sessions: ResMut<AgentSessions>,
-    agents: Query<(Entity, &AgentName, &Personality)>,
+    relays: Res<AgentRelaysResource>,
+    agents: Query<(Entity, &AgentId, &AgentName, &Personality)>,
 ) {
-    for (entity, name, personality) in &agents {
+    for (entity, agent_id, name, personality) in &agents {
         if sessions.sessions.contains_key(&entity) {
             continue;
         }
+
+        let agent_name = name.0.clone();
+        let agent_uuid = agent_id.0.to_string();
         let system_prompt = super::personality::build_system_prompt(&name.0, personality);
+        let relays_clone = relays.0.clone();
+        let sys_prompt_clone = system_prompt.clone();
+
+        tracing::info!("Spawning Claude --sdk-url session for {} ({})", agent_name, agent_uuid);
+
+        // Create placeholder — will be replaced when relay is ready.
+        let (placeholder_tx, _) = mpsc::channel(1);
+        let (_, placeholder_rx) = mpsc::channel(1);
         sessions.sessions.insert(entity, SessionState {
+            prompt_tx: placeholder_tx,
+            response_rx: Arc::new(Mutex::new(placeholder_rx)),
             last_decision_tick: 0,
-            pending_response: None,
-            system_prompt,
+            pending: false,
+            system_prompt: system_prompt.clone(),
+        });
+
+        let entity_copy = entity;
+
+        runtime.spawn_background_task(move |mut ctx| async move {
+            // Register the relay endpoint.
+            let handle = relays_clone.register(&agent_uuid).await;
+
+            // Write system prompt to temp file.
+            let prompt_file = format!("/tmp/agent-{}.md", agent_uuid);
+            if let Err(e) = tokio::fs::write(&prompt_file, &sys_prompt_clone).await {
+                tracing::error!("Failed to write prompt file: {}", e);
+                return;
+            }
+
+            // Spawn Claude CLI with --sdk-url.
+            let sdk_url = format!("ws://127.0.0.1:8080/agent/{}/ws", agent_uuid);
+            let mut env: HashMap<String, String> = std::env::vars().collect();
+            env.remove("ANTHROPIC_API_KEY");
+
+            let child = tokio::process::Command::new("claude")
+                .args([
+                    "--sdk-url", &sdk_url,
+                    "--output-format", "stream-json",
+                    "--input-format", "stream-json",
+                    "--permission-mode", "bypassPermissions",
+                    "--model", "haiku",
+                    "--append-system-prompt-file", &prompt_file,
+                    "--verbose",
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .envs(&env)
+                .kill_on_drop(true)
+                .spawn();
+
+            let mut child = match child {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to spawn claude for {}: {}", agent_name, e);
+                    return;
+                }
+            };
+
+            tracing::info!("Claude spawned for {} → {}", agent_name, sdk_url);
+
+            // Log stderr.
+            let name_err = agent_name.clone();
+            if let Some(stderr) = child.stderr.take() {
+                tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if !line.is_empty() && !line.contains("debugger") {
+                            tracing::debug!("[claude:{}:stderr] {}", name_err, line);
+                        }
+                    }
+                });
+            }
+
+            // Wait for Claude to connect to the WebSocket relay.
+            tracing::info!("Waiting for Claude to connect for {}...", agent_name);
+            let connected = handle.connected.clone();
+            tokio::select! {
+                _ = connected.notified() => {
+                    tracing::info!("Claude connected via --sdk-url for {}", agent_name);
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                    tracing::error!("Claude connection timeout for {}", agent_name);
+                    return;
+                }
+            }
+
+            // Update the session handle on the main thread.
+            let ptx = handle.prompt_tx;
+            let rrx = Arc::new(Mutex::new(handle.response_rx));
+            let ptx_clone = ptx.clone();
+            let rrx_clone = rrx.clone();
+
+            ctx.run_on_main_thread(move |main_ctx| {
+                let world = main_ctx.world;
+                let mut sessions = world.resource_mut::<AgentSessions>();
+                if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
+                    s.prompt_tx = ptx_clone;
+                    s.response_rx = rrx_clone;
+                    tracing::info!("Session channels updated for entity {:?}", entity_copy);
+                }
+            }).await;
+
+            // Keep the task alive while Claude is running.
+            let _ = child.wait().await;
+            tracing::info!("Claude process exited for {}", agent_name);
+            let _ = tokio::fs::remove_file(&prompt_file).await;
         });
     }
 }
 
-/// System: send decision prompts to Claude and apply responses.
+/// System: send decision prompts and apply responses.
 pub fn ai_decision_system(
     mut commands: Commands,
     tick: Res<TickCount>,
     map: Res<WorldMap>,
     bounty_registry: Res<BountyRegistry>,
-    runtime: ResMut<TokioTasksRuntime>,
     mut sessions: ResMut<AgentSessions>,
     mut event_log: ResMut<AgentEventLog>,
     mut agents: Query<(
@@ -86,17 +202,21 @@ pub fn ai_decision_system(
         let Some(session) = sessions.sessions.get_mut(&entity) else { continue };
 
         // Check for pending response.
-        if let Some(ref response_slot) = session.pending_response {
-            let maybe_response = response_slot.lock().unwrap().take();
+        if session.pending {
+            let maybe_response = {
+                let mut rx = session.response_rx.lock().unwrap();
+                rx.try_recv().ok()
+            };
+
             if let Some(response_text) = maybe_response {
-                session.pending_response = None;
+                session.pending = false;
                 let (action, thought_text) = ai_decision::parse_action(&response_text);
                 thought.0 = thought_text.clone();
                 tracing::info!("[AI:{}] {} → {:?}", name.0, thought_text, action);
 
                 event_log.push(LogEvent {
                     tick: tick.0, agent: name.0.clone(),
-                    kind: LogKind::Thought, text: thought_text.clone(),
+                    kind: LogKind::Thought, text: thought_text,
                 });
                 event_log.push(LogEvent {
                     tick: tick.0, agent: name.0.clone(),
@@ -107,30 +227,27 @@ pub fn ai_decision_system(
                     AgentAction::WorkShift { building } => {
                         if let Some((bld_entity, entrance, _)) = structure_list.iter().find(|(_, _, s)| s == building) {
                             *goal = AgentGoal::GoingToService {
-                                building: *bld_entity,
-                                service: "work_shift".into(),
+                                building: *bld_entity, service: "work_shift".into(),
                             };
                             if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
                                 commands.entity(entity).insert(Path(p));
                             }
                         }
                     }
-                    AgentAction::LeaveShift => {
-                        *goal = AgentGoal::Idle;
-                    }
+                    AgentAction::LeaveShift => { *goal = AgentGoal::Idle; }
                     _ => {
                         apply_action(&mut commands, entity, &action, &mut goal, pos, &map, &structure_list, known_locs);
                     }
                 }
             }
-            continue; // Still waiting for response.
+            continue;
         }
 
         // Rate limit.
         if tick.0 - session.last_decision_tick < DECISION_INTERVAL { continue; }
         if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering) { continue; }
 
-        // Build context.
+        // Build context and send.
         let available_bounties: Vec<String> = bounty_registry
             .available().iter()
             .map(|b| format!("{} ({}g)", b.description, b.reward_gold)).collect();
@@ -140,33 +257,17 @@ pub fn ai_decision_system(
             .filter(|(_, p)| (p.x - pos.x).abs() + (p.y - pos.y).abs() <= 10)
             .map(|(n, p)| (n.0.clone(), *p)).collect();
 
-        let location_tools: Vec<&str> = vec![];
-
-        let context = ai_decision::build_context(
+        let context = super::ai_decision::build_context(
             &name.0, pos, needs, inv, &goal, known_locs, rels,
-            speed.0, &available_bounties, &nearby, &location_tools,
+            speed.0, &available_bounties, &nearby, &[],
         );
 
-        // Spawn async Claude call.
-        let response_slot = Arc::new(Mutex::new(None::<String>));
-        let slot_clone = response_slot.clone();
-        let system_prompt = session.system_prompt.clone();
-        let agent_name = name.0.clone();
+        if let Err(e) = session.prompt_tx.try_send(context) {
+            tracing::debug!("[AI:{}] prompt send failed: {}", name.0, e);
+            continue;
+        }
 
-        runtime.spawn_background_task(move |_ctx| async move {
-            match claude::ask_claude(&context, &system_prompt).await {
-                Ok(response) => {
-                    tracing::info!("[Claude:{}] response: {}", agent_name, &response[..response.len().min(100)]);
-                    *slot_clone.lock().unwrap() = Some(response);
-                }
-                Err(e) => {
-                    tracing::error!("[Claude:{}] error: {}", agent_name, e);
-                    *slot_clone.lock().unwrap() = Some(r#"{"action": "wander", "thought": "Claude error, wandering"}"#.to_string());
-                }
-            }
-        });
-
-        session.pending_response = Some(response_slot);
+        session.pending = true;
         session.last_decision_tick = tick.0;
     }
 }
