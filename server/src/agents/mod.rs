@@ -1,11 +1,15 @@
 pub mod action_log;
 pub mod actions;
+pub mod ai;
+pub mod ai_decision;
 pub mod behavior;
+pub mod claude;
 pub mod components;
 pub mod movement;
 pub mod needs;
 pub mod pathfinding;
 pub mod perception;
+pub mod personality;
 pub mod social;
 
 use bevy::prelude::*;
@@ -20,7 +24,8 @@ pub struct AgentPlugin;
 
 impl Plugin for AgentPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_agents.after(init_map))
+        app.init_resource::<ai::AgentSessions>()
+            .add_systems(Startup, spawn_agents.after(init_map))
             .add_systems(
                 Update,
                 (
@@ -34,6 +39,8 @@ impl Plugin for AgentPlugin {
                     perception::passive_discovery_system,
                     social::social_matchmaking_system,
                     social::social_memory_system,
+                    ai::spawn_sessions_system,
+                    ai::ai_decision_system,
                     behavior::agent_behavior_system,
                 )
                     .chain(),
@@ -53,26 +60,33 @@ fn spawn_agents(
         ("Carol", 3.0),
     ];
 
-    // Get the bounty board entity so agents start knowing where it is.
-    let board_info: Option<(Entity, GridPos, GridPos)> = boards.iter().next()
+    let board_info: Option<(Entity, GridPos, GridPos)> = boards
+        .iter()
+        .next()
         .map(|(e, pos, entrance)| (e, *pos, entrance.0));
 
     for (i, (name, speed)) in agents_config.iter().enumerate() {
         let start = walkable[i * 17 % walkable.len()];
         let mut bundle = AgentBundle::new(name, start, *speed);
 
-        // Seed: every agent knows where the bounty board is.
+        // Seed bounty board location.
         if let Some((board_entity, board_pos, board_entrance)) = board_info {
-            bundle.known_locations.locations.insert(board_entity, KnownPlace {
-                name: "bounty_board".into(),
-                pos: board_pos,
-                entrance: board_entrance,
-                discovered_tick: 0,
-                source: DiscoverySource::Initial,
-            });
+            bundle.known_locations.locations.insert(
+                board_entity,
+                KnownPlace {
+                    name: "bounty_board".into(),
+                    pos: board_pos,
+                    entrance: board_entrance,
+                    discovered_tick: 0,
+                    source: DiscoverySource::Initial,
+                },
+            );
         }
 
-        commands.spawn(bundle);
-        tracing::info!("spawned {name} at ({}, {}), speed={speed}", start.x, start.y);
+        // Generate unique personality.
+        let personality = personality::generate_personality(name);
+        tracing::info!("spawned {name} at ({}, {}), speed={speed}\n{}", start.x, start.y, personality.traits);
+
+        commands.spawn((bundle, personality));
     }
 }
