@@ -1,0 +1,449 @@
+use bevy::prelude::*;
+use crate::items::{Inventory, ItemType};
+use crate::tick::TickCount;
+use crate::world::bounty::*;
+use crate::world::map::{GridPos, WorldMap};
+use crate::world::services;
+use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
+
+use super::actions::ActionTimer;
+use super::components::*;
+use super::needs::{NeedType, Needs};
+use super::pathfinding;
+
+const URGENT_THRESHOLD: f32 = 25.0;
+const CRITICAL_THRESHOLD: f32 = 10.0;
+
+fn at_pos(a: &GridPos, b: &GridPos) -> bool {
+    a.x == b.x && a.y == b.y
+}
+
+fn pick_service_for_need(
+    need: NeedType,
+    agent_pos: &GridPos,
+    agent_gold: u32,
+    agent_speed: f32,
+    structures: &[(Entity, GridPos, String)],
+    map: &WorldMap,
+) -> Option<(Entity, GridPos, services::BuildingService)> {
+    let all = services::all_services();
+    let relevant: Vec<_> = all
+        .iter()
+        .filter(|s| match need {
+            NeedType::Energy => s.effects.energy > 0.0,
+            NeedType::Hunger => s.effects.hunger > 0.0,
+            NeedType::Boredom => s.effects.boredom > 0.0,
+        })
+        .collect();
+
+    let mut best: Option<(Entity, GridPos, &services::BuildingService, f32)> = None;
+
+    for service in &relevant {
+        if service.gold_cost > agent_gold { continue; }
+        for (entity, entrance, name) in structures {
+            if name != service.building_name { continue; }
+            let distance = pathfinding::bfs(map, *agent_pos, *entrance)
+                .map(|p| p.len() as f32)
+                .unwrap_or(999.0);
+            let travel_ticks = distance / agent_speed;
+            let total_ticks = travel_ticks + service.duration_ticks as f32;
+            let effect = match need {
+                NeedType::Energy => service.effects.energy,
+                NeedType::Hunger => service.effects.hunger,
+                NeedType::Boredom => service.effects.boredom,
+            };
+            let efficiency = effect / total_ticks;
+            if best.is_none() || efficiency > best.as_ref().unwrap().3 {
+                best = Some((*entity, *entrance, service, efficiency));
+            }
+        }
+    }
+    best.map(|(e, pos, s, _)| (e, pos, s.clone()))
+}
+
+pub fn agent_behavior_system(
+    mut commands: Commands,
+    map: Res<WorldMap>,
+    tick: Res<TickCount>,
+    mut bounty_registry: ResMut<BountyRegistry>,
+    mut agents: Query<(
+        Entity,
+        &AgentName,
+        &GridPos,
+        &Speed,
+        &mut AgentGoal,
+        &mut ThoughtBubble,
+        &mut AgentAnimation,
+        &mut Inventory,
+        &Needs,
+        Option<&Path>,
+        Option<&ActionTimer>,
+        Option<&InsideBuilding>,
+    )>,
+    mut boards: Query<(Entity, &Entrance, &mut BoardQueue), With<BountyBoard>>,
+    mut structures: Query<
+        (Entity, &Entrance, &SpriteType, &mut Inventory),
+        (With<StructureId>, Without<AgentName>),
+    >,
+) {
+    let board_info: Vec<(Entity, GridPos)> = boards
+        .iter()
+        .map(|(e, entrance, _)| (e, entrance.0))
+        .collect();
+    let Some((board_entity, board_entrance)) = board_info.first().copied() else { return };
+
+    let structure_list: Vec<(Entity, GridPos, String)> = structures
+        .iter()
+        .map(|(e, entrance, sprite, _)| (e, entrance.0, sprite.0.clone()))
+        .collect();
+
+    for (
+        agent_entity, name, pos, speed, mut goal, mut thought, mut anim, mut inv,
+        needs, path, action_timer, inside,
+    ) in &mut agents {
+        // Busy with a timed action — skip.
+        if action_timer.is_some() {
+            if !matches!(*goal, AgentGoal::PerformingAction) {
+                *goal = AgentGoal::PerformingAction;
+            }
+            continue;
+        }
+
+        // Just finished an action — clean up and re-evaluate.
+        if *goal == AgentGoal::PerformingAction {
+            if inside.is_some() {
+                commands.entity(agent_entity).remove::<InsideBuilding>();
+            }
+            *goal = AgentGoal::Idle;
+        }
+
+        let has_path = path.is_some_and(|p| !p.0.is_empty());
+        let gold = inv.count(ItemType::GoldCoin);
+
+        // Clone goal to avoid borrow issues with the match.
+        let current_goal = goal.clone();
+
+        match current_goal {
+            AgentGoal::Wandering => {
+                if !has_path { *goal = AgentGoal::Idle; }
+            }
+
+            AgentGoal::Idle => {
+                // Priority: critical needs > urgent needs > bounties > wander.
+                if let Some(need) = needs.most_urgent(CRITICAL_THRESHOLD) {
+                    if let Some((bld, entrance, service)) = pick_service_for_need(
+                        need, pos, gold, speed.0, &structure_list, &map,
+                    ) {
+                        thought.0 = format!("CRITICAL {:?}! → {}", need, service.action_name);
+                        *goal = AgentGoal::GoingToService { building: bld, service: service.action_name.into() };
+                        if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
+                            commands.entity(agent_entity).insert(Path(p));
+                        }
+                        continue;
+                    }
+                }
+
+                if let Some(need) = needs.most_urgent(URGENT_THRESHOLD) {
+                    if let Some((bld, entrance, service)) = pick_service_for_need(
+                        need, pos, gold, speed.0, &structure_list, &map,
+                    ) {
+                        thought.0 = format!("{:?} low → {}", need, service.action_name);
+                        *goal = AgentGoal::GoingToService { building: bld, service: service.action_name.into() };
+                        if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
+                            commands.entity(agent_entity).insert(Path(p));
+                        }
+                        continue;
+                    }
+                }
+
+                thought.0 = "Heading to bounty board...".into();
+                *goal = AgentGoal::GoingToBoard;
+                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                    commands.entity(agent_entity).insert(Path(p));
+                }
+            }
+
+            AgentGoal::GoingToService { building, service } => {
+                if !has_path {
+                    let at_entrance = structure_list
+                        .iter()
+                        .find(|(e, _, _)| *e == building)
+                        .is_some_and(|(_, ent, _)| at_pos(pos, ent));
+
+                    if at_entrance {
+                        let svc = services::all_services()
+                            .into_iter()
+                            .find(|s| s.action_name == service);
+                        if let Some(svc) = svc {
+                            thought.0 = format!("{}...", svc.action_name);
+                            commands.entity(agent_entity).insert(InsideBuilding(building));
+                            commands.entity(agent_entity).insert(ActionTimer {
+                                action_name: svc.action_name.to_string(),
+                                remaining_ticks: svc.duration_ticks,
+                                effects: svc.effects,
+                                gold_cost: svc.gold_cost,
+                                paid: false,
+                            });
+                            *goal = AgentGoal::PerformingAction;
+                        } else {
+                            *goal = AgentGoal::Idle;
+                        }
+                    } else {
+                        // Repath to entrance.
+                        if let Some((_, entrance, _)) = structure_list.iter().find(|(e, _, _)| *e == building) {
+                            if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
+                                commands.entity(agent_entity).insert(Path(p));
+                            }
+                        } else {
+                            *goal = AgentGoal::Idle;
+                        }
+                    }
+                }
+            }
+
+            AgentGoal::GoingToBoard => {
+                if !has_path && at_pos(pos, &board_entrance) {
+                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                        if queue.try_interact(agent_entity) {
+                            thought.0 = "Browsing the bounty board...".into();
+                            anim.0 = AnimState::Working;
+                            *goal = AgentGoal::InteractingWithBoard;
+                        } else {
+                            queue.join_queue(agent_entity);
+                            thought.0 = "Waiting in line...".into();
+                            *goal = AgentGoal::WaitingAtBoard;
+                        }
+                    }
+                } else if !has_path {
+                    if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                        commands.entity(agent_entity).insert(Path(p));
+                    }
+                }
+            }
+
+            AgentGoal::WaitingAtBoard => {
+                if let Some(need) = needs.most_urgent(CRITICAL_THRESHOLD) {
+                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                        queue.leave(agent_entity);
+                    }
+                    thought.0 = format!("Can't wait, {:?} critical!", need);
+                    *goal = AgentGoal::Idle;
+                    continue;
+                }
+                if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                    if queue.try_interact(agent_entity) {
+                        thought.0 = "My turn! Browsing bounties...".into();
+                        anim.0 = AnimState::Working;
+                        *goal = AgentGoal::InteractingWithBoard;
+                    }
+                }
+            }
+
+            AgentGoal::InteractingWithBoard => {
+                let available: Vec<_> = bounty_registry
+                    .available()
+                    .iter()
+                    .map(|b| (b.id, b.description.clone()))
+                    .collect();
+
+                if let Some((bounty_id, desc)) = available.first() {
+                    let bounty_id = *bounty_id;
+                    if let Some(bounty) = bounty_registry.claim(bounty_id, agent_entity) {
+                        let claim_items = bounty.claim_items.clone();
+                        thought.0 = format!("Claimed: {desc}");
+                        tracing::info!("{} claimed: {desc}", name.0);
+                        for (item, count) in &claim_items { inv.add(*item, *count); }
+                        if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                            queue.leave(agent_entity);
+                        }
+                        anim.0 = AnimState::Idle;
+                        *goal = AgentGoal::ExecutingBounty(bounty_id);
+                    }
+                } else {
+                    thought.0 = "No bounties available.".into();
+                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                        queue.leave(agent_entity);
+                    }
+                    anim.0 = AnimState::Idle;
+                    let walkable = map.walkable_positions();
+                    let idx = (agent_entity.to_bits() as usize + tick.0 as usize) % walkable.len();
+                    if let Some(p) = pathfinding::bfs(&map, *pos, walkable[idx]) {
+                        if !p.is_empty() {
+                            commands.entity(agent_entity).insert(Path(p));
+                            *goal = AgentGoal::Wandering;
+                        } else { *goal = AgentGoal::Idle; }
+                    } else { *goal = AgentGoal::Idle; }
+                }
+            }
+
+            AgentGoal::ExecutingBounty(bounty_id) => {
+                let bounty = bounty_registry.get(bounty_id).cloned();
+                let Some(bounty) = bounty else { *goal = AgentGoal::Idle; continue };
+
+                match bounty.objective {
+                    BountyObjective::HideItem(item) => {
+                        if !has_path {
+                            if inv.has(item, 1) {
+                                let candidates: Vec<_> = structure_list.iter()
+                                    .filter(|(_, _, s)| s != "bounty_board")
+                                    .collect();
+                                if let Some((se, entrance, sname)) = candidates.first() {
+                                    if at_pos(pos, entrance) {
+                                        commands.entity(agent_entity).insert(InsideBuilding(*se));
+                                        if inv.remove(item, 1) {
+                                            if let Ok((_, _, _, mut sinv)) = structures.get_mut(*se) {
+                                                sinv.add(item, 1);
+                                                thought.0 = format!("Hid {} in {}!", item, sname);
+                                                tracing::info!("{} hid {} in {}", name.0, item, sname);
+                                                bounty_registry.mark_completed(bounty_id);
+                                                commands.entity(agent_entity).remove::<InsideBuilding>();
+                                                *goal = AgentGoal::ReturningToBoard(bounty_id);
+                                                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                                                    commands.entity(agent_entity).insert(Path(p));
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        thought.0 = format!("→ {} to hide {}...", sname, item);
+                                        if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
+                                            commands.entity(agent_entity).insert(Path(p));
+                                        }
+                                    }
+                                }
+                            } else { *goal = AgentGoal::Idle; }
+                        }
+                    }
+                    BountyObjective::FindItem(item) => {
+                        if !has_path {
+                            if inv.has(item, 1) {
+                                thought.0 = format!("Found {}! Returning...", item);
+                                commands.entity(agent_entity).remove::<InsideBuilding>();
+                                bounty_registry.mark_completed(bounty_id);
+                                *goal = AgentGoal::ReturningToBoard(bounty_id);
+                                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                                    commands.entity(agent_entity).insert(Path(p));
+                                }
+                                continue;
+                            }
+                            // Search structures.
+                            let mut found_at = None;
+                            for (se, entrance, sname) in &structure_list {
+                                if sname == "bounty_board" { continue; }
+                                if let Ok((_, _, _, sinv)) = structures.get(*se) {
+                                    if sinv.has(item, 1) {
+                                        found_at = Some((*se, *entrance, sname.clone()));
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some((se, entrance, sname)) = found_at {
+                                if at_pos(pos, &entrance) {
+                                    commands.entity(agent_entity).insert(InsideBuilding(se));
+                                    if let Ok((_, _, _, mut sinv)) = structures.get_mut(se) {
+                                        if sinv.remove(item, 1) {
+                                            inv.add(item, 1);
+                                            thought.0 = format!("Found {} in {}!", item, sname);
+                                            tracing::info!("{} found {} in {}", name.0, item, sname);
+                                        }
+                                    }
+                                } else {
+                                    thought.0 = format!("Searching {}...", sname);
+                                    if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
+                                        commands.entity(agent_entity).insert(Path(p));
+                                    }
+                                }
+                            } else {
+                                let candidates: Vec<_> = structure_list.iter()
+                                    .filter(|(_, _, s)| s != "bounty_board").collect();
+                                let idx = (agent_entity.to_bits() as usize + tick.0 as usize) % candidates.len().max(1);
+                                if let Some((_, entrance, sname)) = candidates.get(idx) {
+                                    thought.0 = format!("Searching {}...", sname);
+                                    if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
+                                        commands.entity(agent_entity).insert(Path(p));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    BountyObjective::WorkAtBuilding => {
+                        if !has_path {
+                            // Find the building mentioned in the bounty description.
+                            let target_building = structure_list.iter().find(|(_, _, sname)| {
+                                bounty.description.contains(sname.as_str())
+                            });
+
+                            if let Some((se, entrance, sname)) = target_building {
+                                if at_pos(pos, entrance) {
+                                    // Work at the building (timed action).
+                                    commands.entity(agent_entity).insert(InsideBuilding(*se));
+                                    commands.entity(agent_entity).insert(super::actions::ActionTimer {
+                                        action_name: format!("working: {}", bounty.description),
+                                        remaining_ticks: 40, // default work duration
+                                        effects: crate::world::services::ServiceEffects {
+                                            boredom: 15.0,
+                                            ..Default::default()
+                                        },
+                                        gold_cost: 0,
+                                        paid: true,
+                                    });
+                                    thought.0 = format!("Working: {}...", bounty.description);
+                                    tracing::info!("{} started working: {}", name.0, bounty.description);
+                                    bounty_registry.mark_completed(bounty_id);
+                                    *goal = AgentGoal::ReturningToBoard(bounty_id);
+                                } else {
+                                    thought.0 = format!("Going to {} for work...", sname);
+                                    if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
+                                        commands.entity(agent_entity).insert(Path(p));
+                                    }
+                                }
+                            } else {
+                                // Can't find the building — just complete it.
+                                bounty_registry.mark_completed(bounty_id);
+                                *goal = AgentGoal::ReturningToBoard(bounty_id);
+                                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                                    commands.entity(agent_entity).insert(Path(p));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            AgentGoal::ReturningToBoard(bounty_id) => {
+                if !has_path && at_pos(pos, &board_entrance) {
+                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                        if queue.try_interact(agent_entity) {
+                            if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
+                                let can_claim = match bounty.objective {
+                                    BountyObjective::FindItem(item) => inv.has(item, 1),
+                                    _ => true,
+                                };
+                                if can_claim {
+                                    if let BountyObjective::FindItem(item) = bounty.objective {
+                                        inv.remove(item, 1);
+                                    }
+                                    inv.add(ItemType::GoldCoin, bounty.reward_gold);
+                                    thought.0 = format!("Collected {} gold!", bounty.reward_gold);
+                                    tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
+                                }
+                            }
+                            queue.leave(agent_entity);
+                            anim.0 = AnimState::Idle;
+                            *goal = AgentGoal::Idle;
+                        } else {
+                            queue.join_queue(agent_entity);
+                            thought.0 = "Waiting to claim reward...".into();
+                        }
+                    }
+                } else if !has_path {
+                    if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                        commands.entity(agent_entity).insert(Path(p));
+                    }
+                }
+            }
+
+            AgentGoal::PerformingAction => {} // handled above
+        }
+    }
+}

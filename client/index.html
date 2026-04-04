@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>World Debug Monitor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0a0a0a; color: #e0e0e0; padding: 16px; font-size: 11px; }
+    h1 { color: #635bff; margin-bottom: 4px; font-size: 16px; }
+    .status-bar { font-size: 11px; color: #666; margin-bottom: 10px; }
+    .status-bar .connected { color: #4caf50; }
+    .status-bar .disconnected { color: #f44336; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .full { grid-column: 1 / -1; }
+    .span2 { grid-column: span 2; }
+    .panel { background: #141414; border: 1px solid #222; border-radius: 5px; padding: 8px; }
+    .panel h2 { font-size: 11px; color: #635bff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; border-bottom: 1px solid #222; padding-bottom: 3px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; color: #555; padding: 2px 4px; border-bottom: 1px solid #1a1a1a; }
+    td { padding: 2px 4px; border-bottom: 1px solid #111; vertical-align: top; }
+    .tick { color: #635bff; font-weight: bold; }
+    .thought { color: #a0a0a0; font-style: italic; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gold { color: #ffd700; font-weight: bold; }
+    .inv { color: #8bc34a; font-size: 10px; }
+    .muted { color: #444; }
+    .anim-idle { color: #555; }
+    .anim-walking { color: #4caf50; }
+    .anim-working { color: #ff9800; }
+    .bounty-available { color: #4caf50; }
+    .bounty-claimed { color: #ff9800; }
+    .bounty-completed { color: #2196f3; }
+    .action { color: #ff9800; font-size: 10px; }
+    #queue-info { font-size: 10px; color: #aaa; padding: 2px 0; }
+    #queue-info strong { color: #635bff; }
+    .needs-row { display: flex; gap: 3px; align-items: center; }
+    .nl { font-size: 9px; color: #555; width: 8px; }
+    .nb { width: 36px; height: 6px; background: #1a1a1a; border-radius: 2px; overflow: hidden; display: inline-block; }
+    .nf { height: 100%; display: block; border-radius: 2px; }
+    .nv { font-size: 9px; color: #444; width: 18px; text-align: right; }
+    .chat-msg { padding: 2px 0; border-bottom: 1px solid #111; }
+    .chat-msg strong { color: #635bff; }
+  </style>
+</head>
+<body>
+  <h1>World Debug Monitor</h1>
+  <div class="status-bar">
+    <span id="conn-status" class="disconnected">disconnected</span>
+    | Tick: <span id="tick-count" class="tick">-</span>
+    | <span id="msg-rate">0 msg/s</span>
+  </div>
+  <div class="grid">
+    <div class="panel full">
+      <h2>Agents</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Pos</th><th>Anim</th><th>Gold</th><th>Items</th><th>Needs</th><th>Perception</th><th>Action</th><th>Thought</th></tr></thead>
+        <tbody id="agents-table"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Conversations</h2>
+      <div id="chat-log"><span class="muted">No active conversations</span></div>
+    </div>
+    <div class="panel">
+      <h2>Relationships</h2>
+      <table>
+        <thead><tr><th>Agent</th><th>Knows</th><th>Pts</th><th>Last Goal</th></tr></thead>
+        <tbody id="rels-table"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Bounty Board</h2>
+      <div id="queue-info">-</div>
+      <table>
+        <thead><tr><th>Description</th><th>Reward</th><th>State</th><th>By</th></tr></thead>
+        <tbody id="bounties-table"></tbody>
+      </table>
+    </div>
+    <div class="panel span2">
+      <h2>Structures</h2>
+      <table>
+        <thead><tr><th>Type</th><th>Pos</th><th>Inventory</th></tr></thead>
+        <tbody id="structures-table"></tbody>
+      </table>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

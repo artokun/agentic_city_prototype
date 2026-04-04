@@ -1,0 +1,95 @@
+namespace world;
+
+enum AnimState : byte { Idle = 0, Walking = 1, Working = 2 }
+enum BountyStatus : byte { Available = 0, Claimed = 1, Completed = 2 }
+
+struct Vec2i {
+  x: int;
+  y: int;
+}
+
+table InventorySlot {
+  item_type: string;
+  count: uint;
+}
+
+struct AgentNeeds {
+  energy: float;
+  hunger: float;
+  boredom: float;
+}
+
+table RelationshipSnapshot {
+  agent_name: string;
+  friendship: uint;
+  last_goal: string;
+}
+
+table ChatMessageSnapshot {
+  speaker: string;
+  text: string;
+}
+
+table VisibleEntitySnapshot {
+  name: string;
+  pos: Vec2i;
+  kind: string;
+  distance: int;
+}
+
+table TrackedEntitySnapshot {
+  name: string;
+  pos: Vec2i;
+  in_range: bool;
+}
+
+table AgentSnapshot {
+  id: string;
+  name: string;
+  pos: Vec2i;
+  animation: AnimState;
+  thought: string;
+  inventory: [InventorySlot];
+  gold: uint;
+  goal: string;
+  needs: AgentNeeds;
+  current_action: string;
+  action_ticks_left: uint;
+  relationships: [RelationshipSnapshot];
+  active_chat: [ChatMessageSnapshot];
+  visible_entities: [VisibleEntitySnapshot];
+  tracked_entities: [TrackedEntitySnapshot];
+  known_location_count: uint;
+}
+
+table StructureSnapshot {
+  id: string;
+  pos: Vec2i;
+  sprite_type: string;
+  interactable: bool;
+  inventory: [InventorySlot];
+}
+
+table BountySnapshot {
+  id: string;
+  description: string;
+  target_pos: Vec2i;
+  reward_gold: uint;
+  state: BountyStatus;
+  claimed_by: string;
+}
+
+table BoardQueueSnapshot {
+  interacting: string;
+  waiting: [string];
+}
+
+table WorldSnapshot {
+  tick: uint64;
+  agents: [AgentSnapshot];
+  structures: [StructureSnapshot];
+  bounties: [BountySnapshot];
+  board_queue: BoardQueueSnapshot;
+}
+
+root_type WorldSnapshot;

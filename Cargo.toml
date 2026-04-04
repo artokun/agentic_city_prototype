@@ -1,0 +1,3 @@
+[workspace]
+members = ["server", "schemas"]
+resolver = "2"
