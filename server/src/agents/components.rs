@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
+use crate::agents::action_log::ActionLog;
 use crate::agents::needs::Needs;
 use crate::agents::perception::{InspectionLog, KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
@@ -88,6 +89,7 @@ pub struct AgentBundle {
     pub tracking: Tracking,
     pub inspection_log: InspectionLog,
     pub known_locations: KnownLocations,
+    pub action_log: ActionLog,
     pub speed: Speed,
     pub move_timer: MoveTimer,
     pub goal: AgentGoal,
@@ -108,6 +110,7 @@ impl AgentBundle {
             tracking: Tracking::default(),
             inspection_log: InspectionLog::default(),
             known_locations: KnownLocations::default(),
+            action_log: ActionLog::default(),
             speed: Speed(speed),
             move_timer: MoveTimer::from_speed(speed),
             goal: AgentGoal::default(),

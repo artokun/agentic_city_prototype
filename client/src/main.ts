@@ -139,3 +139,52 @@ function render(s: WorldSnapshot) {
 }
 
 connect();
+
+// Contract creation form
+const form = document.getElementById("contract-form") as HTMLFormElement;
+const status = document.getElementById("contract-status")!;
+
+form?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const data = new FormData(form);
+  const title = data.get("title") as string;
+  const description = data.get("description") as string;
+  const reward = parseInt(data.get("reward") as string);
+  const ttl = parseInt(data.get("ttl") as string);
+
+  // Auto-generate steps based on description keywords
+  const steps: any[] = [];
+  const descLower = description.toLowerCase();
+
+  if (descLower.includes("google") || descLower.includes("search")) {
+    steps.push({ description: "Spend 1g at Google", type: "spend_gold", building: "google", amount: 1 });
+    steps.push({ description: "Perform web search", type: "web_search", min_count: 1 });
+  }
+  if (descLower.includes("report") || descLower.includes("document") || descLower.includes("write")) {
+    steps.push({ description: "Produce document", type: "produce_document", title: `${title.replace(/\s+/g, "_").toLowerCase()}.md` });
+  }
+  if (descLower.includes("visit") || descLower.includes("go to")) {
+    const buildings = ["cafe", "library", "warehouse", "shop", "restaurant", "office", "google", "hotel"];
+    for (const b of buildings) {
+      if (descLower.includes(b)) {
+        steps.push({ description: `Visit ${b}`, type: "visit_building", building: b });
+      }
+    }
+  }
+  steps.push({ description: "Return to bounty board", type: "return_to_board" });
+
+  try {
+    const resp = await fetch("/api/contracts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, description, reward_gold: reward, ttl_ticks: ttl, steps }),
+    });
+    const result = await resp.json();
+    status.textContent = `Created: ${result.title} (${result.step_count} steps)`;
+    status.style.color = "#4caf50";
+    setTimeout(() => { status.textContent = ""; }, 3000);
+  } catch (err) {
+    status.textContent = `Error: ${err}`;
+    status.style.color = "#f44336";
+  }
+});

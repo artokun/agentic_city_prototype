@@ -76,6 +76,17 @@
         <tbody id="bounties-table"></tbody>
       </table>
     </div>
+    <div class="panel full">
+      <h2>Create Contract</h2>
+      <form id="contract-form" style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;">
+        <label style="display:flex;flex-direction:column;gap:2px;"><span class="muted">Title</span><input name="title" value="Research task" style="background:#1a1a1a;border:1px solid #333;color:#e0e0e0;padding:3px 6px;border-radius:3px;width:140px;font-size:11px;"></label>
+        <label style="display:flex;flex-direction:column;gap:2px;"><span class="muted">Description</span><input name="description" value="Search Google and write a report" style="background:#1a1a1a;border:1px solid #333;color:#e0e0e0;padding:3px 6px;border-radius:3px;width:220px;font-size:11px;"></label>
+        <label style="display:flex;flex-direction:column;gap:2px;"><span class="muted">Reward</span><input name="reward" type="number" value="10" style="background:#1a1a1a;border:1px solid #333;color:#ffd700;padding:3px 6px;border-radius:3px;width:50px;font-size:11px;"></label>
+        <label style="display:flex;flex-direction:column;gap:2px;"><span class="muted">TTL (ticks)</span><input name="ttl" type="number" value="500" style="background:#1a1a1a;border:1px solid #333;color:#e0e0e0;padding:3px 6px;border-radius:3px;width:60px;font-size:11px;"></label>
+        <button type="submit" style="background:#635bff;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:11px;height:24px;">Create</button>
+        <span id="contract-status" class="muted" style="font-size:10px;"></span>
+      </form>
+    </div>
     <div class="panel span2">
       <h2>Structures</h2>
       <table>

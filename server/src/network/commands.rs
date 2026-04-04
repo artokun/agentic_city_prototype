@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::items::ItemType;
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
+use crate::world::bounty_contract::{BountyContract, BountyStep, ContractBoard, StepCondition};
 
 /// Commands sent from Axum REST handlers into Bevy.
 #[derive(Debug)]
@@ -14,6 +15,27 @@ pub enum GameCommand {
         reward_gold: u32,
         objective: Option<String>,
     },
+    CreateContract {
+        id: Uuid,
+        title: String,
+        description: String,
+        reward_gold: u32,
+        ttl_ticks: u32,
+        steps: Vec<ContractStep>,
+    },
+}
+
+/// Step definition from the API.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ContractStep {
+    pub description: String,
+    #[serde(rename = "type")]
+    pub step_type: String,
+    pub building: Option<String>,
+    pub service: Option<String>,
+    pub amount: Option<u32>,
+    pub title: Option<String>,
+    pub min_count: Option<usize>,
 }
 
 /// Bevy resource holding the receiver end of the command channel.
@@ -26,6 +48,8 @@ pub struct CommandReceiver {
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
     mut bounty_registry: ResMut<BountyRegistry>,
+    mut contract_board: ResMut<ContractBoard>,
+    tick: Res<crate::tick::TickCount>,
 ) {
     while let Ok(cmd) = receiver.rx.try_recv() {
         match cmd {
@@ -65,6 +89,62 @@ pub fn process_commands_system(
                     "New bounty created via API: {} ({} gold)",
                     bounty_registry.bounties.last().unwrap().description,
                     reward_gold,
+                );
+            }
+
+            GameCommand::CreateContract {
+                id,
+                title,
+                description,
+                reward_gold,
+                ttl_ticks,
+                steps,
+            } => {
+                let bounty_steps: Vec<BountyStep> = steps
+                    .into_iter()
+                    .map(|s| {
+                        let condition = match s.step_type.as_str() {
+                            "spend_gold" => StepCondition::SpendGold {
+                                building: s.building.unwrap_or_default(),
+                                amount: s.amount.unwrap_or(1),
+                            },
+                            "use_service" => StepCondition::UseService {
+                                service: s.service.unwrap_or_default(),
+                            },
+                            "web_search" => StepCondition::WebSearch {
+                                min_count: s.min_count.unwrap_or(1),
+                            },
+                            "produce_document" => StepCondition::ProduceDocument {
+                                title: s.title.unwrap_or_default(),
+                            },
+                            "visit_building" => StepCondition::VisitBuilding {
+                                building: s.building.unwrap_or_default(),
+                            },
+                            "return_to_board" | _ => StepCondition::ReturnToBoard,
+                        };
+                        BountyStep {
+                            description: s.description,
+                            condition,
+                        }
+                    })
+                    .collect();
+
+                contract_board.contracts.push(BountyContract {
+                    id,
+                    title: title.clone(),
+                    description,
+                    reward_gold,
+                    steps: bounty_steps,
+                    created_tick: tick.0,
+                    picked_up_tick: None,
+                    ttl_ticks,
+                    holder: None,
+                    expired: false,
+                });
+
+                tracing::info!(
+                    "Contract created: '{}' ({} gold, {} ticks TTL)",
+                    title, reward_gold, ttl_ticks,
                 );
             }
         }

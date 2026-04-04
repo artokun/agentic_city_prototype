@@ -28,6 +28,7 @@ pub async fn start_server(state: AppState) {
         .route("/ws", get(ws_upgrade))
         .route("/api/bounties", post(create_bounty))
         .route("/api/bounties", get(list_bounties))
+        .route("/api/contracts", post(create_contract))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
@@ -150,6 +151,55 @@ async fn create_bounty(
         description: req.description,
         reward_gold: reward,
         funded,
+    }))
+}
+
+// --- REST: Contract creation (multi-step bounties) ---
+
+#[derive(Deserialize)]
+struct CreateContractRequest {
+    title: String,
+    description: String,
+    reward_gold: u32,
+    ttl_ticks: u32,
+    steps: Vec<super::commands::ContractStep>,
+}
+
+#[derive(Serialize)]
+struct CreateContractResponse {
+    id: String,
+    title: String,
+    reward_gold: u32,
+    ttl_ticks: u32,
+    step_count: usize,
+}
+
+async fn create_contract(
+    State(state): State<AppState>,
+    Json(req): Json<CreateContractRequest>,
+) -> Result<Json<CreateContractResponse>, (StatusCode, String)> {
+    let id = uuid::Uuid::new_v4();
+    let step_count = req.steps.len();
+
+    state
+        .command_tx
+        .send(GameCommand::CreateContract {
+            id,
+            title: req.title.clone(),
+            description: req.description,
+            reward_gold: req.reward_gold,
+            ttl_ticks: req.ttl_ticks,
+            steps: req.steps,
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(CreateContractResponse {
+        id: id.to_string(),
+        title: req.title,
+        reward_gold: req.reward_gold,
+        ttl_ticks: req.ttl_ticks,
+        step_count,
     }))
 }
 
