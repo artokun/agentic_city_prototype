@@ -40,6 +40,15 @@
     .nv { font-size: 9px; color: #444; width: 18px; text-align: right; }
     .chat-msg { padding: 2px 0; border-bottom: 1px solid #111; }
     .chat-msg strong { color: #635bff; }
+    .log-entry { padding: 1px 0; }
+    .log-tick { color: #333; font-size: 9px; margin-right: 4px; }
+    .log-thought { font-style: italic; color: #888; }
+    .log-action { font-weight: bold; }
+    .log-speech { color: #e0e0e0; }
+    .log-speech::before { content: '"'; color: #555; }
+    .log-speech::after { content: '"'; color: #555; }
+    .log-system { color: #555; }
+    .log-decision { color: #635bff; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -86,6 +95,10 @@
         <button type="submit" style="background:#635bff;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:11px;height:24px;">Create</button>
         <span id="contract-status" class="muted" style="font-size:10px;"></span>
       </form>
+    </div>
+    <div class="panel full" style="max-height:300px;overflow-y:auto;" id="log-panel">
+      <h2>Activity Log</h2>
+      <div id="activity-log" style="font-size:11px;line-height:1.5;"></div>
     </div>
     <div class="panel span2">
       <h2>Structures</h2>

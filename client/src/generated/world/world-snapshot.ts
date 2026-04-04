@@ -7,6 +7,7 @@ import * as flatbuffers from 'flatbuffers';
 import { AgentSnapshot } from '../world/agent-snapshot.js';
 import { BoardQueueSnapshot } from '../world/board-queue-snapshot.js';
 import { BountySnapshot } from '../world/bounty-snapshot.js';
+import { LogEntrySnapshot } from '../world/log-entry-snapshot.js';
 import { StructureSnapshot } from '../world/structure-snapshot.js';
 
 
@@ -68,8 +69,18 @@ boardQueue(obj?:BoardQueueSnapshot):BoardQueueSnapshot|null {
   return offset ? (obj || new BoardQueueSnapshot()).__init(this.bb!.__indirect(this.bb_pos + offset), this.bb!) : null;
 }
 
+eventLog(index: number, obj?:LogEntrySnapshot):LogEntrySnapshot|null {
+  const offset = this.bb!.__offset(this.bb_pos, 14);
+  return offset ? (obj || new LogEntrySnapshot()).__init(this.bb!.__indirect(this.bb!.__vector(this.bb_pos + offset) + index * 4), this.bb!) : null;
+}
+
+eventLogLength():number {
+  const offset = this.bb!.__offset(this.bb_pos, 14);
+  return offset ? this.bb!.__vector_len(this.bb_pos + offset) : 0;
+}
+
 static startWorldSnapshot(builder:flatbuffers.Builder) {
-  builder.startObject(5);
+  builder.startObject(6);
 }
 
 static addTick(builder:flatbuffers.Builder, tick:bigint) {
@@ -126,6 +137,22 @@ static startBountiesVector(builder:flatbuffers.Builder, numElems:number) {
 
 static addBoardQueue(builder:flatbuffers.Builder, boardQueueOffset:flatbuffers.Offset) {
   builder.addFieldOffset(4, boardQueueOffset, 0);
+}
+
+static addEventLog(builder:flatbuffers.Builder, eventLogOffset:flatbuffers.Offset) {
+  builder.addFieldOffset(5, eventLogOffset, 0);
+}
+
+static createEventLogVector(builder:flatbuffers.Builder, data:flatbuffers.Offset[]):flatbuffers.Offset {
+  builder.startVector(4, data.length, 4);
+  for (let i = data.length - 1; i >= 0; i--) {
+    builder.addOffset(data[i]!);
+  }
+  return builder.endVector();
+}
+
+static startEventLogVector(builder:flatbuffers.Builder, numElems:number) {
+  builder.startVector(4, numElems, 4);
 }
 
 static endWorldSnapshot(builder:flatbuffers.Builder):flatbuffers.Offset {

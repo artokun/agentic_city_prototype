@@ -5,6 +5,7 @@ pub mod ai_decision;
 pub mod behavior;
 pub mod claude;
 pub mod components;
+pub mod event_log;
 pub mod movement;
 pub mod needs;
 pub mod pathfinding;
@@ -25,6 +26,7 @@ pub struct AgentPlugin;
 impl Plugin for AgentPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ai::AgentSessions>()
+            .init_resource::<event_log::AgentEventLog>()
             .add_systems(Startup, spawn_agents.after(init_map))
             .add_systems(
                 Update,

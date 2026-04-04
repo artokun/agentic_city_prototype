@@ -5,6 +5,7 @@ use flatbuffers::FlatBufferBuilder;
 use crate::agents::actions::ActionTimer;
 use crate::agents::components::*;
 use crate::agents::needs::Needs;
+use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
 use crate::agents::social::{ChattingWith, Relationships};
 use crate::items::Inventory;
@@ -29,6 +30,7 @@ pub fn serialize_world(
     bounty_registry: &BountyRegistry,
     board_queues: &Query<&BoardQueue, With<BountyBoard>>,
     agent_names: &Query<&AgentName>,
+    event_log: &AgentEventLog,
 ) -> Bytes {
     let mut fbb = FlatBufferBuilder::with_capacity(16384);
 
@@ -163,9 +165,20 @@ pub fn serialize_world(
         })
     });
 
+    // Event log.
+    let log_offsets: Vec<_> = event_log.entries.iter().map(|e| {
+        let agent = fbb.create_string(&e.agent);
+        let kind = fbb.create_string(e.kind.as_str());
+        let text = fbb.create_string(&e.text);
+        fb::LogEntrySnapshot::create(&mut fbb, &fb::LogEntrySnapshotArgs {
+            tick: e.tick, agent: Some(agent), kind: Some(kind), text: Some(text),
+        })
+    }).collect();
+    let log_vec = fbb.create_vector(&log_offsets);
+
     let world = fb::WorldSnapshot::create(&mut fbb, &fb::WorldSnapshotArgs {
         tick: tick.0, agents: Some(agents_vec), structures: Some(structures_vec),
-        bounties: Some(bounties_vec), board_queue,
+        bounties: Some(bounties_vec), board_queue, event_log: Some(log_vec),
     });
 
     fbb.finish(world, None);

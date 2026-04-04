@@ -10,6 +10,7 @@ export { BountySnapshot } from './world/bounty-snapshot.js';
 export { BountyStatus } from './world/bounty-status.js';
 export { ChatMessageSnapshot } from './world/chat-message-snapshot.js';
 export { InventorySlot } from './world/inventory-slot.js';
+export { LogEntrySnapshot } from './world/log-entry-snapshot.js';
 export { RelationshipSnapshot } from './world/relationship-snapshot.js';
 export { StructureSnapshot } from './world/structure-snapshot.js';
 export { TrackedEntitySnapshot } from './world/tracked-entity-snapshot.js';

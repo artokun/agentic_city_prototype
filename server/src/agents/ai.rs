@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use crate::agents::ai_decision::{self, AgentAction};
 use crate::agents::claude;
 use crate::agents::components::*;
+use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
 use crate::agents::perception::{KnownLocations, Vision, WantsToLook};
 use crate::agents::social::Relationships;
@@ -100,6 +101,7 @@ pub fn ai_decision_system(
     map: Res<WorldMap>,
     bounty_registry: Res<BountyRegistry>,
     mut sessions: ResMut<AgentSessions>,
+    mut event_log: ResMut<AgentEventLog>,
     mut agents: Query<(
         Entity,
         &AgentName,
@@ -153,6 +155,15 @@ pub fn ai_decision_system(
                 let (action, thought_text) = ai_decision::parse_action(&response_text);
                 thought.0 = thought_text.clone();
                 tracing::info!("[AI:{}] {} → {:?}", name.0, thought_text, action);
+
+                event_log.push(LogEvent {
+                    tick: tick.0, agent: name.0.clone(),
+                    kind: LogKind::Thought, text: thought_text.clone(),
+                });
+                event_log.push(LogEvent {
+                    tick: tick.0, agent: name.0.clone(),
+                    kind: LogKind::Decision, text: format!("{:?}", action),
+                });
 
                 apply_action(
                     &mut commands, entity, &action, &mut goal,

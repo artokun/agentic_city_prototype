@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 use crate::agents::actions::ActionTimer;
 use crate::agents::components::*;
 use crate::agents::needs::Needs;
+use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
 use crate::agents::social::{ChattingWith, Relationships};
 use crate::items::Inventory;
@@ -43,9 +44,10 @@ pub fn broadcast_state(
     bounty_registry: Res<BountyRegistry>,
     board_queues: Query<&BoardQueue, With<BountyBoard>>,
     agent_names: Query<&AgentName>,
+    event_log: Res<AgentEventLog>,
 ) {
     let bytes = serializer::serialize_world(
-        &tick, &agents, &structures, &bounty_registry, &board_queues, &agent_names,
+        &tick, &agents, &structures, &bounty_registry, &board_queues, &agent_names, &event_log,
     );
     let _ = broadcast_tx.sender.send(bytes);
 }

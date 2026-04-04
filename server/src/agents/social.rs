@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use super::actions::ActionTimer;
 use super::components::*;
+use super::event_log::{AgentEventLog, LogEvent, LogKind};
 use super::needs::Needs;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
@@ -51,6 +52,7 @@ pub struct ChattingWith {
 pub fn social_matchmaking_system(
     mut commands: Commands,
     tick: Res<TickCount>,
+    mut event_log: ResMut<AgentEventLog>,
     agents: Query<(
         Entity,
         &AgentName,
@@ -106,6 +108,15 @@ pub fn social_matchmaking_system(
 
                 tracing::info!("{}: \"{}\"", name_a, greeting_a);
                 tracing::info!("{}: \"{}\"", name_b, greeting_b);
+
+                event_log.push(LogEvent {
+                    tick: tick.0, agent: name_a.clone(),
+                    kind: LogKind::Speech, text: greeting_a.clone(),
+                });
+                event_log.push(LogEvent {
+                    tick: tick.0, agent: name_b.clone(),
+                    kind: LogKind::Speech, text: greeting_b.clone(),
+                });
 
                 commands.entity(*e_a).insert((
                     ChattingWith { partner: *e_b, messages: messages_a },

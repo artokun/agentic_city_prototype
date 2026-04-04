@@ -84,12 +84,20 @@ table BoardQueueSnapshot {
   waiting: [string];
 }
 
+table LogEntrySnapshot {
+  tick: uint64;
+  agent: string;
+  kind: string;
+  text: string;
+}
+
 table WorldSnapshot {
   tick: uint64;
   agents: [AgentSnapshot];
   structures: [StructureSnapshot];
   bounties: [BountySnapshot];
   board_queue: BoardQueueSnapshot;
+  event_log: [LogEntrySnapshot];
 }
 
 root_type WorldSnapshot;

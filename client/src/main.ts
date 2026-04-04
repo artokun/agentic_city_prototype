@@ -72,8 +72,9 @@ function render(s: WorldSnapshot) {
     const knownLocs = a.knownLocationCount();
     const perceptionHtml = `<span class="muted">${knownLocs} locs | ${visCount} vis | ${trackCount} trk</span>`;
 
+    const agentName = a.name() ?? "?";
     ah += `<tr>
-      <td>${a.name()}</td>
+      <td style="color:${agentColor(agentName)};font-weight:bold;">${agentName}</td>
       <td>(${pos?.x()}, ${pos?.y()})</td>
       <td class="${ANIM_CLASSES[anim] ?? ""}">${ANIM_NAMES[anim] ?? "?"}</td>
       <td class="gold">${a.gold()}</td>
@@ -130,12 +131,58 @@ function render(s: WorldSnapshot) {
   structuresTable.innerHTML = sh;
 
   // Board queue
+  // Activity log.
+  const logEl = document.getElementById("activity-log")!;
+  const logPanel = document.getElementById("log-panel")!;
+  let logHtml = "";
+  for (let i = 0; i < s.eventLogLength(); i++) {
+    const entry = s.eventLog(i)!;
+    const agent = entry.agent() ?? "?";
+    const color = agentColor(agent);
+    const kind = entry.kind() ?? "";
+    const text = entry.text() ?? "";
+    const tick = entry.tick();
+
+    let styled = "";
+    switch (kind) {
+      case "thought":
+        styled = `<span class="log-thought">${text}</span>`;
+        break;
+      case "action":
+      case "decision":
+        styled = `<span class="log-decision">${text}</span>`;
+        break;
+      case "speech":
+        styled = `<span class="log-speech">${text}</span>`;
+        break;
+      default:
+        styled = `<span class="log-system">${text}</span>`;
+    }
+
+    logHtml += `<div class="log-entry"><span class="log-tick">${tick}</span><span style="color:${color};font-weight:bold;">${agent}</span> ${styled}</div>`;
+  }
+  if (logHtml) {
+    logEl.innerHTML = logHtml;
+    // Auto-scroll to bottom.
+    logPanel.scrollTop = logPanel.scrollHeight;
+  }
+
   const q = s.boardQueue();
   if (q) {
     const w: string[] = [];
     for (let i = 0; i < q.waitingLength(); i++) w.push(q.waiting(i) ?? "?");
     queueInfo.innerHTML = `<strong>At board:</strong> ${q.interacting() || "none"} &nbsp;|&nbsp; <strong>Queue:</strong> ${w.length > 0 ? w.join(", ") : "empty"}`;
   }
+}
+
+// Agent color assignments (deterministic).
+const AGENT_COLORS: Record<string, string> = {
+  "Alice": "#ff6b6b",
+  "Bob": "#4ecdc4",
+  "Carol": "#ffe66d",
+};
+function agentColor(name: string): string {
+  return AGENT_COLORS[name] || "#888";
 }
 
 connect();
