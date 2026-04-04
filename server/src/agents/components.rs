@@ -103,7 +103,11 @@ impl AgentBundle {
             pos,
             animation: AgentAnimation::default(),
             thought: ThoughtBubble(format!("{name} is looking around...")),
-            inventory: Inventory::default(),
+            inventory: {
+                let mut inv = Inventory::default();
+                inv.add(crate::items::ItemType::GoldCoin, 5); // starting gold
+                inv
+            },
             needs: Needs::default(),
             relationships: Relationships::default(),
             vision: Vision::default(),

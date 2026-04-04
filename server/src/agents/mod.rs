@@ -56,6 +56,7 @@ fn spawn_agents(
     mut commands: Commands,
     map: Res<WorldMap>,
     boards: Query<(Entity, &GridPos, &Entrance), With<BountyBoard>>,
+    all_structures: Query<(Entity, &GridPos, &Entrance, &crate::world::structures::SpriteType)>,
 ) {
     let walkable = map.walkable_positions();
     let agents_config = [
@@ -69,11 +70,14 @@ fn spawn_agents(
         .next()
         .map(|(e, pos, entrance)| (e, *pos, entrance.0));
 
+    // Spawn agents near the bounty board so they know where to start.
+    let board_pos = board_info.map(|(_, _, entrance)| entrance).unwrap_or(GridPos { x: 20, y: 32 });
     for (i, (name, speed)) in agents_config.iter().enumerate() {
-        let start = walkable[i * 17 % walkable.len()];
+        let offset = (i as i32 - 1) * 2;
+        let start = GridPos { x: board_pos.x + offset, y: board_pos.y - 2 };
         let mut bundle = AgentBundle::new(name, start, *speed);
 
-        // Seed bounty board location.
+        // Seed known locations: bounty board + apartments.
         if let Some((board_entity, board_pos, board_entrance)) = board_info {
             bundle.known_locations.locations.insert(
                 board_entity,
@@ -81,6 +85,19 @@ fn spawn_agents(
                     name: "bounty_board".into(),
                     pos: board_pos,
                     entrance: board_entrance,
+                    discovered_tick: 0,
+                    source: DiscoverySource::Initial,
+                },
+            );
+        }
+        // Seed all buildings as known (agents are residents of the city).
+        for (e, bpos, entrance, sprite) in &all_structures {
+            bundle.known_locations.locations.insert(
+                e,
+                KnownPlace {
+                    name: sprite.0.clone(),
+                    pos: *bpos,
+                    entrance: entrance.0,
                     discovered_tick: 0,
                     source: DiscoverySource::Initial,
                 },

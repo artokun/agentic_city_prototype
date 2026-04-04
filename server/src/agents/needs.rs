@@ -56,9 +56,10 @@ pub enum NeedType {
 }
 
 // Decay rates per tick (at 10 ticks/sec).
-const ENERGY_DECAY: f32 = 0.1;    // ~100 sec to drain fully
-const HUNGER_DECAY: f32 = 0.08;   // ~125 sec to drain
-const BOREDOM_DECAY_IDLE: f32 = 0.15; // ~67 sec when idle
+// Tuned so agents can work for ~5 min before needing to address needs.
+const ENERGY_DECAY: f32 = 0.03;   // ~333 sec (~5.5 min) to drain fully
+const HUNGER_DECAY: f32 = 0.025;  // ~400 sec (~6.7 min) to drain
+const BOREDOM_DECAY_IDLE: f32 = 0.05; // ~200 sec (~3.3 min) when idle
 
 /// System: decay needs every tick.
 pub fn needs_decay_system(

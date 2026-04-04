@@ -53,10 +53,10 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Muffin, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 100, // 1g per 100 ticks worked (~10 sec)
+                    ticks_per_gold: 20, // 1g per 20 ticks (~2 sec)
                     worker: None,
                     needs_worker: false,
-                    food_perk: true, // working at cafe keeps hunger stable
+                    food_perk: true,
                 });
             }
             "market" => {
@@ -67,7 +67,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Rations, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 100,
+                    ticks_per_gold: 20,
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
@@ -82,7 +82,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Soup, 999);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 150, // lower pay for warehouse work
+                    ticks_per_gold: 30,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,
@@ -91,7 +91,7 @@ fn spawn_structures(mut commands: Commands) {
             "hotel" => {
                 ecmds.insert(Inventory::default());
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 120,
+                    ticks_per_gold: 25,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,
