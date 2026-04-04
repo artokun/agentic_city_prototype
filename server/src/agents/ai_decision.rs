@@ -109,7 +109,11 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 {"action": "look_around", "thought": "why"}
 {"action": "wander", "thought": "why"}
 {"action": "chat_with", "agent": "AgentName", "thought": "why"}
+{"action": "work_shift", "building": "cafe", "thought": "why"}
+{"action": "leave_shift", "thought": "why"}
 ```
+You can work shifts at: cafe (1g/100t, food perk), market (1g/100t, food perk), warehouse (1g/150t), hotel (1g/120t).
+Shifts are open-ended — you work until you leave or get ejected (low energy/hunger).
 Prioritize: critical needs first, then earning gold, then socializing. Be strategic about time/money tradeoffs.
 "#;
 
@@ -124,6 +128,8 @@ pub enum AgentAction {
     LookAround,
     Wander,
     ChatWith { agent: String },
+    WorkShift { building: String },
+    LeaveShift,
     DoNothing,
 }
 
@@ -149,6 +155,11 @@ pub fn parse_action(response: &str) -> (AgentAction, String) {
                     let agent = val.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
                     AgentAction::ChatWith { agent }
                 }
+                "work_shift" => {
+                    let building = val.get("building").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                    AgentAction::WorkShift { building }
+                }
+                "leave_shift" => AgentAction::LeaveShift,
                 _ => AgentAction::DoNothing,
             };
 

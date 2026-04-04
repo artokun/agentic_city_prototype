@@ -88,33 +88,17 @@ impl BuildingDef {
 /// The city layout. Buildings are rectangular footprints on a street grid.
 pub fn city_buildings() -> Vec<BuildingDef> {
     vec![
-        // === Row 1 (y: 2..6) ===
-        BuildingDef { name: "cafe",        x: 2,  y: 2,  w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "google",      x: 8,  y: 2,  w: 6, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "office",      x: 16, y: 2,  w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "apartments",  x: 22, y: 2,  w: 5, h: 4, entrance: EntranceSide::West },
-        BuildingDef { name: "server_room", x: 30, y: 2,  w: 4, h: 4, entrance: EntranceSide::South },
+        // === Commercial Row (y: 2..6) ===
+        BuildingDef { name: "cafe",        x: 2,  y: 2,  w: 5, h: 4, entrance: EntranceSide::South },
+        BuildingDef { name: "google",      x: 10, y: 2,  w: 6, h: 4, entrance: EntranceSide::South },
+        BuildingDef { name: "market",      x: 20, y: 2,  w: 6, h: 4, entrance: EntranceSide::South },
 
-        // === Row 2 (y: 10..14) ===
-        BuildingDef { name: "library",     x: 2,  y: 10, w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "shop",        x: 8,  y: 10, w: 4, h: 4, entrance: EntranceSide::West },
-        BuildingDef { name: "bank",        x: 14, y: 10, w: 5, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "warehouse",   x: 22, y: 10, w: 6, h: 4, entrance: EntranceSide::West },
-        BuildingDef { name: "market",      x: 30, y: 10, w: 5, h: 4, entrance: EntranceSide::South },
+        // === Industrial Row (y: 12..16) ===
+        BuildingDef { name: "warehouse",   x: 2,  y: 12, w: 8, h: 4, entrance: EntranceSide::South },
+        BuildingDef { name: "hotel",       x: 14, y: 12, w: 5, h: 4, entrance: EntranceSide::South },
 
-        // === Row 3 (y: 18..22) ===
-        BuildingDef { name: "gym",         x: 2,  y: 18, w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "restaurant",  x: 8,  y: 18, w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "post_office", x: 14, y: 18, w: 5, h: 4, entrance: EntranceSide::West },
-        BuildingDef { name: "garage",      x: 22, y: 18, w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "hotel",       x: 30, y: 18, w: 5, h: 4, entrance: EntranceSide::West },
-
-        // === Row 4 (y: 26..30) ===
-        BuildingDef { name: "theater",     x: 2,  y: 26, w: 5, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "hospital",    x: 9,  y: 26, w: 5, h: 4, entrance: EntranceSide::West },
-        BuildingDef { name: "school",      x: 16, y: 26, w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "diner",       x: 22, y: 26, w: 4, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "gas_station", x: 30, y: 26, w: 5, h: 4, entrance: EntranceSide::West },
+        // === Residential (y: 22..26) ===
+        BuildingDef { name: "apartments",  x: 28, y: 22, w: 6, h: 5, entrance: EntranceSide::West },
     ]
 }
 

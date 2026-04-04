@@ -7,6 +7,7 @@ use crate::agents::ai_decision::{self, AgentAction};
 use crate::agents::claude;
 use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
+use crate::world::shifts::{ShiftWorker, Staffable};
 use crate::agents::needs::Needs;
 use crate::agents::perception::{KnownLocations, Vision, WantsToLook};
 use crate::agents::social::Relationships;
@@ -119,6 +120,7 @@ pub fn ai_decision_system(
     )>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
+    mut staffable: Query<&mut Staffable>,
 ) {
     let structure_list: Vec<(Entity, GridPos, String)> = structures
         .iter()
@@ -165,10 +167,30 @@ pub fn ai_decision_system(
                     kind: LogKind::Decision, text: format!("{:?}", action),
                 });
 
-                apply_action(
-                    &mut commands, entity, &action, &mut goal,
-                    pos, &map, &structure_list, &known_locs,
-                );
+                // Handle shift actions inline (need mutable staffable access).
+                match &action {
+                    AgentAction::WorkShift { building } => {
+                        if let Some((bld_entity, entrance, _)) = structure_list.iter().find(|(_, _, s)| s == building) {
+                            *goal = AgentGoal::GoingToService {
+                                building: *bld_entity,
+                                service: "work_shift".into(),
+                            };
+                            if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
+                                commands.entity(entity).insert(Path(p));
+                            }
+                        }
+                    }
+                    AgentAction::LeaveShift => {
+                        // Handled by shift_tracking_system — just set idle.
+                        *goal = AgentGoal::Idle;
+                    }
+                    _ => {
+                        apply_action(
+                            &mut commands, entity, &action, &mut goal,
+                            pos, &map, &structure_list, known_locs,
+                        );
+                    }
+                }
             }
             continue;
         }
@@ -264,6 +286,7 @@ fn apply_action(
             // Social matchmaking handles this — just wander toward nearby agents.
             **goal = AgentGoal::Wandering;
         }
+        AgentAction::WorkShift { .. } | AgentAction::LeaveShift => {}
         AgentAction::DoNothing => {}
     }
 }

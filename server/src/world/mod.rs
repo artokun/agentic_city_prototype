@@ -4,6 +4,7 @@ pub mod economy;
 pub mod jobs;
 pub mod map;
 pub mod services;
+pub mod shifts;
 pub mod structures;
 
 use bevy::prelude::*;
@@ -20,6 +21,8 @@ impl Plugin for WorldPlugin {
             .add_systems(Update, bounty::advance_board_queue)
             .add_systems(Update, jobs::job_posting_system)
             .add_systems(Update, bounty_contract::bounty_expiry_system)
-            .add_systems(Update, economy::auto_restock_system);
+            .add_systems(Update, economy::auto_restock_system)
+            .add_systems(Update, shifts::shift_demand_system)
+            .add_systems(Update, shifts::shift_tracking_system);
     }
 }

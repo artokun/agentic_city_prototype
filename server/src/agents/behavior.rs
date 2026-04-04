@@ -14,6 +14,7 @@ use super::actions::ActionTimer;
 use super::components::*;
 use super::needs::{NeedType, Needs};
 use super::pathfinding;
+use crate::world::shifts::{ShiftWorker, Staffable};
 
 const CRITICAL_THRESHOLD: f32 = 10.0;
 
@@ -134,19 +135,38 @@ pub fn execution_system(
                         .is_some_and(|(_, ent, _)| at_pos(pos, ent));
 
                     if at_entrance {
-                        let svc = services::all_services().into_iter().find(|s| s.action_name == service);
-                        if let Some(svc) = svc {
-                            thought.0 = format!("{}...", svc.action_name);
+                        // Special case: starting a work shift.
+                        if service == "work_shift" {
+                            let building_name = structure_list.iter()
+                                .find(|(e, _, _)| *e == building)
+                                .map(|(_, _, s)| s.clone())
+                                .unwrap_or_default();
+                            let ticks_per_gold = 100; // default, will be overridden by Staffable
                             commands.entity(agent_entity).insert(InsideBuilding(building));
-                            commands.entity(agent_entity).insert(ActionTimer {
-                                action_name: svc.action_name.to_string(),
-                                remaining_ticks: svc.duration_ticks,
-                                effects: svc.effects,
-                                gold_cost: svc.gold_cost,
-                                paid: false,
+                            commands.entity(agent_entity).insert(ShiftWorker {
+                                building,
+                                building_name: building_name.clone(),
+                                ticks_worked: 0,
+                                ticks_per_gold,
                             });
+                            thought.0 = format!("Starting shift at {}...", building_name);
+                            anim.0 = AnimState::Working;
                             *goal = AgentGoal::PerformingAction;
-                        } else { *goal = AgentGoal::Idle; }
+                        } else {
+                            let svc = services::all_services().into_iter().find(|s| s.action_name == service);
+                            if let Some(svc) = svc {
+                                thought.0 = format!("{}...", svc.action_name);
+                                commands.entity(agent_entity).insert(InsideBuilding(building));
+                                commands.entity(agent_entity).insert(ActionTimer {
+                                    action_name: svc.action_name.to_string(),
+                                    remaining_ticks: svc.duration_ticks,
+                                    effects: svc.effects,
+                                    gold_cost: svc.gold_cost,
+                                    paid: false,
+                                });
+                                *goal = AgentGoal::PerformingAction;
+                            } else { *goal = AgentGoal::Idle; }
+                        }
                     } else {
                         if let Some((_, entrance, _)) = structure_list.iter().find(|(e, _, _)| *e == building) {
                             if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
