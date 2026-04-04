@@ -1,6 +1,7 @@
 pub mod action_log;
 pub mod actions;
 pub mod ai;
+pub mod ai_chat;
 pub mod ai_decision;
 pub mod behavior;
 pub mod claude;
@@ -42,6 +43,7 @@ impl Plugin for AgentPlugin {
                     social::social_matchmaking_system,
                     social::social_memory_system,
                     ai::spawn_sessions_system,
+                    ai_chat::ai_chat_system,
                     ai::ai_decision_system,
                     behavior::execution_system,
                 )

@@ -46,6 +46,8 @@ pub struct ChatMessage {
 pub struct ChattingWith {
     pub partner: Entity,
     pub messages: Vec<ChatMessage>,
+    /// If true, Claude hasn't generated this agent's dialogue yet.
+    pub needs_response: bool,
 }
 
 /// System: find pairs of nearby idle/bored agents and start conversations.
@@ -92,34 +94,15 @@ pub fn social_matchmaking_system(
                 matched.insert(i);
                 matched.insert(j);
 
-                let (e_a, name_a, _, _, gold_a, needs_a) = &available[i];
-                let (e_b, name_b, _, _, gold_b, needs_b) = &available[j];
+                let (e_a, name_a, _, _, _, _) = &available[i];
+                let (e_b, name_b, _, _, _, _) = &available[j];
 
-                // Generate opening messages based on state.
-                // When Claude is integrated, these become Claude calls.
-                let greeting_a = generate_greeting(name_a, name_b, needs_a, *gold_a, tick.0);
-                let greeting_b = generate_greeting(name_b, name_a, needs_b, *gold_b, tick.0);
+                tracing::info!("{} and {} start chatting", name_a, name_b);
 
-                let messages_a = vec![
-                    ChatMessage { tick: tick.0, speaker: name_a.clone(), text: greeting_a.clone() },
-                    ChatMessage { tick: tick.0, speaker: name_b.clone(), text: greeting_b.clone() },
-                ];
-                let messages_b = messages_a.clone();
-
-                tracing::info!("{}: \"{}\"", name_a, greeting_a);
-                tracing::info!("{}: \"{}\"", name_b, greeting_b);
-
-                event_log.push(LogEvent {
-                    tick: tick.0, agent: name_a.clone(),
-                    kind: LogKind::Speech, text: greeting_a.clone(),
-                });
-                event_log.push(LogEvent {
-                    tick: tick.0, agent: name_b.clone(),
-                    kind: LogKind::Speech, text: greeting_b.clone(),
-                });
-
+                // Start chat — Claude will generate the actual dialogue.
+                // Messages start empty; the AI system fills them in.
                 commands.entity(*e_a).insert((
-                    ChattingWith { partner: *e_b, messages: messages_a },
+                    ChattingWith { partner: *e_b, messages: vec![], needs_response: true },
                     ActionTimer {
                         action_name: format!("chatting with {}", name_b),
                         remaining_ticks: CHAT_DURATION,
@@ -130,7 +113,7 @@ pub fn social_matchmaking_system(
                 ));
 
                 commands.entity(*e_b).insert((
-                    ChattingWith { partner: *e_a, messages: messages_b },
+                    ChattingWith { partner: *e_a, messages: vec![], needs_response: true },
                     ActionTimer {
                         action_name: format!("chatting with {}", name_a),
                         remaining_ticks: CHAT_DURATION,
@@ -146,22 +129,6 @@ pub fn social_matchmaking_system(
     }
 }
 
-/// Generate a context-aware greeting. Placeholder for Claude integration.
-fn generate_greeting(speaker: &str, listener: &str, needs: &Needs, gold: u32, _tick: u64) -> String {
-    if needs.energy < 20.0 {
-        format!("Hey {listener}, I'm exhausted... need to find a place to rest.")
-    } else if needs.hunger < 20.0 {
-        format!("Hi {listener}! Know any good places to eat? I'm starving.")
-    } else if gold == 0 {
-        format!("Hey {listener}, I'm totally broke. Are there any bounties on the board?")
-    } else if gold > 5 {
-        format!("Hey {listener}! Business is good, I've got {gold} gold saved up.")
-    } else if needs.boredom < 20.0 {
-        format!("So bored... Hey {listener}, what have you been up to?")
-    } else {
-        format!("Hey {listener}! How's it going?")
-    }
-}
 
 /// System: when chat finishes, store conversation in both agents' memories.
 pub fn social_memory_system(
