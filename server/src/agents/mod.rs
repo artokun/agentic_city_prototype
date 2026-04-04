@@ -41,7 +41,7 @@ impl Plugin for AgentPlugin {
                     social::social_memory_system,
                     ai::spawn_sessions_system,
                     ai::ai_decision_system,
-                    behavior::agent_behavior_system,
+                    behavior::execution_system,
                 )
                     .chain(),
             );

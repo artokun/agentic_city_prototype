@@ -33,8 +33,8 @@ pub struct AgentSessionHandle {
     pub pending: bool,
 }
 
-/// How often agents ask Claude for decisions (in ticks). At 10Hz, 50 ticks = 5 seconds.
-const DECISION_INTERVAL: u64 = 50;
+/// How often agents ask Claude for decisions (in ticks). At 10Hz, 30 ticks = 3 seconds.
+const DECISION_INTERVAL: u64 = 30;
 
 /// System: spawn Claude sessions for agents that don't have one.
 pub fn spawn_sessions_system(
