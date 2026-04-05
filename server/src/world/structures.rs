@@ -124,6 +124,12 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Rations, 999);
                 ecmds.insert(inv);
             }
+            "hospital" => {
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Rations, 50);
+                ecmds.insert(inv);
+                ecmds.insert(GoldReserve(0));
+            }
             _ => {
                 ecmds.insert(Inventory::default());
             }

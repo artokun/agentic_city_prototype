@@ -63,7 +63,7 @@ const BOREDOM_DECAY_IDLE: f32 = 0.05; // ~200 sec (~3.3 min) when idle
 
 /// System: decay needs every tick.
 pub fn needs_decay_system(
-    mut agents: Query<(&mut Needs, &AgentGoal)>,
+    mut agents: Query<(&mut Needs, &AgentGoal), Without<crate::world::hospital::Incapacitated>>,
 ) {
     for (mut needs, goal) in &mut agents {
         needs.energy -= ENERGY_DECAY;

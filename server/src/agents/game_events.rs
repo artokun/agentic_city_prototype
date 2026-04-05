@@ -124,13 +124,35 @@ pub fn game_events_system(
             event_state.last_bounty_count = current_bounty_count;
         }
 
-        // --- Periodic stat refresh ---
+        // --- Periodic stat + inventory refresh ---
         if tick.0.saturating_sub(event_state.last_stat_tick) >= STAT_REFRESH_INTERVAL {
             let gold = inv.count(ItemType::GoldCoin);
-            messages.push(format!(
+            let mut status = format!(
                 "Status update: E:{:.0} H:{:.0} B:{:.0} Gold:{}",
                 needs.energy, needs.hunger, needs.boredom, gold,
-            ));
+            );
+
+            // Remind about inventory items (non-gold).
+            let items: Vec<String> = inv.items.iter()
+                .filter(|(t, c)| **t != ItemType::GoldCoin && **c > 0)
+                .map(|(t, c)| format!("{} x{}", t, c))
+                .collect();
+            if !items.is_empty() {
+                status += &format!("\nYou are carrying: {}", items.join(", "));
+            }
+
+            // Remind about active bounty goal.
+            if let Some(crate::agents::components::Path(ref path_deque)) = path {
+                if !path_deque.is_empty() {
+                    status += &format!("\nYou are walking ({} tiles remaining).", path_deque.len());
+                }
+            }
+
+            if inv.gold_debt > 0 {
+                status += &format!("\nWARNING: You owe {} gold in debt!", inv.gold_debt);
+            }
+
+            messages.push(status);
             event_state.last_stat_tick = tick.0;
         }
 

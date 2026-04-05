@@ -99,6 +99,9 @@ pub fn city_buildings() -> Vec<BuildingDef> {
 
         // === Residential (y: 22..26) ===
         BuildingDef { name: "apartments",  x: 28, y: 22, w: 6, h: 5, entrance: EntranceSide::West },
+
+        // === Medical (y: 22..26) ===
+        BuildingDef { name: "hospital",    x: 2,  y: 22, w: 5, h: 4, entrance: EntranceSide::South },
     ]
 }
 
