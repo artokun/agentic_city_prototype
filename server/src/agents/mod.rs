@@ -52,7 +52,8 @@ impl Plugin for AgentPlugin {
                     (
                         ai::spawn_sessions_system,
                         // ai_chat::ai_chat_system, // DISABLED: chatting via MCP tool only
-                        ai::ai_context_system,
+                        ai::ai_thought_drain_system,
+                    ai::ai_context_system,
                         summarizer::summarize_thoughts_system,
                         behavior::execution_system,
                         mailbox::process_outgoing_mail_system,

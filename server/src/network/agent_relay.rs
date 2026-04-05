@@ -142,8 +142,16 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
                                         let _ = response_tx.send(text).await;
                                     }
                                 }
-                                // Skip assistant messages — the result message has the final text.
-                                "assistant" => {}
+                                // Capture assistant thinking as dialogue (NOT as action responses).
+                                "assistant" => {
+                                    if let Some(text) = claude::extract_result_text(&val) {
+                                        if !text.is_empty() {
+                                            // Send as a special "thought:" prefixed message.
+                                            // The game server logs this but doesn't treat it as an action.
+                                            let _ = response_tx.send(format!("thought:{}", text)).await;
+                                        }
+                                    }
+                                }
 
                                 // Skip system/hook messages silently.
                                 "system" => {}

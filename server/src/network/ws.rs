@@ -333,6 +333,7 @@ struct GameActionRequest {
     service: Option<String>,
     agent: Option<String>,
     text: Option<String>,
+    feedback: Option<String>,
 }
 
 async fn handle_game_action(
@@ -389,6 +390,12 @@ async fn handle_game_action(
             let recipient = req.agent.as_deref().unwrap_or("unknown");
             let text = req.text.as_deref().unwrap_or("");
             result_text = format!("Message sent to {}: '{}'", recipient, text);
+        }
+        "help" => {
+            result_text = "Thank you for your feedback! Your suggestion has been logged. \
+                          This will be reviewed and applied in your next reincarnation. \
+                          In the meantime, please try to work around the issue. \
+                          The development team appreciates your patience!".into();
         }
         _ => {}
     }

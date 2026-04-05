@@ -23,6 +23,18 @@ pub struct PendingActions {
     pub actions: Vec<MpcAction>,
 }
 
+/// Agent feedback/bug reports/suggestions — visible in debug monitor.
+#[derive(Resource, Default)]
+pub struct SuggestionBox {
+    pub entries: Vec<Suggestion>,
+}
+
+pub struct Suggestion {
+    pub tick: u64,
+    pub agent: String,
+    pub text: String,
+}
+
 pub struct MpcAction {
     pub agent_name: String,
     pub agent_id: String,
@@ -31,6 +43,7 @@ pub struct MpcAction {
     pub service: Option<String>,
     pub agent_target: Option<String>,
     pub text: Option<String>,
+    pub feedback: Option<String>,
 }
 
 /// System: apply pending MCP actions to agent entities.
@@ -40,6 +53,7 @@ pub fn apply_mcp_actions_system(
     tick: Res<TickCount>,
     map: Res<WorldMap>,
     mut event_log: ResMut<AgentEventLog>,
+    mut suggestion_box: ResMut<SuggestionBox>,
     bounty_registry: Res<BountyRegistry>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos,
@@ -167,6 +181,29 @@ pub fn apply_mcp_actions_system(
                     });
                     thought.0 = format!("Sending message to {}.", recipient);
                 }
+            }
+
+            "help" => {
+                let feedback = mcp_action.feedback.clone()
+                    .or_else(|| mcp_action.text.clone())
+                    .unwrap_or_else(|| "general feedback".into());
+
+                suggestion_box.entries.push(Suggestion {
+                    tick: tick.0,
+                    agent: name.0.clone(),
+                    text: feedback.clone(),
+                });
+
+                thought.0 = "Submitted feedback to the developers.".into();
+
+                event_log.push(LogEvent {
+                    tick: tick.0,
+                    agent: name.0.clone(),
+                    kind: LogKind::System,
+                    text: format!("FEEDBACK: {}", feedback),
+                });
+
+                tracing::warn!("[FEEDBACK:{}] {}", name.0, feedback);
             }
 
             _ => {

@@ -24,6 +24,7 @@ impl Plugin for NetworkPlugin {
 
         app.init_resource::<BroadcastTx>()
             .init_resource::<action_handler::PendingActions>()
+            .init_resource::<action_handler::SuggestionBox>()
             .insert_resource(CommandReceiver { rx: cmd_rx })
             .insert_resource(CommandSenderHolder(cmd_tx))
             .insert_resource(AgentRelaysResource(relays.clone()))

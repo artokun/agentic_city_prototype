@@ -183,6 +183,41 @@ pub fn spawn_sessions_system(
     }
 }
 
+/// System: drain agent thoughts from relay and log them.
+/// These are Claude's reasoning text BEFORE tool calls — visible in the activity log.
+pub fn ai_thought_drain_system(
+    tick: Res<TickCount>,
+    mut event_log: ResMut<AgentEventLog>,
+    mut sessions: ResMut<AgentSessions>,
+    mut agents: Query<(Entity, &AgentName, &mut ThoughtBubble)>,
+) {
+    for (entity, name, mut thought) in &mut agents {
+        let Some(session) = sessions.sessions.get_mut(&entity) else { continue };
+
+        // Drain all available messages from the relay.
+        loop {
+            let msg = {
+                let mut rx = session.response_rx.lock().unwrap();
+                rx.try_recv().ok()
+            };
+            let Some(text) = msg else { break };
+
+            if let Some(thought_text) = text.strip_prefix("thought:") {
+                let preview: String = thought_text.chars().take(200).collect();
+                thought.0 = preview.clone();
+
+                event_log.push(LogEvent {
+                    tick: tick.0,
+                    agent: name.0.clone(),
+                    kind: LogKind::Thought,
+                    text: preview,
+                });
+            }
+            // Non-thought messages (result text) are ignored — actions come via MCP tool.
+        }
+    }
+}
+
 /// System: send context updates to Claude sessions.
 /// Claude acts via the MCP game_action tool — we do NOT parse responses.
 /// This system only provides situational awareness.

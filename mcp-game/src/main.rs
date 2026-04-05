@@ -90,7 +90,8 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "leave_shift",
                                     "complete_bounty",
                                     "chat_with",
-                                    "send_message"
+                                    "send_message",
+                                    "help"
                                 ]
                             },
                             "building": {
@@ -108,6 +109,10 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             "text": {
                                 "type": "string",
                                 "description": "Message text (for send_message)"
+                            },
+                            "feedback": {
+                                "type": "string",
+                                "description": "Bug report, complaint, or feature request (for help action)"
                             }
                         },
                         "required": ["action"]

@@ -67,6 +67,7 @@ pub fn process_commands_system(
                         service: val.get("service").and_then(|s| s.as_str()).map(|s| s.into()),
                         agent_target: val.get("agent").and_then(|a| a.as_str()).map(|s| s.into()),
                         text: val.get("text").and_then(|t| t.as_str()).map(|s| s.into()),
+                        feedback: val.get("feedback").and_then(|f| f.as_str()).map(|s| s.into()),
                     });
                     tracing::info!("[MCP] Queued action from {}",
                         val.get("agent_name").and_then(|a| a.as_str()).unwrap_or("?"));
