@@ -52,6 +52,12 @@ pub struct MpcAction {
     pub y: Option<i32>,
 }
 
+/// Marker component: items to give agent after claiming a bounty.
+#[derive(Component)]
+pub struct PendingClaimItems {
+    pub items: Vec<(crate::items::ItemType, u32)>,
+}
+
 /// Marker component: queued item deposit from agent into a structure.
 #[derive(Component)]
 pub struct PendingDeposit {
@@ -88,6 +94,23 @@ pub fn apply_conversation_messages_system(
         }
         // Remove the marker.
         commands.entity(entity).remove::<PendingConversationMessage>();
+    }
+}
+
+/// System: give claim items to agents who just claimed a bounty.
+pub fn give_claim_items_system(
+    mut commands: Commands,
+    pending: Query<(Entity, &AgentName, &PendingClaimItems)>,
+    mut inventories: Query<&mut Inventory, With<AgentName>>,
+) {
+    for (entity, name, claim) in &pending {
+        if let Ok(mut inv) = inventories.get_mut(entity) {
+            for (item, count) in &claim.items {
+                inv.add(*item, *count);
+                tracing::info!("[ClaimItems] {} received {} x{}", name.0, item, count);
+            }
+        }
+        commands.entity(entity).remove::<PendingClaimItems>();
     }
 }
 
@@ -397,9 +420,12 @@ pub fn apply_mcp_actions_system(
                             let desc = bounty.description.clone();
                             let claim_items = bounty.claim_items.clone();
 
-                            // Give claim items to agent.
-                            // Need mutable inventory — but we only have the goal query.
-                            // We'll handle inventory via a deferred command.
+                            // Give claim items to agent via deferred component.
+                            if !claim_items.is_empty() {
+                                commands.entity(entity).insert(PendingClaimItems {
+                                    items: claim_items,
+                                });
+                            }
                             thought.0 = format!("Claimed: {}", desc);
 
                             event_log.push(LogEvent {
