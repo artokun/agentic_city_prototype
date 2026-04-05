@@ -160,7 +160,30 @@ pub fn init_map(mut commands: Commands) {
     // Bounty board sits on the park edge.
     tiles.insert(GridPos { x: 20, y: 32 }, TileType::Sidewalk);
 
-    commands.insert_resource(WorldMap { tiles });
+    let map = WorldMap { tiles };
+
+    // Validate navmesh: all building entrances must be reachable from each other.
+    let entrances: Vec<GridPos> = buildings.iter().map(|b| b.entrance_pos()).collect();
+    let board_pos = GridPos { x: 20, y: 32 };
+    let mut all_entrances = entrances;
+    all_entrances.push(board_pos);
+
+    match crate::agents::pathfinding::validate_navmesh(&map, &all_entrances) {
+        Ok(()) => {
+            tracing::info!("NavMesh validated: all {} entrances are reachable", all_entrances.len());
+        }
+        Err(unreachable) => {
+            for (from, to) in &unreachable {
+                tracing::error!(
+                    "NAVMESH ERROR: ({},{}) cannot reach ({},{})",
+                    from.x, from.y, to.x, to.y,
+                );
+            }
+            panic!("NavMesh validation failed: {} unreachable pairs", unreachable.len());
+        }
+    }
+
+    commands.insert_resource(map);
 }
 
 #[cfg(test)]
