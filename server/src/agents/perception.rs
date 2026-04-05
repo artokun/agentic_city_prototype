@@ -151,6 +151,7 @@ fn manhattan(a: &GridPos, b: &GridPos) -> i32 {
 pub fn look_around_system(
     mut commands: Commands,
     tick: Res<TickCount>,
+    tile_inventory: Res<crate::world::map::TileInventory>,
     mut lookers: Query<(Entity, &AgentName, &GridPos, &mut Vision, &mut KnownLocations), With<WantsToLook>>,
     agents: Query<(Entity, &AgentName, &GridPos), Without<WantsToLook>>,
     structures: Query<(Entity, &SpriteType, &GridPos, &Entrance), With<StructureId>>,
@@ -192,6 +193,28 @@ pub fn look_around_system(
                         source: DiscoverySource::Spotted,
                     });
                     tracing::info!("{} discovered {} by looking around", looker_name.0, sprite.0);
+                }
+            }
+        }
+
+        // Scan tile inventory for dropped items within range.
+        for (key, items) in &tile_inventory.items {
+            let parts: Vec<&str> = key.split('_').collect();
+            if parts.len() == 2 {
+                if let (Ok(x), Ok(y)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                    let tile_pos = GridPos { x, y };
+                    let dist = manhattan(looker_pos, &tile_pos);
+                    if dist <= LOOK_RADIUS {
+                        for item_name in items {
+                            visible.push(VisibleEntity {
+                                entity: looker_entity, // placeholder entity
+                                pos: tile_pos,
+                                kind: EntityKind::Structure, // display as structure for now
+                                name: format!("[ground] {}", item_name),
+                                distance: dist,
+                            });
+                        }
+                    }
                 }
             }
         }

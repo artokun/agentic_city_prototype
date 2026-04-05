@@ -8,7 +8,8 @@ pub struct MapPlugin;
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, init_map);
+        app.init_resource::<TileInventory>()
+            .add_systems(Startup, init_map);
     }
 }
 
@@ -30,6 +31,41 @@ pub enum TileType {
 impl TileType {
     pub fn is_walkable(&self) -> bool {
         matches!(self, TileType::Street | TileType::Sidewalk | TileType::Park | TileType::Entrance)
+    }
+}
+
+/// Unique key for tile inventory lookups.
+pub fn tile_key(x: i32, y: i32) -> String {
+    format!("{}_{}", x, y)
+}
+
+/// Items dropped on the ground at specific tile positions.
+#[derive(Resource, Default)]
+pub struct TileInventory {
+    /// tile_key → Vec<item name string>
+    pub items: HashMap<String, Vec<String>>,
+}
+
+impl TileInventory {
+    pub fn drop_item(&mut self, x: i32, y: i32, item: String) {
+        self.items.entry(tile_key(x, y)).or_default().push(item);
+    }
+
+    pub fn take_item(&mut self, x: i32, y: i32, item: &str) -> bool {
+        if let Some(items) = self.items.get_mut(&tile_key(x, y)) {
+            if let Some(pos) = items.iter().position(|i| i == item) {
+                items.remove(pos);
+                if items.is_empty() {
+                    self.items.remove(&tile_key(x, y));
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn items_at(&self, x: i32, y: i32) -> &[String] {
+        self.items.get(&tile_key(x, y)).map(|v| v.as_slice()).unwrap_or(&[])
     }
 }
 

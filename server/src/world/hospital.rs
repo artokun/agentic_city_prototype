@@ -13,6 +13,7 @@ use crate::agents::token_tracking::ContextWindow;
 use crate::agents::needs::Needs;
 use crate::config;
 use crate::items::{Inventory, ItemType};
+use crate::world::map::TileInventory;
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
 use crate::world::map::GridPos;
@@ -39,6 +40,7 @@ pub fn pass_out_system(
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
     mut bounty_registry: ResMut<BountyRegistry>,
+    mut tile_inventory: ResMut<TileInventory>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos, &mut Needs, &mut Inventory,
         &mut AgentGoal, &mut ThoughtBubble,
@@ -72,15 +74,17 @@ pub fn pass_out_system(
         );
         bounty_registry.bounties.push(bounty);
 
-        // Freeze the agent and start recovery immediately.
+        // Freeze the agent — they lay where they fell as a tile item.
+        // Another agent must pick them up and carry them to the hospital.
         commands.entity(entity).insert(Incapacitated {
             reason: reason.into(),
             passed_out_tick: tick.0,
             rescue_bounty_id: Some(bounty_id),
         });
-        commands.entity(entity).insert(Recovering {
-            ticks_remaining: config::recovery_ticks(),
-        });
+
+        // Drop the agent as a tile item — can be picked up by rescuers.
+        tile_inventory.drop_item(pos.x, pos.y, format!("body:{}", name.0));
+        tracing::info!("{} is now a tile item at ({},{}) — needs rescue!", name.0, pos.x, pos.y);
 
         // Clamp needs to 0.
         needs.energy = 0.0;

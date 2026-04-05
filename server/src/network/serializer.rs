@@ -25,7 +25,7 @@ pub fn serialize_world(
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
         Option<&ActionTimer>, Option<&ActiveConversation>,
     )>,
-    agent_extras: &Query<(Option<&ConversationLog>, Option<&BusinessCards>, Option<&ContextWindow>, Option<&AgentCost>)>,
+    agent_extras: &Query<(Option<&ConversationLog>, Option<&BusinessCards>, Option<&ContextWindow>, Option<&AgentCost>, Option<&crate::items::DocumentInventory>)>,
     structures: &Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,
@@ -40,7 +40,7 @@ pub fn serialize_world(
     let agent_offsets: Vec<_> = agents
         .iter()
         .map(|(entity, id, name, pos, anim, thought, inv, goal, needs, rels, vision, tracking, known_locs, action, active_convo)| {
-            let (convo_log, cards, ctx_window, agent_cost) = agent_extras.get(entity).unwrap_or((None, None, None, None));
+            let (convo_log, cards, ctx_window, agent_cost, doc_inv) = agent_extras.get(entity).unwrap_or((None, None, None, None, None));
             let id_str = fbb.create_string(&id.0.to_string());
             let name_str = fbb.create_string(&name.0);
             let thought_str = fbb.create_string(&thought.0);
@@ -55,6 +55,16 @@ pub fn serialize_world(
             if let Some(c) = cards {
                 for (contact_name, _) in &c.contacts {
                     let item_str = fbb.create_string(&format!("card:{}", contact_name));
+                    inv_slots.push(fb::InventorySlot::create(&mut fbb, &fb::InventorySlotArgs {
+                        item_type: Some(item_str), count: 1,
+                    }));
+                }
+            }
+
+            // Add named documents from DocumentInventory.
+            if let Some(docs) = doc_inv {
+                for title in docs.documents.keys() {
+                    let item_str = fbb.create_string(&format!("doc:{}", title));
                     inv_slots.push(fb::InventorySlot::create(&mut fbb, &fb::InventorySlotArgs {
                         item_type: Some(item_str), count: 1,
                     }));
@@ -229,8 +239,11 @@ pub fn serialize_world(
 fn serialize_inventory<'a, A: flatbuffers::Allocator + 'a>(
     fbb: &mut FlatBufferBuilder<'a, A>, inv: &Inventory,
 ) -> Vec<flatbuffers::WIPOffset<fb::InventorySlot<'a>>> {
-    inv.items.iter().map(|(item, count)| {
-        let item_str = fbb.create_string(&item.to_string());
-        fb::InventorySlot::create(fbb, &fb::InventorySlotArgs { item_type: Some(item_str), count: *count })
-    }).collect()
+    inv.items.iter()
+        // Skip Document/Paycheck — shown as named items from DocumentInventory.
+        .filter(|(item, count)| **item != ItemType::Document && **count > 0)
+        .map(|(item, count)| {
+            let item_str = fbb.create_string(&item.to_string());
+            fb::InventorySlot::create(fbb, &fb::InventorySlotArgs { item_type: Some(item_str), count: *count })
+        }).collect()
 }

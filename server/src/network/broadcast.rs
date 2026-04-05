@@ -39,7 +39,7 @@ pub fn broadcast_state(
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
         Option<&ActionTimer>, Option<&ActiveConversation>,
     )>,
-    agent_extras: Query<(Option<&ConversationLog>, Option<&BusinessCards>, Option<&ContextWindow>, Option<&AgentCost>)>,
+    agent_extras: Query<(Option<&ConversationLog>, Option<&BusinessCards>, Option<&ContextWindow>, Option<&AgentCost>, Option<&crate::items::DocumentInventory>)>,
     structures: Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,

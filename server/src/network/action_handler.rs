@@ -248,35 +248,64 @@ pub fn deliver_documents_system(
     }
 }
 
-/// System: process pending item deposits (agent → structure inventory transfer).
+/// System: process pending item deposits (agent → structure/tile transfer).
+/// Special case: depositing body:AgentName at hospital starts their recovery.
 pub fn process_deposits_system(
     mut commands: Commands,
     deposits: Query<(Entity, &AgentName, &PendingDeposit)>,
     mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
+    structures: Query<(&crate::world::structures::SpriteType,), With<StructureId>>,
+    mut incapacitated_agents: Query<(Entity, &AgentName, &mut ThoughtBubble), With<crate::world::hospital::Incapacitated>>,
 ) {
     for (entity, name, deposit) in &deposits {
-        let item_type = parse_item_name(&deposit.item_name);
+        // Special case: depositing a body at the hospital.
+        if deposit.item_name.starts_with("body:") {
+            let victim_name = &deposit.item_name[5..];
+            // Check if this is the hospital.
+            let is_hospital = structures.get(deposit.building_entity)
+                .map(|(sprite,)| sprite.0 == "hospital")
+                .unwrap_or(false);
 
-        if let Some(item) = item_type {
-            let mut success = false;
-            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
-                if agent_inv.has(item, 1) {
-                    agent_inv.remove(item, 1);
-                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
-                        bld_inv.add(item, 1);
-                        success = true;
-                        tracing::info!("[Deposit] {} deposited {} into building", name.0, deposit.item_name);
+            if is_hospital {
+                // Find the incapacitated agent and start their recovery.
+                for (victim_entity, vname, mut vthought) in &mut incapacitated_agents {
+                    if vname.0 == victim_name {
+                        commands.entity(victim_entity).insert(crate::world::hospital::Recovering {
+                            ticks_remaining: crate::config::recovery_ticks(),
+                        });
+                        vthought.0 = format!("Being treated at the hospital... {} brought me here.", name.0);
+                        tracing::info!("[RESCUE] {} delivered {} to the hospital — recovery started!", name.0, victim_name);
+                        break;
                     }
-                } else {
-                    tracing::info!("[Deposit] {} doesn't have {} in inventory", name.0, deposit.item_name);
                 }
-            }
-            if !success {
-                tracing::warn!("[Deposit] Failed: {} tried to deposit {} but doesn't have it", name.0, deposit.item_name);
+            } else {
+                // Not the hospital — just drop the body on this tile.
+                tracing::info!("[Deposit] {} dropped {} here (not the hospital)", name.0, deposit.item_name);
             }
         } else {
-            tracing::warn!("[Deposit] Unknown item type: {}", deposit.item_name);
+            // Regular item deposit.
+            let item_type = parse_item_name(&deposit.item_name);
+            if let Some(item) = item_type {
+                let mut success = false;
+                if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                    if agent_inv.has(item, 1) {
+                        agent_inv.remove(item, 1);
+                        if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
+                            bld_inv.add(item, 1);
+                            success = true;
+                            tracing::info!("[Deposit] {} deposited {} into building", name.0, deposit.item_name);
+                        }
+                    } else {
+                        tracing::info!("[Deposit] {} doesn't have {} in inventory", name.0, deposit.item_name);
+                    }
+                }
+                if !success {
+                    tracing::warn!("[Deposit] Failed: {} tried to deposit {} but doesn't have it", name.0, deposit.item_name);
+                }
+            } else {
+                tracing::warn!("[Deposit] Unknown item type: {}", deposit.item_name);
+            }
         }
 
         commands.entity(entity).remove::<PendingDeposit>();
@@ -302,30 +331,57 @@ fn parse_item_name(name: &str) -> Option<crate::items::ItemType> {
     }
 }
 
-/// System: process take_item — move item from structure to agent inventory.
+/// System: process take_item — move item from building/tile to agent inventory.
 pub fn process_take_items_system(
     mut commands: Commands,
-    takes: Query<(Entity, &AgentName, &PendingTakeItem)>,
+    takes: Query<(Entity, &AgentName, &GridPos, &PendingTakeItem)>,
     mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
+    mut tile_inventory: ResMut<crate::world::map::TileInventory>,
 ) {
-    for (entity, name, take) in &takes {
-        let item_type = parse_item_name(&take.item_name);
-
-        if let Some(item) = item_type {
-            if let Ok(mut bld_inv) = structure_inventories.get_mut(take.building_entity) {
-                if bld_inv.has(item, 1) {
-                    bld_inv.remove(item, 1);
-                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
-                        agent_inv.add(item, 1);
-                        tracing::info!("[Take] {} took {} from building", name.0, take.item_name);
-                    }
-                } else {
-                    tracing::info!("[Take] Building doesn't have {} for {}", take.item_name, name.0);
+    for (entity, name, pos, take) in &takes {
+        // Check if it's a body (passed-out agent).
+        if take.item_name.starts_with("body:") {
+            // Pick up the body from the tile.
+            if tile_inventory.take_item(pos.x, pos.y, &take.item_name) {
+                // Add to the carrier's inventory as a special item.
+                if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                    // Store as a generic "body" item — the name is tracked separately.
+                    agent_inv.items.entry(crate::items::ItemType::Document).or_insert(0); // placeholder
+                    tracing::info!("[Take] {} picked up {} from tile ({},{})", name.0, take.item_name, pos.x, pos.y);
                 }
+            } else {
+                tracing::info!("[Take] No {} at ({},{}) for {}", take.item_name, pos.x, pos.y, name.0);
             }
         } else {
-            tracing::warn!("[Take] Unknown item: {}", take.item_name);
+            // Regular item — try building first, then tile.
+            let item_type = parse_item_name(&take.item_name);
+            let mut taken = false;
+
+            if let Some(item) = item_type {
+                // Try building inventory.
+                if let Ok(mut bld_inv) = structure_inventories.get_mut(take.building_entity) {
+                    if bld_inv.has(item, 1) {
+                        bld_inv.remove(item, 1);
+                        if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                            agent_inv.add(item, 1);
+                            taken = true;
+                            tracing::info!("[Take] {} took {} from building", name.0, take.item_name);
+                        }
+                    }
+                }
+                // Try tile inventory if building didn't have it.
+                if !taken && tile_inventory.take_item(pos.x, pos.y, &take.item_name) {
+                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                        agent_inv.add(item, 1);
+                        taken = true;
+                        tracing::info!("[Take] {} took {} from tile ({},{})", name.0, take.item_name, pos.x, pos.y);
+                    }
+                }
+            }
+            if !taken {
+                tracing::info!("[Take] {} couldn't find {} here", name.0, take.item_name);
+            }
         }
 
         commands.entity(entity).remove::<PendingTakeItem>();

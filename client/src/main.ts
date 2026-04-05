@@ -105,9 +105,16 @@ function render(s: WorldSnapshot) {
     for (let j = 0; j < a.inventoryLength(); j++) {
       const slot = a.inventory(j);
       if (slot) {
-        const name = slot.itemType() ?? "?";
-        const cls = itemClass(name);
-        invHtml += `<span class="item ${cls}">${name} x${slot.count()}</span>`;
+        const itemName = slot.itemType() ?? "?";
+        const cls = itemClass(itemName);
+        if (itemName.startsWith("doc:")) {
+          // Clickable document — opens in new tab via REST API
+          const docTitle = itemName.substring(4);
+          const docUrl = `/api/documents/${agentName.toLowerCase()}/${docTitle}`;
+          invHtml += `<a class="item item-doc" href="${docUrl}" target="_blank" style="text-decoration:none;cursor:pointer" title="Click to read">${docTitle}</a>`;
+        } else {
+          invHtml += `<span class="item ${cls}">${itemName}${slot.count() > 1 ? ` x${slot.count()}` : ''}</span>`;
+        }
       }
     }
 
