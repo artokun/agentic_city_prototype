@@ -128,22 +128,8 @@ pub fn execution_system(
             // ========== IDLE / WANDERING ==========
             // AI system handles decisions. Only intervene for critical needs.
             AgentGoal::Idle => {
-                // Auto-handle ONLY hunger and boredom at critical levels.
-                // Energy is the agent's responsibility — if it hits 0 they pass out
-                // and must be rescued to the hospital. No auto-sleep bailout.
-                if let Some(need) = needs.most_urgent(config::critical_threshold()) {
-                    if matches!(need, NeedType::Energy) {
-                        // Do NOT auto-handle energy — let them pass out.
-                    } else if let Some((bld, entrance, service)) = pick_service_for_need(
-                        need, pos, gold, speed.0, &structure_list, &map,
-                    ) {
-                        thought.0 = format!("CRITICAL {:?}! → {}", need, service.action_name);
-                        *goal = AgentGoal::GoingToService { building: bld, service: service.action_name.into() };
-                        if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
-                            commands.entity(agent_entity).insert(Path(p));
-                        }
-                    }
-                }
+                // No auto-handling. Agents make ALL their own decisions via AI.
+                // If needs hit 0, the consequences play out (pass out, hospital, etc).
             }
 
             AgentGoal::Wandering => {
