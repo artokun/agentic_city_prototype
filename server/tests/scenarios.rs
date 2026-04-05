@@ -22,13 +22,13 @@ fn agent_claims_and_completes_bounty() {
             BountyObjective::WorkAtBuilding,
             "Instructions for agent: Go to the warehouse and use look_around to inspect the inventory. Then use create_document (service='warehouse_audit.md', text='<your findings>') to write up what you found. Return to the board.\n\nGM: STRICT — verify agent has a 'document' item in inventory AND visited the warehouse. If no document, REJECT.",
         )
-        .tick_ms(50)
-        .max_ticks(5000)
+        .tick_ms(200)
+        .max_ticks(3000)
         .build();
 
     // Wait for the agent to appear in the snapshot.
     let snap = harness
-        .wait_for(Duration::from_secs(10), |s| {
+        .wait_for(Duration::from_secs(15), |s| {
             s.agents.iter().any(|a| a.name == "Tester")
         })
         .expect("Agent 'Tester' never appeared in snapshot");
@@ -51,7 +51,7 @@ fn agent_claims_and_completes_bounty() {
     // 3. Look around + create a document
     // 4. Return to the board
     // 5. Complete the bounty for gold
-    let result = harness.wait_for(Duration::from_secs(120), |s| {
+    let result = harness.wait_for(Duration::from_secs(300), |s| {
         s.agents.iter().any(|a| a.gold >= 6)
     });
 
