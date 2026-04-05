@@ -128,7 +128,7 @@ pub fn hospital_recovery_system(
             }
 
             tracing::info!("{} has recovered in the hospital!", name.0);
-            thought.0 = "Waking up in the hospital... context compacted. Fresh start.".into();
+            thought.0 = "Waking up in the hospital... feeling groggy but rested.".into();
 
             commands.entity(entity).remove::<Recovering>();
             commands.entity(entity).remove::<Incapacitated>();
@@ -137,7 +137,7 @@ pub fn hospital_recovery_system(
                 tick: tick.0,
                 agent: name.0.clone(),
                 kind: LogKind::System,
-                text: "Recovered in the hospital. Context compacted — back on your feet!".into(),
+                text: "Recovered in the hospital. Back on your feet!".into(),
             });
         }
     }

@@ -136,7 +136,7 @@ pub fn action_timer_system(
                         name.0, ctx_window.tokens_used + compacted * 9, compacted,
                     );
                 }
-                thought.0 = "Woke up refreshed! Context compacted, ready for more.".into();
+                thought.0 = "Woke up refreshed! Energy restored.".into();
             } else {
                 thought.0 = format!("Finished {}.", timer.action_name);
             }
