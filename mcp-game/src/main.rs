@@ -93,6 +93,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "send_message",
                                     "claim_bounty",
                                     "leave_board",
+                                    "go_to",
                                     "help"
                                 ]
                             },
@@ -115,6 +116,14 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             "feedback": {
                                 "type": "string",
                                 "description": "Bug report, complaint, or feature request (for help action)"
+                            },
+                            "x": {
+                                "type": "integer",
+                                "description": "X coordinate (for go_to action). Map is 40x40."
+                            },
+                            "y": {
+                                "type": "integer",
+                                "description": "Y coordinate (for go_to action). Map is 40x40."
                             }
                         },
                         "required": ["action"]

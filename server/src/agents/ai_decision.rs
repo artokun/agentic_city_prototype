@@ -26,6 +26,10 @@ pub fn build_context(
     let mut ctx = format!(
 r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold while keeping your needs above critical levels.
 
+## World
+- Map size: 40x40 tiles (coordinates 0-39). You can go_to any walkable (x,y).
+- Buildings: bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital
+
 ## Current State
 - Position: ({}, {})
 - Gold: {gold}

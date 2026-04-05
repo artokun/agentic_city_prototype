@@ -334,6 +334,8 @@ struct GameActionRequest {
     agent: Option<String>,
     text: Option<String>,
     feedback: Option<String>,
+    x: Option<i32>,
+    y: Option<i32>,
 }
 
 async fn handle_game_action(
@@ -344,7 +346,7 @@ async fn handle_game_action(
     let valid_actions = [
         "go_to_board", "go_to_service", "look_around", "wander",
         "work_shift", "leave_shift", "complete_bounty", "chat_with", "send_message",
-        "claim_bounty", "leave_board", "help",
+        "claim_bounty", "leave_board", "go_to", "help",
     ];
 
     if !valid_actions.contains(&req.action.as_str()) {
@@ -369,34 +371,41 @@ async fn handle_game_action(
             );
         }
         "go_to_board" => {
-            result_text = "Heading to the bounty board. You'll be notified when you arrive and can browse available bounties.".into();
+            result_text = "Walking to the bounty board. You'll see available bounties when you arrive. Use claim_bounty to pick one.".into();
         }
         "work_shift" => {
             let building = req.building.as_deref().unwrap_or("unknown");
             result_text = format!(
-                "Starting a shift at {}. You'll earn paychecks based on ticks worked. Use 'leave_shift' when done.",
+                "Heading to {} to work a shift. You must physically arrive at the building before the shift starts. \
+                 Shifts earn paychecks (redeem at bounty board). Use 'leave_shift' to end your shift.",
                 building,
             );
         }
         "look_around" => {
-            result_text = "Scanning your surroundings... You'll see nearby agents and buildings in your next status update.".into();
+            result_text = "Scanning your surroundings. Results will appear in your next status update — you'll see nearby agents and buildings with their locations.".into();
         }
         "complete_bounty" => {
-            result_text = "Marking bounty as complete. Heading to the bounty board to collect your reward.".into();
+            result_text = "Marking bounty as complete and heading to the bounty board to collect your gold reward.".into();
         }
         "leave_shift" => {
-            result_text = "Leaving your shift. You'll receive a paycheck for the ticks worked. Redeem it at the bounty board.".into();
+            result_text = "Leaving your shift. Your paycheck is based on ticks worked. Go to the bounty board and use redeem_paycheck to convert it to gold.".into();
+        }
+        "claim_bounty" => {
+            result_text = "Attempting to claim a bounty. You must be at the bounty board (InteractingWithBoard) to claim. Read the bounty description for instructions on how to complete it.".into();
+        }
+        "leave_board" => {
+            result_text = "Left the bounty board. You can go_to_board again later to check for new bounties.".into();
         }
         "send_message" => {
             let recipient = req.agent.as_deref().unwrap_or("unknown");
             let text = req.text.as_deref().unwrap_or("");
-            result_text = format!("Message sent to {}: '{}'", recipient, text);
+            result_text = format!("Message sent to {}.", recipient);
         }
         "help" => {
-            result_text = "Thank you for your feedback! Your suggestion has been logged. \
-                          This will be reviewed and applied in your next reincarnation. \
-                          In the meantime, please try to work around the issue. \
-                          The development team appreciates your patience!".into();
+            result_text = "Thank you for your feedback! Your suggestion has been logged and will be reviewed. \
+                          The fix will be applied in your next reincarnation. \
+                          For now, try to work around the issue. \
+                          Known buildings: bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital.".into();
         }
         _ => {}
     }
@@ -410,6 +419,9 @@ async fn handle_game_action(
         "service": req.service,
         "agent": req.agent,
         "text": req.text,
+        "feedback": req.feedback,
+        "x": req.x,
+        "y": req.y,
     });
 
     // Send via the command channel.
