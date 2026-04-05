@@ -52,6 +52,13 @@ pub struct MpcAction {
     pub y: Option<i32>,
 }
 
+/// Marker component: queued item deposit from agent into a structure.
+#[derive(Component)]
+pub struct PendingDeposit {
+    pub item_name: String,
+    pub building_entity: Entity,
+}
+
 /// Marker component: queued conversation message to apply to both agents' logs.
 #[derive(Component)]
 pub struct PendingConversationMessage {
@@ -81,6 +88,56 @@ pub fn apply_conversation_messages_system(
         }
         // Remove the marker.
         commands.entity(entity).remove::<PendingConversationMessage>();
+    }
+}
+
+/// System: process pending item deposits (agent → structure inventory transfer).
+pub fn process_deposits_system(
+    mut commands: Commands,
+    deposits: Query<(Entity, &AgentName, &PendingDeposit)>,
+    mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
+    mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
+) {
+    for (entity, name, deposit) in &deposits {
+        // Parse item name to ItemType.
+        let item_type = match deposit.item_name.to_lowercase().as_str() {
+            "gold_egg" | "goldegg" | "golden_egg" => Some(crate::items::ItemType::GoldEgg),
+            "gold_coin" | "goldcoin" => Some(crate::items::ItemType::GoldCoin),
+            "coffee" => Some(crate::items::ItemType::Coffee),
+            "muffin" => Some(crate::items::ItemType::Muffin),
+            "sandwich" => Some(crate::items::ItemType::Sandwich),
+            "rations" => Some(crate::items::ItemType::Rations),
+            "soup" => Some(crate::items::ItemType::Soup),
+            "coffee_beans" | "coffeebeans" => Some(crate::items::ItemType::CoffeeBeans),
+            "flour" => Some(crate::items::ItemType::Flour),
+            "raw_meat" | "rawmeat" => Some(crate::items::ItemType::RawMeat),
+            "document" => Some(crate::items::ItemType::Document),
+            "paycheck" => Some(crate::items::ItemType::Paycheck),
+            _ => None,
+        };
+
+        if let Some(item) = item_type {
+            let mut success = false;
+            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                if agent_inv.has(item, 1) {
+                    agent_inv.remove(item, 1);
+                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
+                        bld_inv.add(item, 1);
+                        success = true;
+                        tracing::info!("[Deposit] {} deposited {} into building", name.0, deposit.item_name);
+                    }
+                } else {
+                    tracing::info!("[Deposit] {} doesn't have {} in inventory", name.0, deposit.item_name);
+                }
+            }
+            if !success {
+                tracing::warn!("[Deposit] Failed: {} tried to deposit {} but doesn't have it", name.0, deposit.item_name);
+            }
+        } else {
+            tracing::warn!("[Deposit] Unknown item type: {}", deposit.item_name);
+        }
+
+        commands.entity(entity).remove::<PendingDeposit>();
     }
 }
 
@@ -691,6 +748,31 @@ pub fn apply_mcp_actions_system(
                     }
                 } else {
                     thought.0 = "ERROR: No pending trade to reject.".into();
+                }
+            }
+
+            "deposit_item" => {
+                let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
+
+                // Must be inside a building.
+                let building = structure_list.iter()
+                    .find(|(_, entrance, name)| pos.x == entrance.x && pos.y == entrance.y);
+
+                if let Some((bld_entity, _, bld_name)) = building {
+                    commands.entity(entity).insert(PendingDeposit {
+                        item_name: item_name.to_string(),
+                        building_entity: *bld_entity,
+                    });
+                    thought.0 = format!("Depositing {} into {}.", item_name, bld_name);
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: name.0.clone(),
+                        kind: LogKind::Action,
+                        text: format!("DEPOSIT: {} → {}", item_name, bld_name),
+                    });
+                } else {
+                    thought.0 = "ERROR: Must be at a building entrance to deposit items. Go to a building first.".into();
                 }
             }
 

@@ -100,7 +100,8 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "end_conversation",
                                     "offer_trade",
                                     "accept_trade",
-                                    "reject_trade"
+                                    "reject_trade",
+                                    "deposit_item"
                                 ]
                             },
                             "building": {
@@ -109,7 +110,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "service": {
                                 "type": "string",
-                                "description": "Service to use (eat_cafe, buy_coffee, sleep_hotel, sleep_at_home, cook_at_home, redeem_paycheck, search_internet). For offer_trade: comma-separated requested items (e.g. 'gold_coin,coffee')"
+                                "description": "Service to use (eat_cafe, buy_coffee, sleep_hotel, sleep_at_home, cook_at_home, redeem_paycheck, search_internet). For deposit_item: the item name to deposit (e.g. 'gold_egg'). For offer_trade: comma-separated requested items."
                             },
                             "agent": {
                                 "type": "string",

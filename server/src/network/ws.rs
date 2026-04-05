@@ -349,6 +349,7 @@ async fn handle_game_action(
         "claim_bounty", "leave_board", "go_to", "help",
         "start_conversation", "say", "end_conversation",
         "offer_trade", "accept_trade", "reject_trade",
+        "deposit_item",
     ];
 
     if !valid_actions.contains(&req.action.as_str()) {
@@ -424,6 +425,11 @@ async fn handle_game_action(
         }
         "reject_trade" => {
             result_text = "Trade rejected and removed. Both parties are notified.".into();
+        }
+        "deposit_item" => {
+            let item = req.service.as_deref().unwrap_or("unknown");
+            let building = req.building.as_deref().unwrap_or("current building");
+            result_text = format!("Depositing {} into {}'s inventory. You must be inside the building.", item, building);
         }
         "help" => {
             result_text = "Thank you for your feedback! Your suggestion has been logged and will be reviewed. \

@@ -34,7 +34,8 @@ impl Plugin for NetworkPlugin {
             .add_systems(Update, commands::process_commands_system)
             .add_systems(Update, action_handler::apply_mcp_actions_system)
             .add_systems(Update, action_handler::apply_conversation_messages_system.after(action_handler::apply_mcp_actions_system))
-            .add_systems(Update, action_handler::auto_exchange_cards_system.after(action_handler::apply_mcp_actions_system));
+            .add_systems(Update, action_handler::auto_exchange_cards_system.after(action_handler::apply_mcp_actions_system))
+            .add_systems(Update, action_handler::process_deposits_system.after(action_handler::apply_mcp_actions_system));
     }
 }
 

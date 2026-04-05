@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
-use crate::items::ItemType;
+use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
 
@@ -26,7 +26,7 @@ fn bounty_templates() -> Vec<(&'static str, BountyObjective, u32, Vec<(ItemType,
             vec![],
         ),
         (
-            "Hide a gold egg in a structure",
+            "Hide a gold egg: you receive a gold_egg on claim. Go to any building and use deposit_item with service='gold_egg' to hide it there. Then return to the board to collect your reward.",
             BountyObjective::HideItem(ItemType::GoldEgg),
             2,
             vec![(ItemType::GoldEgg, 1)],
@@ -91,9 +91,9 @@ fn bounty_templates() -> Vec<(&'static str, BountyObjective, u32, Vec<(ItemType,
             8,
             vec![],
         ),
-        // --- Bounties that may require gold ---
+        // --- Bounties that may require gold or searching ---
         (
-            "Find the hidden gold egg",
+            "Find the hidden gold egg: search structures by visiting them and checking their inventory. The egg was hidden by another agent.",
             BountyObjective::FindItem(ItemType::GoldEgg),
             5,
             vec![],
