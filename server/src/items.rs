@@ -182,3 +182,233 @@ impl DocumentInventory {
         self.documents.contains_key(title)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Inventory basics ---
+
+    #[test]
+    fn add_and_count() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Coffee, 5);
+        assert_eq!(inv.count(ItemType::Coffee), 5);
+        inv.add(ItemType::Coffee, 3);
+        assert_eq!(inv.count(ItemType::Coffee), 8);
+    }
+
+    #[test]
+    fn remove_success() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Muffin, 10);
+        assert!(inv.remove(ItemType::Muffin, 4));
+        assert_eq!(inv.count(ItemType::Muffin), 6);
+    }
+
+    #[test]
+    fn remove_exact_amount_cleans_up() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Muffin, 3);
+        assert!(inv.remove(ItemType::Muffin, 3));
+        assert_eq!(inv.count(ItemType::Muffin), 0);
+        assert!(!inv.items.contains_key(&ItemType::Muffin));
+    }
+
+    #[test]
+    fn remove_insufficient_returns_false() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Coffee, 2);
+        assert!(!inv.remove(ItemType::Coffee, 5));
+        // Balance unchanged
+        assert_eq!(inv.count(ItemType::Coffee), 2);
+    }
+
+    #[test]
+    fn remove_missing_item_returns_false() {
+        let mut inv = Inventory::default();
+        assert!(!inv.remove(ItemType::Soup, 1));
+    }
+
+    #[test]
+    fn has_checks_minimum() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Sandwich, 3);
+        assert!(inv.has(ItemType::Sandwich, 1));
+        assert!(inv.has(ItemType::Sandwich, 3));
+        assert!(!inv.has(ItemType::Sandwich, 4));
+    }
+
+    #[test]
+    fn has_missing_item() {
+        let inv = Inventory::default();
+        assert!(!inv.has(ItemType::Rations, 1));
+    }
+
+    // --- Gold debt mechanics ---
+
+    #[test]
+    fn deduct_gold_with_enough_on_hand() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::GoldCoin, 10);
+        inv.deduct_gold_with_debt(4);
+        assert_eq!(inv.count(ItemType::GoldCoin), 6);
+        assert_eq!(inv.gold_debt, 0);
+    }
+
+    #[test]
+    fn deduct_gold_creates_debt() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::GoldCoin, 3);
+        inv.deduct_gold_with_debt(8);
+        assert_eq!(inv.count(ItemType::GoldCoin), 0);
+        assert_eq!(inv.gold_debt, 5);
+    }
+
+    #[test]
+    fn deduct_gold_from_empty() {
+        let mut inv = Inventory::default();
+        inv.deduct_gold_with_debt(5);
+        assert_eq!(inv.gold_debt, 5);
+        assert_eq!(inv.count(ItemType::GoldCoin), 0);
+    }
+
+    #[test]
+    fn gold_balance_positive() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::GoldCoin, 10);
+        assert_eq!(inv.gold_balance(), 10);
+    }
+
+    #[test]
+    fn gold_balance_negative_with_debt() {
+        let mut inv = Inventory::default();
+        inv.deduct_gold_with_debt(7);
+        assert_eq!(inv.gold_balance(), -7);
+    }
+
+    #[test]
+    fn add_gold_pays_off_debt_fully() {
+        let mut inv = Inventory::default();
+        inv.gold_debt = 5;
+        inv.add(ItemType::GoldCoin, 8);
+        assert_eq!(inv.gold_debt, 0);
+        assert_eq!(inv.count(ItemType::GoldCoin), 3);
+    }
+
+    #[test]
+    fn add_gold_pays_off_debt_partially() {
+        let mut inv = Inventory::default();
+        inv.gold_debt = 10;
+        inv.add(ItemType::GoldCoin, 3);
+        assert_eq!(inv.gold_debt, 7);
+        assert_eq!(inv.count(ItemType::GoldCoin), 0);
+    }
+
+    #[test]
+    fn add_gold_pays_off_debt_exactly() {
+        let mut inv = Inventory::default();
+        inv.gold_debt = 5;
+        inv.add(ItemType::GoldCoin, 5);
+        assert_eq!(inv.gold_debt, 0);
+        assert_eq!(inv.count(ItemType::GoldCoin), 0);
+    }
+
+    #[test]
+    fn add_non_gold_ignores_debt() {
+        let mut inv = Inventory::default();
+        inv.gold_debt = 5;
+        inv.add(ItemType::Coffee, 3);
+        assert_eq!(inv.gold_debt, 5);
+        assert_eq!(inv.count(ItemType::Coffee), 3);
+    }
+
+    // --- add_capped ---
+
+    #[test]
+    fn add_capped_below_max() {
+        let mut inv = Inventory::default();
+        let added = inv.add_capped(ItemType::Coffee, 5, 10);
+        assert_eq!(added, 5);
+        assert_eq!(inv.count(ItemType::Coffee), 5);
+    }
+
+    #[test]
+    fn add_capped_at_max() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Coffee, 8);
+        let added = inv.add_capped(ItemType::Coffee, 5, 10);
+        assert_eq!(added, 2);
+        assert_eq!(inv.count(ItemType::Coffee), 10);
+    }
+
+    #[test]
+    fn add_capped_already_full() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Muffin, 10);
+        let added = inv.add_capped(ItemType::Muffin, 5, 10);
+        assert_eq!(added, 0);
+        assert_eq!(inv.count(ItemType::Muffin), 10);
+    }
+
+    // --- Wholesale prices ---
+
+    #[test]
+    fn raw_materials_have_wholesale_prices() {
+        assert!(ItemType::CoffeeBeans.wholesale_price().is_some());
+        assert!(ItemType::Flour.wholesale_price().is_some());
+        assert!(ItemType::RawMeat.wholesale_price().is_some());
+    }
+
+    #[test]
+    fn finished_goods_have_no_wholesale_price() {
+        assert!(ItemType::Coffee.wholesale_price().is_none());
+        assert!(ItemType::GoldCoin.wholesale_price().is_none());
+    }
+
+    // --- Processing recipes ---
+
+    #[test]
+    fn coffee_beans_produce_coffee() {
+        let (output, ticks) = ItemType::CoffeeBeans.processing_recipe().unwrap();
+        assert_eq!(output, ItemType::Coffee);
+        assert_eq!(ticks, 10);
+    }
+
+    #[test]
+    fn flour_produces_muffin() {
+        let (output, ticks) = ItemType::Flour.processing_recipe().unwrap();
+        assert_eq!(output, ItemType::Muffin);
+        assert_eq!(ticks, 15);
+    }
+
+    #[test]
+    fn raw_meat_produces_sandwich() {
+        let (output, ticks) = ItemType::RawMeat.processing_recipe().unwrap();
+        assert_eq!(output, ItemType::Sandwich);
+        assert_eq!(ticks, 12);
+    }
+
+    #[test]
+    fn non_raw_has_no_recipe() {
+        assert!(ItemType::Coffee.processing_recipe().is_none());
+        assert!(ItemType::GoldCoin.processing_recipe().is_none());
+    }
+
+    #[test]
+    fn is_raw_material() {
+        assert!(ItemType::CoffeeBeans.is_raw_material());
+        assert!(ItemType::Flour.is_raw_material());
+        assert!(ItemType::RawMeat.is_raw_material());
+        assert!(!ItemType::Coffee.is_raw_material());
+        assert!(!ItemType::GoldCoin.is_raw_material());
+    }
+
+    #[test]
+    fn raw_ingredient_roundtrip() {
+        assert_eq!(ItemType::Coffee.raw_ingredient(), Some(ItemType::CoffeeBeans));
+        assert_eq!(ItemType::Muffin.raw_ingredient(), Some(ItemType::Flour));
+        assert_eq!(ItemType::Sandwich.raw_ingredient(), Some(ItemType::RawMeat));
+        assert_eq!(ItemType::Soup.raw_ingredient(), None);
+    }
+}
