@@ -110,7 +110,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "service": {
                                 "type": "string",
-                                "description": "Service to use (eat_cafe, buy_coffee, sleep_hotel, sleep_at_home, cook_at_home, redeem_paycheck, search_internet). For deposit_item: the item name to deposit (e.g. 'gold_egg'). For offer_trade: comma-separated requested items."
+                                "description": "Service to use at a building (eat_cafe, buy_coffee, sleep_hotel, etc). For deposit_item: the item name from your inventory to transfer into the building (e.g. 'gold_egg', 'document'). For offer_trade: comma-separated requested items."
                             },
                             "agent": {
                                 "type": "string",

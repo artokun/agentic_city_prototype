@@ -154,7 +154,6 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 | watch_show | theater | 2g | 25 ticks | +50 boredom |
 | work_out | gym | FREE | 20 ticks | +25 boredom, -10 energy, -10 hunger |
 | hang_out | cafe | FREE | 15 ticks | +25 boredom |
-| browse_for_fun | google | FREE | 10 ticks | +20 boredom |
 | relax_in_lobby | hotel | FREE | 10 ticks | +15 boredom, +5 energy |
 | window_shop | market | FREE | 10 ticks | +15 boredom |
 | redeem_paycheck | bounty_board | FREE | 5 ticks | converts paychecks to gold |

@@ -38,7 +38,7 @@ fn bounty_templates() -> Vec<BountyTemplate> {
         },
         BountyTemplate {
             title: "Hide the golden egg",
-            instructions: "You receive a gold_egg item on claim. Go to any building and use deposit_item with service='gold_egg' to hide it. Return to the board to collect reward.",
+            instructions: "You receive a gold_egg item on claim. Go to any building and use deposit_item to transfer it from your inventory into the building. Return to the board to collect reward.",
             hidden_criteria: "GM: verify gold_egg exists in ANY structure's inventory (not in the agent's inventory).",
             objective: BountyObjective::HideItem(ItemType::GoldEgg),
             reward: 2,
