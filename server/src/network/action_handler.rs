@@ -249,16 +249,43 @@ pub fn deliver_documents_system(
 }
 
 /// System: process pending item deposits (agent → structure/tile transfer).
-/// Special case: depositing body:AgentName at hospital starts their recovery.
+/// Special cases:
+/// - "body:AgentName" at hospital → starts their recovery
+/// - "all_documents" → transfers all documents from agent to building
 pub fn process_deposits_system(
     mut commands: Commands,
     deposits: Query<(Entity, &AgentName, &PendingDeposit)>,
     mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
+    mut agent_docs: Query<&mut crate::items::DocumentInventory, With<AgentName>>,
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
     structures: Query<(&crate::world::structures::SpriteType,), With<StructureId>>,
     mut incapacitated_agents: Query<(Entity, &AgentName, &mut ThoughtBubble), With<crate::world::hospital::Incapacitated>>,
 ) {
     for (entity, name, deposit) in &deposits {
+        // Special case: deposit all documents (bounty submission).
+        if deposit.item_name == "all_documents" {
+            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                let doc_count = agent_inv.count(crate::items::ItemType::Document);
+                if doc_count > 0 {
+                    agent_inv.remove(crate::items::ItemType::Document, doc_count);
+                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
+                        bld_inv.add(crate::items::ItemType::Document, doc_count);
+                    }
+                    tracing::info!("[Deposit] {} deposited {} documents at building", name.0, doc_count);
+                }
+            }
+            // Also clear the DocumentInventory content.
+            if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                let titles: Vec<String> = docs.documents.keys().cloned().collect();
+                for title in &titles {
+                    tracing::info!("[Deposit] {} submitted document '{}'", name.0, title);
+                }
+                docs.documents.clear();
+            }
+            commands.entity(entity).remove::<PendingDeposit>();
+            continue;
+        }
+
         // Special case: depositing a body at the hospital.
         if deposit.item_name.starts_with("body:") {
             let victim_name = &deposit.item_name[5..];
