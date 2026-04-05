@@ -374,6 +374,8 @@ async fn handle_game_action(
         "deposit_item",
         "take_item",
         "create_document",
+        "inspect_item",
+        "cancel_bounty",
     ];
 
     if !valid_actions.contains(&req.action.as_str()) {
@@ -461,6 +463,13 @@ async fn handle_game_action(
         "create_document" => {
             let title = req.service.as_deref().unwrap_or("untitled.md");
             result_text = format!("Creating document '{}'. Content from 'text' field will be saved.", title);
+        }
+        "inspect_item" => {
+            let item = req.service.as_deref().unwrap_or("unknown");
+            result_text = format!("Inspecting '{}'. Details will appear in your next status update.", item);
+        }
+        "cancel_bounty" => {
+            result_text = "Cancelling your active bounty and returning the token to the board.".into();
         }
         "help" => {
             result_text = "Thank you for your feedback! Your suggestion has been logged and will be reviewed. \

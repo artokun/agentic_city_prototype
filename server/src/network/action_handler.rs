@@ -351,6 +351,7 @@ fn parse_item_name(name: &str) -> Option<crate::items::ItemType> {
         "raw_meat" | "rawmeat" => Some(crate::items::ItemType::RawMeat),
         "document" => Some(crate::items::ItemType::Document),
         "paycheck" => Some(crate::items::ItemType::Paycheck),
+        "bounty_token" | "bountytoken" => Some(crate::items::ItemType::BountyToken),
         _ => None,
     }
 }
@@ -709,6 +710,8 @@ pub fn apply_mcp_actions_system(
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
                 if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard) {
                     thought.0 = "Must be at the bounty board to claim a bounty! Go there first.".into();
+                } else if bounty_registry.bounties.iter().any(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed) {
+                    thought.0 = "ERROR: You already have an active bounty. Complete or cancel it before claiming another. You can only hold one bounty token at a time.".into();
                 } else {
                     let keyword = mcp_action.text.as_deref()
                         .or(mcp_action.service.as_deref())
@@ -732,13 +735,14 @@ pub fn apply_mcp_actions_system(
                             let desc = bounty.description.clone();
                             let claim_items = bounty.claim_items.clone();
 
-                            // Give claim items to agent via deferred component.
-                            if !claim_items.is_empty() {
-                                commands.entity(entity).insert(PendingClaimItems {
-                                    items: claim_items,
-                                });
-                            }
-                            // Extract agent instructions from hidden_criteria.
+                            // Give bounty token + any claim items.
+                            let mut items_to_give = claim_items;
+                            items_to_give.push((crate::items::ItemType::BountyToken, 1));
+                            commands.entity(entity).insert(PendingClaimItems {
+                                items: items_to_give,
+                            });
+
+                            // Store bounty info on the agent for inspect_item.
                             let instructions = bounty.hidden_criteria
                                 .split("\n\nGM:")
                                 .next()
@@ -746,6 +750,13 @@ pub fn apply_mcp_actions_system(
                                 .strip_prefix("Instructions for agent: ")
                                 .unwrap_or("Complete the task and return to the board.")
                                 .to_string();
+                            commands.entity(entity).insert(crate::items::BountyTokenInfo {
+                                bounty_id: bounty_id.to_string(),
+                                title: desc.clone(),
+                                reward: bounty.reward_gold,
+                                instructions: instructions.clone(),
+                            });
+
                             thought.0 = format!("Claimed: {}. INSTRUCTIONS: {}", desc, instructions);
 
                             event_log.push(LogEvent {
@@ -1165,6 +1176,84 @@ pub fn apply_mcp_actions_system(
                         kind: LogKind::Action,
                         text: format!("CREATED DOC: {}", title),
                     });
+                }
+            }
+
+            "inspect_item" => {
+                let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
+
+                if item_name == "bounty_token" || item_name.starts_with("bounty") {
+                    // Show bounty token details via session message.
+                    if let Some(session) = sessions.sessions.get(&entity) {
+                        // Look up the agent's active bounty from the registry.
+                        let active = bounty_registry.bounties.iter()
+                            .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed);
+                        if let Some(bounty) = active {
+                            let instructions = bounty.hidden_criteria
+                                .split("\n\nGM:")
+                                .next()
+                                .unwrap_or("")
+                                .strip_prefix("Instructions for agent: ")
+                                .unwrap_or("No instructions available.");
+                            let _ = session.prompt_tx.try_send(format!(
+                                "=== BOUNTY TOKEN ===\nTitle: {}\nReward: {}g\nID: {}\nInstructions: {}\n=== END TOKEN ===",
+                                bounty.description, bounty.reward_gold, &bounty.id.to_string()[..6], instructions,
+                            ));
+                            thought.0 = format!("Reading bounty token: {}", bounty.description);
+                        } else {
+                            thought.0 = "You don't have a bounty token.".into();
+                        }
+                    }
+                } else if item_name.starts_with("doc:") || item_name.ends_with(".md") {
+                    // Read a document from DocumentInventory.
+                    // We can't access DocumentInventory from this query, so send via session.
+                    let doc_title = item_name.strip_prefix("doc:").unwrap_or(item_name);
+                    if let Some(session) = sessions.sessions.get(&entity) {
+                        let _ = session.prompt_tx.try_send(format!(
+                            "Reading document '{}'. Check the documents REST API at /api/documents/{}/{} for full content.",
+                            doc_title, name.0.to_lowercase(), doc_title,
+                        ));
+                    }
+                    thought.0 = format!("Reading document: {}", doc_title);
+                } else {
+                    thought.0 = format!("Nothing special about '{}'. It's just a regular item.", item_name);
+                }
+            }
+
+            "cancel_bounty" => {
+                let at_board = known_locs.locations.values()
+                    .find(|l| l.name == "bounty_board")
+                    .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
+
+                if !at_board {
+                    thought.0 = "Must be at the bounty board to cancel a bounty.".into();
+                } else {
+                    let active = bounty_registry.bounties.iter()
+                        .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
+                        .map(|b| b.id);
+
+                    if let Some(bounty_id) = active {
+                        // Return bounty to available.
+                        if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                            b.state = crate::world::bounty::BountyState::Available;
+                            b.claimed_by = None;
+                            b.picked_up_tick = None;
+                        }
+                        // Remove bounty token from agent (via deferred — we don't have inventory here).
+                        // The token removal happens when PendingDeposit processes "bounty_token".
+                        commands.entity(entity).remove::<crate::items::BountyTokenInfo>();
+                        *goal = AgentGoal::Idle;
+                        thought.0 = "Bounty cancelled. Token returned to the board.".into();
+
+                        event_log.push(LogEvent {
+                            tick: tick.0,
+                            agent: name.0.clone(),
+                            kind: LogKind::Action,
+                            text: "Cancelled bounty — token returned to board.".into(),
+                        });
+                    } else {
+                        thought.0 = "You don't have an active bounty to cancel.".into();
+                    }
                 }
             }
 

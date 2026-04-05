@@ -13,6 +13,7 @@ pub enum ItemType {
     Soup,
     Paycheck,
     Document,
+    BountyToken,
     // Raw materials
     CoffeeBeans,
     Flour,
@@ -163,6 +164,7 @@ impl fmt::Display for ItemType {
             ItemType::Soup => write!(f, "soup"),
             ItemType::Paycheck => write!(f, "paycheck"),
             ItemType::Document => write!(f, "document"),
+            ItemType::BountyToken => write!(f, "bounty_token"),
             ItemType::CoffeeBeans => write!(f, "coffee_beans"),
             ItemType::Flour => write!(f, "flour"),
             ItemType::RawMeat => write!(f, "raw_meat"),
@@ -244,6 +246,15 @@ impl Inventory {
     pub fn count(&self, item: ItemType) -> u32 {
         self.items.get(&item).copied().unwrap_or(0)
     }
+}
+
+/// Info stored on a bounty token the agent is carrying.
+#[derive(Component, Default, Debug, Clone)]
+pub struct BountyTokenInfo {
+    pub bounty_id: String,
+    pub title: String,
+    pub reward: u32,
+    pub instructions: String,
 }
 
 /// Holds documents an agent has produced (title → content).

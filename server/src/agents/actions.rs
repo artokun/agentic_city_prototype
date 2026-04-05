@@ -130,14 +130,20 @@ pub fn action_timer_system(
                 if let Some(session) = sessions.sessions.get(&entity) {
                     let _ = session.prompt_tx.try_send("/compact".to_string());
                 }
-                // Reset our token counter — real compaction reduces context.
+                // Reset token counter and limit (coffee boosts expire on sleep).
                 let old = ctx_window.tokens_used;
                 ctx_window.tokens_used = 0;
+                ctx_window.context_limit = crate::config::context_limit();
                 tracing::info!(
                     "[COMPACT] {} slept → /compact sent, tokens {} → 0",
                     name.0, old,
                 );
                 thought.0 = "Woke up refreshed! Energy restored.".into();
+            } else if timer.action_name.contains("coffee") {
+                // Coffee temporarily boosts token limit by 10k.
+                ctx_window.context_limit += 10_000;
+                thought.0 = format!("Finished {}. Feeling energized! (token limit +10k)", timer.action_name);
+                tracing::info!("[COFFEE] {} drank coffee — token limit now {}", name.0, ctx_window.context_limit);
             } else {
                 thought.0 = format!("Finished {}.", timer.action_name);
             }

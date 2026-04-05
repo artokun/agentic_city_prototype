@@ -103,7 +103,9 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "reject_trade",
                                     "deposit_item",
                                     "take_item",
-                                    "create_document"
+                                    "create_document",
+                                    "inspect_item",
+                                    "cancel_bounty"
                                 ]
                             },
                             "building": {
