@@ -18,16 +18,84 @@ const MIN_AVAILABLE_BOUNTIES: usize = 3;
 /// Pool of bounty templates to randomly inject.
 fn bounty_templates() -> Vec<(&'static str, BountyObjective, u32, Vec<(ItemType, u32)>)> {
     vec![
+        // --- Free bounties first (no gold required) ---
+        (
+            "Research project at Google",
+            BountyObjective::WorkAtBuilding,
+            8,
+            vec![],
+        ),
         (
             "Hide a gold egg in a structure",
             BountyObjective::HideItem(ItemType::GoldEgg),
-            10,
+            2,
             vec![(ItemType::GoldEgg, 1)],
         ),
         (
+            "Inventory audit at the warehouse",
+            BountyObjective::WorkAtBuilding,
+            6,
+            vec![],
+        ),
+        (
+            "Deep clean the hotel",
+            BountyObjective::WorkAtBuilding,
+            5,
+            vec![],
+        ),
+        (
+            "Visit every building in the city and report back",
+            BountyObjective::WorkAtBuilding,
+            15,
+            vec![],
+        ),
+        (
+            "Exchange business cards with another agent — start a conversation and cards are exchanged automatically",
+            BountyObjective::WorkAtBuilding,
+            3,
+            vec![],
+        ),
+        (
+            "Write a report on the history of Egyptian cats using Google",
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        ),
+        (
+            "Interview 2 agents about their daily routine and write a summary",
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        ),
+        (
+            "Find the best coffee in town by visiting cafe and market",
+            BountyObjective::WorkAtBuilding,
+            7,
+            vec![],
+        ),
+        (
+            "Ask every agent their favorite color and write it down",
+            BountyObjective::WorkAtBuilding,
+            12,
+            vec![],
+        ),
+        (
+            "Deliver a handwritten note to every agent in the city",
+            BountyObjective::WorkAtBuilding,
+            12,
+            vec![],
+        ),
+        (
+            "Hand out coffee coupons to all agents you can find",
+            BountyObjective::WorkAtBuilding,
+            8,
+            vec![],
+        ),
+        // --- Bounties that may require gold ---
+        (
             "Find the hidden gold egg",
             BountyObjective::FindItem(ItemType::GoldEgg),
-            10,
+            5,
             vec![],
         ),
         (
@@ -58,73 +126,6 @@ fn bounty_templates() -> Vec<(&'static str, BountyObjective, u32, Vec<(ItemType,
                 destination: "market".into(),
             },
             4,
-            vec![],
-        ),
-        (
-            "Research project at Google",
-            BountyObjective::WorkAtBuilding,
-            8,
-            vec![],
-        ),
-        (
-            "Inventory audit at the warehouse",
-            BountyObjective::WorkAtBuilding,
-            6,
-            vec![],
-        ),
-        (
-            "Deep clean the hotel",
-            BountyObjective::WorkAtBuilding,
-            5,
-            vec![],
-        ),
-        // === Social & exploration bounties ===
-        (
-            "Visit every building in the city and report back",
-            BountyObjective::WorkAtBuilding,
-            15,
-            vec![],
-        ),
-        (
-            "Ask every agent their favorite color and write it down",
-            BountyObjective::WorkAtBuilding,
-            12,
-            vec![],
-        ),
-        (
-            "Hand out coffee coupons to all agents you can find",
-            BountyObjective::WorkAtBuilding,
-            8,
-            vec![],
-        ),
-        (
-            "Write a report on the history of Egyptian cats using Google",
-            BountyObjective::WorkAtBuilding,
-            10,
-            vec![],
-        ),
-        (
-            "Interview 2 agents about their daily routine and write a summary",
-            BountyObjective::WorkAtBuilding,
-            10,
-            vec![],
-        ),
-        (
-            "Find the best coffee in town by visiting cafe and market",
-            BountyObjective::WorkAtBuilding,
-            7,
-            vec![],
-        ),
-        (
-            "Deliver a handwritten note to every agent in the city",
-            BountyObjective::WorkAtBuilding,
-            12,
-            vec![],
-        ),
-        (
-            "Exchange business cards with another agent — start a conversation and cards are exchanged automatically",
-            BountyObjective::WorkAtBuilding,
-            3,
             vec![],
         ),
     ]

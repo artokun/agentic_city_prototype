@@ -349,6 +349,15 @@ pub fn ai_context_system(
                 }
             }
         }
+        // At the bounty board (even without InsideBuilding component).
+        if matches!(goal, AgentGoal::InteractingWithBoard) {
+            if !location_tools.contains(&"claim_bounty") {
+                location_tools.push("claim_bounty");
+            }
+            if !location_tools.contains(&"redeem_paycheck") {
+                location_tools.push("redeem_paycheck");
+            }
+        }
         if shift_worker.is_some() {
             location_tools.push("leave_shift");
         }

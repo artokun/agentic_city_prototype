@@ -92,7 +92,8 @@ pub fn game_events_system(
             // Check if agent is at any building entrance.
             for (entrance, sprite) in &structures {
                 if pos.x == entrance.0.x && pos.y == entrance.0.y {
-                    messages.push(format!("You arrived at {}.", sprite.0));
+                    let location_info = building_arrival_message(&sprite.0);
+                    messages.push(location_info);
                     break;
                 }
             }
@@ -169,5 +170,87 @@ pub fn game_events_system(
                 tracing::debug!("[GameEvents:{}] sent: {}", name.0, combined);
             }
         }
+    }
+}
+
+/// Generate a descriptive arrival message for a building with available commands.
+fn building_arrival_message(building_name: &str) -> String {
+    match building_name {
+        "bounty_board" => "You arrived at the BOUNTY BOARD.\n\
+            This is where you find work and get paid.\n\
+            Available actions here:\n\
+            - claim_bounty — pick a bounty from the board to work on\n\
+            - redeem_paycheck — convert any paychecks from shifts into gold\n\
+            - complete_bounty — if you have an active bounty, return here to collect your reward\n\
+            - look_around — see nearby agents and buildings".to_string(),
+
+        "cafe" => "You arrived at the CAFE.\n\
+            A cozy spot for food, coffee, and socializing.\n\
+            Available services:\n\
+            - eat_cafe (1g, 10 ticks) — +40 hunger\n\
+            - buy_coffee (1g, 5 ticks) — +20 energy\n\
+            - hang_out (free, 15 ticks) — +25 boredom\n\
+            Available shifts: work_shift (1g per 1000 ticks, food perk)".to_string(),
+
+        "hotel" => "You arrived at the HOTEL.\n\
+            Rest and recharge here.\n\
+            Available services:\n\
+            - sleep_hotel (1g, 30 ticks) — +50 energy\n\
+            - relax_in_lobby (free, 10 ticks) — +15 boredom, +5 energy\n\
+            Available shifts: work_shift (1g per 1100 ticks)".to_string(),
+
+        "apartments" => "You arrived at the APARTMENTS.\n\
+            Your free home base — no gold required.\n\
+            Available services:\n\
+            - sleep_at_home (free, 50 ticks) — +80 energy\n\
+            - cook_at_home (free, 30 ticks) — +60 hunger".to_string(),
+
+        "warehouse" => "You arrived at the WAREHOUSE.\n\
+            Raw materials are stored here.\n\
+            Available shifts: work_shift (1g per 1200 ticks)\n\
+            Delivery bounties may require picking up items here.".to_string(),
+
+        "market" => "You arrived at the MARKET.\n\
+            Buy and sell goods.\n\
+            Available services:\n\
+            - window_shop (free, 10 ticks) — +15 boredom\n\
+            Available shifts: work_shift (1g per 1000 ticks, food perk)".to_string(),
+
+        "google" => "You arrived at GOOGLE.\n\
+            The internet is here.\n\
+            Available services:\n\
+            - search_internet (1g, 10 ticks) — research for bounties\n\
+            - browse_for_fun (free, 10 ticks) — +20 boredom".to_string(),
+
+        "library" => "You arrived at the LIBRARY.\n\
+            Quiet place to read and relax.\n\
+            Available services:\n\
+            - read_library (free, 20 ticks) — +30 boredom".to_string(),
+
+        "theater" => "You arrived at the THEATER.\n\
+            Entertainment venue.\n\
+            Available services:\n\
+            - watch_show (2g, 25 ticks) — +50 boredom".to_string(),
+
+        "gym" => "You arrived at the GYM.\n\
+            Work out to relieve boredom.\n\
+            Available services:\n\
+            - work_out (free, 20 ticks) — +25 boredom, -10 energy, -10 hunger".to_string(),
+
+        "hospital" => "You arrived at the HOSPITAL.\n\
+            You end up here if you collapse from critical needs.\n\
+            Recovery costs 5 gold (can go into debt).".to_string(),
+
+        "diner" => "You arrived at the DINER.\n\
+            Quick and cheap eats.\n\
+            Available services:\n\
+            - eat_diner (1g, 12 ticks) — +45 hunger".to_string(),
+
+        "restaurant" => "You arrived at the RESTAURANT.\n\
+            Fine dining with social benefits.\n\
+            Available services:\n\
+            - eat_restaurant (2g, 15 ticks) — +60 hunger, +10 boredom".to_string(),
+
+        other => format!("You arrived at {}.", other),
     }
 }
