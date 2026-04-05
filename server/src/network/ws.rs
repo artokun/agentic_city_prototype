@@ -24,8 +24,8 @@ pub struct AppState {
     pub agent_relays: AgentRelays,
     /// Shared JSON snapshot of world state for GM queries.
     pub world_state_json: Arc<std::sync::RwLock<String>>,
-    /// Document store: agent_name → Vec<(title, content)>.
-    pub documents: Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<(String, String)>>>>,
+    /// Document directory on disk.
+    pub documents_dir: String,
 }
 
 pub async fn start_server(state: AppState) {
@@ -41,6 +41,7 @@ pub async fn start_server(state: AppState) {
         .route("/api/gm/verdict", post(gm_verdict))
         .route("/api/gm/document", post(gm_document))
         .route("/api/documents", get(list_documents))
+        .route("/api/documents/{agent}/{filename}", get(get_document))
         .route("/agent/{id}/ws", get({
             let relays = state.agent_relays.clone();
             move |ws, path| agent_relay::agent_ws_handler(ws, path, axum::extract::State(relays))
@@ -504,10 +505,12 @@ async fn gm_document(
 ) -> impl IntoResponse {
     tracing::info!("[GM DOC] {} produced '{}' ({} chars)", req.agent_name, req.title, req.content.len());
 
-    // Store in shared document store for HTTP viewing.
-    if let Ok(mut docs) = state.documents.write() {
-        docs.entry(req.agent_name.clone()).or_default().push((req.title.clone(), req.content.clone()));
-    }
+    // Write to disk: documents_dir/agent_name/title
+    let agent_dir = format!("{}/{}", state.documents_dir, req.agent_name.to_lowercase());
+    let _ = std::fs::create_dir_all(&agent_dir);
+    let file_path = format!("{}/{}", agent_dir, req.title);
+    let _ = std::fs::write(&file_path, &req.content);
+    tracing::info!("[GM DOC] Saved to {}", file_path);
 
     let cmd = GameCommand::DeliverDocument {
         agent_name: req.agent_name.clone(),
@@ -516,19 +519,52 @@ async fn gm_document(
     };
     let _ = state.command_tx.send(cmd).await;
 
-    Json(serde_json::json!({ "result": "Document delivered", "title": req.title }))
+    Json(serde_json::json!({ "result": "Document saved", "path": file_path }))
 }
 
 async fn list_documents(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let docs = state.documents.read().unwrap_or_else(|e| e.into_inner());
-    let result: serde_json::Value = docs.iter().map(|(agent, doc_list)| {
-        (agent.clone(), serde_json::json!(doc_list.iter().map(|(title, content)| {
-            serde_json::json!({ "title": title, "content": content })
-        }).collect::<Vec<_>>()))
-    }).collect::<serde_json::Map<String, serde_json::Value>>().into();
-    Json(result)
+    // Walk the documents directory and list files as URLs.
+    let mut result: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    if let Ok(entries) = std::fs::read_dir(&state.documents_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let agent = entry.file_name().to_string_lossy().to_string();
+                let mut docs = Vec::new();
+                if let Ok(files) = std::fs::read_dir(entry.path()) {
+                    for file in files.flatten() {
+                        let fname = file.file_name().to_string_lossy().to_string();
+                        docs.push(serde_json::json!({
+                            "title": fname,
+                            "url": format!("/api/documents/{}/{}", agent, fname),
+                        }));
+                    }
+                }
+                result.insert(agent, serde_json::json!(docs));
+            }
+        }
+    }
+    Json(serde_json::Value::Object(result))
+}
+
+async fn get_document(
+    State(state): State<AppState>,
+    axum::extract::Path((agent, filename)): axum::extract::Path<(String, String)>,
+) -> impl IntoResponse {
+    let path = format!("{}/{}/{}", state.documents_dir, agent, filename);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => (
+            StatusCode::OK,
+            [("content-type", "text/markdown; charset=utf-8")],
+            content,
+        ),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            [("content-type", "text/plain; charset=utf-8")],
+            "Document not found".to_string(),
+        ),
+    }
 }
 
 async fn gm_verdict(

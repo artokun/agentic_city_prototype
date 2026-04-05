@@ -64,13 +64,17 @@ fn spawn_axum(
     relays: Res<RelaysHolder>,
     world_json: Res<WorldJsonArc>,
 ) {
+    let documents_dir = std::env::var("DOCUMENTS_DIR")
+        .unwrap_or_else(|_| "./documents".into());
+    let _ = std::fs::create_dir_all(&documents_dir);
+
     let state = AppState {
         broadcast_tx: broadcast_tx.sender.clone(),
         command_tx: cmd_sender.0.clone(),
         stripe_secret: std::env::var("STRIPE_SECRET_KEY").ok(),
         agent_relays: relays.0.clone(),
         world_state_json: world_json.0.clone(),
-        documents: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        documents_dir,
     };
 
     runtime.spawn_background_task(|_ctx| async move {
