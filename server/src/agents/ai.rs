@@ -298,6 +298,10 @@ pub fn ai_context_system(
         carry_slots, business_cards,
     ) in &agents {
         if action_timer.is_some() { continue; }
+
+        // Don't prompt incapacitated agents — they're passed out.
+        // (Checked via goal since Incapacitated isn't in this query.)
+        if matches!(goal, AgentGoal::Idle) && needs.energy <= 0.0 { continue; }
         let has_path = path.is_some_and(|p| !p.0.is_empty());
         if has_path { continue; }
 

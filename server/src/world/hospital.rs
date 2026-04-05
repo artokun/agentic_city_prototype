@@ -11,17 +11,13 @@ use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::token_tracking::ContextWindow;
 use crate::agents::needs::Needs;
+use crate::config;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
 use crate::world::map::GridPos;
 
-/// Hospital treatment cost.
-pub const HOSPITAL_FEE: u32 = 5;
-/// Reward for the agent who carries someone to the hospital.
-pub const RESCUE_REWARD: u32 = 5;
-/// Ticks to recover in the hospital.
-pub const RECOVERY_TICKS: u32 = 300; // ~30 seconds
+// Hospital constants now in config.rs.
 
 /// Marks an agent as incapacitated — can't think, move, or act.
 #[derive(Component)]
@@ -63,7 +59,7 @@ pub fn pass_out_system(
         tracing::info!("{} PASSED OUT from {} at ({},{})", name.0, reason, pos.x, pos.y);
 
         // Deduct hospital fee (can go into debt).
-        inv.deduct_gold_with_debt(HOSPITAL_FEE);
+        inv.deduct_gold_with_debt(config::hospital_fee());
 
         // Post rescue bounty.
         let bounty_id = Uuid::new_v4();
@@ -71,16 +67,19 @@ pub fn pass_out_system(
             bounty_id,
             format!("RESCUE: Carry {} to the hospital (passed out at ({},{}))", name.0, pos.x, pos.y),
             BountyObjective::WorkAtBuilding, // rescuer goes to hospital with the agent
-            RESCUE_REWARD,
+            config::rescue_reward(),
             vec![],
         );
         bounty_registry.bounties.push(bounty);
 
-        // Freeze the agent.
+        // Freeze the agent and start recovery immediately.
         commands.entity(entity).insert(Incapacitated {
             reason: reason.into(),
             passed_out_tick: tick.0,
             rescue_bounty_id: Some(bounty_id),
+        });
+        commands.entity(entity).insert(Recovering {
+            ticks_remaining: config::recovery_ticks(),
         });
 
         // Clamp needs to 0.
@@ -95,7 +94,7 @@ pub fn pass_out_system(
             tick: tick.0,
             agent: name.0.clone(),
             kind: LogKind::System,
-            text: format!("PASSED OUT from {}! Hospital fee: {}g. Rescue bounty posted.", reason, HOSPITAL_FEE),
+            text: format!("PASSED OUT from {}! Hospital fee: {}g. Rescue bounty posted.", reason, config::hospital_fee()),
         });
     }
 }
