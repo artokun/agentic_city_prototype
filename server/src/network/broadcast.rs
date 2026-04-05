@@ -5,10 +5,11 @@ use tokio::sync::broadcast;
 
 use crate::agents::actions::ActionTimer;
 use crate::agents::components::*;
+use crate::agents::conversation::{ActiveConversation, ConversationLog};
 use crate::agents::needs::Needs;
 use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
-use crate::agents::social::{ChattingWith, Relationships};
+use crate::agents::social::Relationships;
 use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::*;
@@ -35,7 +36,7 @@ pub fn broadcast_state(
     agents: Query<(
         &AgentId, &AgentName, &GridPos, &AgentAnimation, &ThoughtBubble,
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
-        Option<&ActionTimer>, Option<&ChattingWith>,
+        Option<&ActionTimer>, Option<&ActiveConversation>, Option<&ConversationLog>,
     )>,
     structures: Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),

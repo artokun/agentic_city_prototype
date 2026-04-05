@@ -4,10 +4,11 @@ use flatbuffers::FlatBufferBuilder;
 
 use crate::agents::actions::ActionTimer;
 use crate::agents::components::*;
+use crate::agents::conversation::{ActiveConversation, ConversationLog};
 use crate::agents::needs::Needs;
 use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
-use crate::agents::social::{ChattingWith, Relationships};
+use crate::agents::social::Relationships;
 use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::*;
@@ -21,7 +22,7 @@ pub fn serialize_world(
     agents: &Query<(
         &AgentId, &AgentName, &GridPos, &AgentAnimation, &ThoughtBubble,
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
-        Option<&ActionTimer>, Option<&ChattingWith>,
+        Option<&ActionTimer>, Option<&ActiveConversation>, Option<&ConversationLog>,
     )>,
     structures: &Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
@@ -36,7 +37,7 @@ pub fn serialize_world(
 
     let agent_offsets: Vec<_> = agents
         .iter()
-        .map(|(id, name, pos, anim, thought, inv, goal, needs, rels, vision, tracking, known_locs, action, chatting)| {
+        .map(|(id, name, pos, anim, thought, inv, goal, needs, rels, vision, tracking, known_locs, action, active_convo, convo_log)| {
             let id_str = fbb.create_string(&id.0.to_string());
             let name_str = fbb.create_string(&name.0);
             let thought_str = fbb.create_string(&thought.0);
@@ -60,9 +61,9 @@ pub fn serialize_world(
             }).collect();
             let rels_vec = fbb.create_vector(&rel_offsets);
 
-            // Active chat messages.
-            let chat_offsets: Vec<_> = chatting.map(|c| {
-                c.messages.iter().map(|m| {
+            // Active chat messages from ConversationLog.
+            let chat_offsets: Vec<_> = convo_log.map(|log| {
+                log.messages.iter().map(|m| {
                     let speaker = fbb.create_string(&m.speaker);
                     let text = fbb.create_string(&m.text);
                     fb::ChatMessageSnapshot::create(&mut fbb, &fb::ChatMessageSnapshotArgs {

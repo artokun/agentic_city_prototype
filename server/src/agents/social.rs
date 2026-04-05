@@ -3,7 +3,8 @@ use std::collections::HashMap;
 
 use super::actions::ActionTimer;
 use super::components::*;
-use super::event_log::{AgentEventLog, LogEvent, LogKind};
+use super::conversation::ActiveConversation;
+use super::event_log::AgentEventLog;
 use super::needs::Needs;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
@@ -133,9 +134,9 @@ pub fn social_matchmaking_system(
 }
 
 
-/// System: when chat finishes, store conversation in both agents' memories.
+/// System: update relationships from active conversations.
+/// Runs every tick — updates relationship data while agents are chatting.
 pub fn social_memory_system(
-    mut commands: Commands,
     tick: Res<TickCount>,
     mut agents: Query<(
         Entity,
@@ -144,35 +145,25 @@ pub fn social_memory_system(
         &AgentGoal,
         &Inventory,
         &mut Relationships,
-        Option<&ChattingWith>,
-        Option<&ActionTimer>,
+        Option<&ActiveConversation>,
     )>,
 ) {
-    // Find agents whose chat just ended (have ChattingWith but no ActionTimer).
-    let finished: Vec<_> = agents
+    // Collect conversation pairs to update.
+    let pairs: Vec<_> = agents
         .iter()
-        .filter(|(_, _, _, _, _, _, chatting, timer)| chatting.is_some() && timer.is_none())
-        .map(|(e, name, pos, goal, inv, _, chatting, _)| {
-            let chat = chatting.unwrap();
-            (
-                e,
-                name.0.clone(),
-                *pos,
-                format!("{:?}", goal),
-                inv.count(ItemType::GoldCoin),
-                chat.partner,
-                chat.messages.clone(),
-            )
+        .filter_map(|(e, name, pos, goal, inv, _, convo)| {
+            convo.map(|c| (e, name.0.clone(), *pos, format!("{:?}", goal),
+                inv.count(ItemType::GoldCoin), c.partner, c.partner_name.clone()))
         })
         .collect();
 
-    for (entity, self_name, _pos, _goal, _gold, partner, messages) in &finished {
-        let partner_info = agents.get(*partner).ok().map(|(_, name, pos, goal, inv, _, _, _)| {
-            (name.0.clone(), *pos, format!("{:?}", goal), inv.count(ItemType::GoldCoin))
+    for (entity, _self_name, _pos, _goal, _gold, partner, partner_name) in &pairs {
+        let partner_info = agents.get(*partner).ok().map(|(_, _, pos, goal, inv, _, _)| {
+            (*pos, format!("{:?}", goal), inv.count(ItemType::GoldCoin))
         });
 
-        if let Some((partner_name, partner_pos, partner_goal, partner_gold)) = partner_info {
-            if let Ok((_, _, _, _, _, mut rels, _, _)) = agents.get_mut(*entity) {
+        if let Some((partner_pos, partner_goal, partner_gold)) = partner_info {
+            if let Ok((_, self_name, _, _, _, mut rels, _)) = agents.get_mut(*entity) {
                 let memory = rels.known.entry(*partner).or_insert_with(|| AgentMemory {
                     name: partner_name.clone(),
                     friendship: 0,
@@ -184,28 +175,17 @@ pub fn social_memory_system(
                     conversation_log: Vec::new(),
                 });
 
-                memory.friendship += 1;
+                // Only bump friendship once per conversation (check tick gap).
+                if tick.0.saturating_sub(memory.last_seen_tick) > 10 {
+                    memory.friendship += 1;
+                    tracing::info!("{} relationship with {} → friendship {}",
+                        self_name.0, partner_name, memory.friendship);
+                }
                 memory.last_seen_tick = tick.0;
                 memory.last_seen_pos = partner_pos;
                 memory.last_known_goal = partner_goal;
                 memory.last_known_gold = partner_gold;
-
-                // Append conversation to log.
-                memory.conversation_log.extend(messages.iter().cloned());
-
-                // Keep log manageable (last 20 messages per relationship).
-                if memory.conversation_log.len() > 20 {
-                    let drain = memory.conversation_log.len() - 20;
-                    memory.conversation_log.drain(..drain);
-                }
-
-                tracing::info!(
-                    "{} updated memory of {} (friendship: {}, {} total messages)",
-                    self_name, partner_name, memory.friendship, memory.conversation_log.len(),
-                );
             }
         }
-
-        commands.entity(*entity).remove::<ChattingWith>();
     }
 }
