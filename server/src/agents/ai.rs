@@ -93,7 +93,7 @@ pub fn spawn_sessions_system(
                 "mcpServers": {
                     "game-engine": {
                         "command": mcp_binary,
-                        "args": [],
+                        "args": [agent_name.clone(), agent_uuid.clone()],
                         "env": {
                             "AGENT_NAME": agent_name.clone(),
                             "AGENT_ID": agent_uuid.clone(),

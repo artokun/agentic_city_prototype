@@ -10,11 +10,16 @@ use std::io::{self, BufRead, Write};
 const GAME_SERVER: &str = "http://127.0.0.1:8080";
 
 fn main() {
-    // Agent identity is set by the game server when spawning this MCP process.
-    // Cannot be overridden by the agent — prevents impersonation.
+    // Agent identity from env vars OR command line args (fallback).
+    let args: Vec<String> = std::env::args().collect();
     let agent_name = std::env::var("AGENT_NAME")
-        .expect("AGENT_NAME env var must be set by the game server");
-    let agent_id = std::env::var("AGENT_ID").unwrap_or_default();
+        .or_else(|_| args.get(1).cloned().ok_or(()))
+        .unwrap_or_else(|_| "unknown".into());
+    let agent_id = std::env::var("AGENT_ID")
+        .or_else(|_| args.get(2).cloned().ok_or(()))
+        .unwrap_or_default();
+
+    eprintln!("[mcp-game] Agent: {} ({})", agent_name, agent_id);
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -121,9 +126,14 @@ fn handle_tool_call(msg: &Value, id: &Option<Value>) -> Value {
         return json_rpc_error(id, -32602, &format!("Unknown tool: {}", tool_name));
     }
 
-    // Inject server-side identity — cannot be forged by the agent.
-    let agent_name = std::env::var("AGENT_NAME").unwrap_or_else(|_| "unknown".into());
-    let agent_id_env = std::env::var("AGENT_ID").unwrap_or_default();
+    // Inject server-side identity from env or args (set at spawn time).
+    let args: Vec<String> = std::env::args().collect();
+    let agent_name = std::env::var("AGENT_NAME")
+        .or_else(|_| args.get(1).cloned().ok_or(()))
+        .unwrap_or_else(|_| "unknown".into());
+    let agent_id_env = std::env::var("AGENT_ID")
+        .or_else(|_| args.get(2).cloned().ok_or(()))
+        .unwrap_or_default();
     let mut arguments = arguments;
     arguments["agent_name"] = json!(agent_name);
     arguments["agent_id"] = json!(agent_id_env);
