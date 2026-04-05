@@ -347,7 +347,19 @@ pub fn apply_mcp_actions_system(
             }
 
             "complete_bounty" => {
-                if let AgentGoal::ExecutingBounty(bounty_id) = *goal {
+                // Check goal state OR bounty registry for active bounty.
+                let bounty_id = match *goal {
+                    AgentGoal::ExecutingBounty(id) => Some(id),
+                    AgentGoal::ReturningToBoard(id) => Some(id), // already returning
+                    _ => {
+                        // Fallback: check registry for a claimed bounty by this agent.
+                        bounty_registry.bounties.iter()
+                            .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
+                            .map(|b| b.id)
+                    }
+                };
+
+                if let Some(bounty_id) = bounty_id {
                     *goal = AgentGoal::ReturningToBoard(bounty_id);
                     if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
                         if let Some(p) = pathfinding::bfs(&map, *pos, board.entrance) {

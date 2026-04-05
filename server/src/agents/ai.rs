@@ -305,27 +305,26 @@ pub fn ai_context_system(
         if matches!(goal, AgentGoal::PerformingAction) { continue; }
 
         // Show bounties if at the board (either via InsideBuilding or InteractingWithBoard goal).
-        let at_board = matches!(goal, AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard)
-            || inside_building.map_or(false, |ib| {
-                structures.get(ib.0).map_or(false, |(_, _, s)| s.0 == "bounty_board")
-            });
-        let available_bounties: Vec<String> = if at_board {
-            bounty_registry.available().iter()
-                .map(|b| format!("{} ({}g) — {}", b.description, b.reward_gold,
-                    match &b.objective {
-                        crate::world::bounty::BountyObjective::HideItem(item) =>
-                            format!("You'll receive a {} to hide in any structure.", item),
-                        crate::world::bounty::BountyObjective::FindItem(item) =>
-                            format!("Search structures to find a hidden {}.", item),
-                        crate::world::bounty::BountyObjective::RestockDelivery { item, quantity, destination } =>
-                            format!("Buy {} {} from warehouse and deliver to {}.", quantity, item, destination),
-                        crate::world::bounty::BountyObjective::WorkAtBuilding =>
-                            "Go to the specified building and complete the task.".into(),
-                    }
-                )).collect()
-        } else {
-            vec![]
-        };
+        // Agents can always see bounty status (available/taken), but can only claim at the board.
+        let available_bounties: Vec<String> = bounty_registry.bounties.iter()
+            .filter(|b| b.state == crate::world::bounty::BountyState::Available
+                     || b.state == crate::world::bounty::BountyState::Claimed)
+            .map(|b| {
+                let status = if b.state == crate::world::bounty::BountyState::Claimed {
+                    if b.claimed_by == Some(entity) { "(YOUR ACTIVE BOUNTY)" } else { "(taken)" }
+                } else { "(available)" };
+                let desc = match &b.objective {
+                    crate::world::bounty::BountyObjective::HideItem(item) =>
+                        format!("You'll receive a {} to hide in any structure.", item),
+                    crate::world::bounty::BountyObjective::FindItem(item) =>
+                        format!("Search structures to find a hidden {}.", item),
+                    crate::world::bounty::BountyObjective::RestockDelivery { item, quantity, destination } =>
+                        format!("Buy {} {} from warehouse and deliver to {}.", quantity, item, destination),
+                    crate::world::bounty::BountyObjective::WorkAtBuilding =>
+                        "Go to the specified building and complete the task.".into(),
+                };
+                format!("{} ({}g) {} — {}", b.description, b.reward_gold, status, desc)
+            }).collect();
 
         let nearby: Vec<(String, GridPos)> = all_agents.iter()
             .filter(|(n, _)| n.0 != name.0)

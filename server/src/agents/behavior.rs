@@ -280,8 +280,11 @@ pub fn execution_system(
             }
 
             AgentGoal::ReturningToBoard(bounty_id) => {
+                tracing::debug!("[RETURN] {} goal=ReturningToBoard pos=({},{}) board=({},{}) has_path={} at_board={}",
+                    name.0, pos.x, pos.y, board_entrance.x, board_entrance.y, has_path, at_pos(pos, &board_entrance));
                 if !has_path && at_pos(pos, &board_entrance) {
                     // No queue — pay out immediately.
+                    tracing::info!("[PAYOUT] {} returning bounty {}", name.0, bounty_id);
                     action_log.log(tick.0, ActionEvent::BountyReturned { bounty_id });
                     if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
                         if bounty.expired {
