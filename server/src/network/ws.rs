@@ -387,7 +387,7 @@ async fn handle_game_action(
             result_text = "Scanning your surroundings. Results will appear in your next status update — you'll see nearby agents and buildings with their locations.".into();
         }
         "complete_bounty" => {
-            result_text = "Marking bounty as complete and heading to the bounty board to collect your gold reward.".into();
+            result_text = "Bounty marked complete! You are now automatically walking back to the bounty board to collect your gold reward. Do NOT call go_to_board — you are already heading there. Wait for the arrival message.".into();
         }
         "leave_shift" => {
             result_text = "Leaving your shift. Your paycheck is based on ticks worked. Go to the bounty board and use redeem_paycheck to convert it to gold.".into();

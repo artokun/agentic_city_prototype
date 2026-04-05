@@ -142,12 +142,19 @@ pub fn apply_mcp_actions_system(
 
         match action_str.as_str() {
             "go_to_board" => {
-                *goal = AgentGoal::GoingToBoard;
+                // Preserve ReturningToBoard — agent is heading back to collect reward.
+                if !matches!(*goal, AgentGoal::ReturningToBoard(_)) {
+                    *goal = AgentGoal::GoingToBoard;
+                }
                 if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
                     if let Some(p) = pathfinding::bfs(&map, *pos, board.entrance) {
                         let tiles = p.len();
                         commands.entity(entity).insert(Path(p));
-                        thought.0 = format!("Heading to the bounty board ({} tiles).", tiles);
+                        if matches!(*goal, AgentGoal::ReturningToBoard(_)) {
+                            thought.0 = format!("Returning to board to collect bounty reward ({} tiles).", tiles);
+                        } else {
+                            thought.0 = format!("Heading to the bounty board ({} tiles).", tiles);
+                        }
                     } else {
                         thought.0 = "ERROR: Can't find path to the bounty board!".into();
                     }
