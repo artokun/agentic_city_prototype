@@ -108,6 +108,44 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
 
                             let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("?");
 
+                            // Log ALL message types and their content structure for debugging.
+                            if msg_type != "system" {
+                                let keys: Vec<&str> = val.as_object()
+                                    .map(|o| o.keys().map(|k| k.as_str()).collect())
+                                    .unwrap_or_default();
+                                tracing::info!("[relay:{}] ← {} (keys: {:?})", agent_id, msg_type, keys);
+
+                                // For assistant messages, log content block types.
+                                if msg_type == "assistant" {
+                                    if let Some(msg) = val.get("message") {
+                                        if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+                                            for block in content {
+                                                let btype = block.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                                                if btype == "text" {
+                                                    let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                                                    let preview: String = text.chars().take(100).collect();
+                                                    tracing::info!("[relay:{}] THOUGHT: {}", agent_id, preview);
+                                                } else if btype == "tool_use" {
+                                                    let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                                                    tracing::info!("[relay:{}] TOOL_USE: {}", agent_id, tool);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Also check top-level content (some formats differ).
+                                    if let Some(content) = val.get("content").and_then(|c| c.as_array()) {
+                                        for block in content {
+                                            let btype = block.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                                            if btype == "text" {
+                                                let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                                                let preview: String = text.chars().take(100).collect();
+                                                tracing::info!("[relay:{}] THOUGHT(top): {}", agent_id, preview);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             match msg_type {
                                 // Auto-approve control requests.
                                 "control_request" => {
@@ -142,13 +180,15 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
                                         let _ = response_tx.send(text).await;
                                     }
                                 }
-                                // Capture assistant thinking as dialogue (NOT as action responses).
+                                // Capture assistant thinking as dialogue.
                                 "assistant" => {
                                     if let Some(text) = claude::extract_result_text(&val) {
                                         if !text.is_empty() {
-                                            // Send as a special "thought:" prefixed message.
-                                            // The game server logs this but doesn't treat it as an action.
-                                            let _ = response_tx.send(format!("thought:{}", text)).await;
+                                            let msg = format!("thought:{}", text);
+                                            match response_tx.send(msg.clone()).await {
+                                                Ok(()) => tracing::debug!("[relay:{}] forwarded thought ({}c)", agent_id, text.len()),
+                                                Err(e) => tracing::warn!("[relay:{}] thought send failed: {}", agent_id, e),
+                                            }
                                         }
                                     }
                                 }

@@ -135,6 +135,46 @@ pub fn spawn_sessions_system(
 
             tracing::info!("Claude spawned for {} → {} (model: {})", agent_name, sdk_url, model_name);
 
+            // Capture stdout NDJSON — may contain assistant messages with thinking.
+            let name_out = agent_name.clone();
+            let ptx_stdout = handle.prompt_tx.clone();
+            if let Some(stdout) = child.stdout.take() {
+                let response_tx_clone = {
+                    // We need a way to send thoughts to the game.
+                    // The relay's response_tx is used for this.
+                    // But we don't have it here. Use the relay handle's channel isn't possible
+                    // since it's moved. Let's just log for now.
+                    tokio::spawn(async move {
+                        let reader = BufReader::new(stdout);
+                        let mut lines = reader.lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            if line.trim().is_empty() { continue; }
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                                let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                                if msg_type == "assistant" {
+                                    // Extract thinking text from assistant content blocks.
+                                    let content = val.get("message")
+                                        .and_then(|m| m.get("content"))
+                                        .or_else(|| val.get("content"));
+                                    if let Some(arr) = content.and_then(|c| c.as_array()) {
+                                        for block in arr {
+                                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                                    if !text.is_empty() {
+                                                        let preview: String = text.chars().take(200).collect();
+                                                        tracing::info!("[stdout:{}] THOUGHT: {}", name_out, preview);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    })
+                };
+            }
+
             let name_err = agent_name.clone();
             if let Some(stderr) = child.stderr.take() {
                 tokio::spawn(async move {
@@ -198,7 +238,14 @@ pub fn ai_thought_drain_system(
         loop {
             let msg = {
                 let mut rx = session.response_rx.lock().unwrap();
-                rx.try_recv().ok()
+                match rx.try_recv() {
+                    Ok(text) => {
+                        let preview: String = text.chars().take(60).collect();
+                        tracing::info!("[drain:{}] received: {}...", name.0, preview);
+                        Some(text)
+                    }
+                    Err(_) => None,
+                }
             };
             let Some(text) = msg else { break };
 
