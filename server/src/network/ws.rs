@@ -326,6 +326,8 @@ async fn verify_stripe_payment(
 
 #[derive(Deserialize)]
 struct GameActionRequest {
+    agent_name: Option<String>,
+    agent_id: Option<String>,
     action: String,
     building: Option<String>,
     service: Option<String>,
@@ -392,7 +394,9 @@ async fn handle_game_action(
     }
 
     // Forward as a game command.
-    let cmd_json = serde_json::json!({
+        let cmd_json = serde_json::json!({
+        "agent_name": req.agent_name,
+        "agent_id": req.agent_id,
         "action": req.action,
         "building": req.building,
         "service": req.service,

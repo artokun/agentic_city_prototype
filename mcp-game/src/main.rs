@@ -135,8 +135,12 @@ fn handle_tool_call(msg: &Value, id: &Option<Value>) -> Value {
         .or_else(|_| args.get(2).cloned().ok_or(()))
         .unwrap_or_default();
     let mut arguments = arguments;
-    arguments["agent_name"] = json!(agent_name);
-    arguments["agent_id"] = json!(agent_id_env);
+    arguments["agent_name"] = json!(agent_name.clone());
+    arguments["agent_id"] = json!(agent_id_env.clone());
+
+    eprintln!("[mcp-game] tool_call: agent={} action={} args={}",
+        agent_name, arguments.get("action").and_then(|a| a.as_str()).unwrap_or("?"),
+        serde_json::to_string(&arguments).unwrap_or_default());
 
     let action = arguments.get("action").and_then(|a| a.as_str()).unwrap_or("unknown");
 
