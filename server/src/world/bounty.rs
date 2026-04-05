@@ -639,6 +639,78 @@ mod tests {
         assert_eq!(q.advance(), None);
     }
 
+    #[test]
+    fn board_queue_leave_clears_interacting() {
+        // Regression: agent left board without calling leave(), blocking queue.
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        let b = entity(2);
+        q.try_interact(a);
+        q.join_queue(b);
+        // Agent A walks away — leave should clear them.
+        q.leave(a);
+        assert_eq!(q.interacting, None);
+        // Now B can advance.
+        let next = q.advance();
+        assert_eq!(next, Some(b));
+    }
+
+    #[test]
+    fn board_queue_leave_removes_from_waiting() {
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        let b = entity(2);
+        q.try_interact(a);
+        q.join_queue(b);
+        q.leave(b);
+        assert!(!q.waiting.contains(&b));
+    }
+
+    #[test]
+    fn bounty_claim_sets_state_and_agent() {
+        let mut reg = BountyRegistry::default();
+        let id = Uuid::new_v4();
+        reg.bounties.push(Bounty::simple(
+            id, "test".into(), BountyObjective::WorkAtBuilding, 5, vec![],
+        ));
+        let agent = entity(1);
+        let bounty = reg.claim(id, agent, 100);
+        assert!(bounty.is_some());
+        let b = reg.get(id).unwrap();
+        assert_eq!(b.state, BountyState::Claimed);
+        assert_eq!(b.claimed_by, Some(agent));
+    }
+
+    #[test]
+    fn bounty_double_claim_fails() {
+        let mut reg = BountyRegistry::default();
+        let id = Uuid::new_v4();
+        reg.bounties.push(Bounty::simple(
+            id, "test".into(), BountyObjective::WorkAtBuilding, 5, vec![],
+        ));
+        let a = entity(1);
+        let b = entity(2);
+        assert!(reg.claim(id, a, 100).is_some());
+        assert!(reg.claim(id, b, 100).is_none());
+    }
+
+    #[test]
+    fn bounty_available_excludes_claimed() {
+        let mut reg = BountyRegistry::default();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        reg.bounties.push(Bounty::simple(
+            id1, "claimed".into(), BountyObjective::WorkAtBuilding, 5, vec![],
+        ));
+        reg.bounties.push(Bounty::simple(
+            id2, "available".into(), BountyObjective::WorkAtBuilding, 5, vec![],
+        ));
+        reg.claim(id1, entity(1), 100);
+        let avail = reg.available();
+        assert_eq!(avail.len(), 1);
+        assert_eq!(avail[0].id, id2);
+    }
+
     // ---- Step verification: SpendGold ----
 
     #[test]

@@ -490,4 +490,47 @@ mod tests {
         assert_eq!(ItemType::Sandwich.raw_ingredient(), Some(ItemType::RawMeat));
         assert_eq!(ItemType::Soup.raw_ingredient(), None);
     }
+
+    // --- Deposit/transfer scenarios (regression: deposit_item bug) ---
+
+    #[test]
+    fn transfer_item_between_inventories() {
+        let mut agent = Inventory::default();
+        let mut building = Inventory::default();
+
+        agent.add(ItemType::GoldEgg, 1);
+        assert!(agent.has(ItemType::GoldEgg, 1));
+
+        // Transfer: remove from agent, add to building.
+        agent.remove(ItemType::GoldEgg, 1);
+        building.add(ItemType::GoldEgg, 1);
+
+        assert!(!agent.has(ItemType::GoldEgg, 1));
+        assert!(building.has(ItemType::GoldEgg, 1));
+    }
+
+    #[test]
+    fn transfer_item_agent_doesnt_have_fails() {
+        let agent = Inventory::default();
+        assert!(!agent.has(ItemType::GoldEgg, 1));
+    }
+
+    #[test]
+    fn claim_items_delivered_to_inventory() {
+        // Regression: claim_items were computed but never added to inventory.
+        let mut inv = Inventory::default();
+        let claim_items = vec![(ItemType::GoldEgg, 1)];
+        for (item, count) in claim_items {
+            inv.add(item, count);
+        }
+        assert!(inv.has(ItemType::GoldEgg, 1));
+        assert_eq!(inv.count(ItemType::GoldEgg), 1);
+    }
+
+    #[test]
+    fn starting_inventory_has_zero_gold() {
+        // Regression: agents used to start with 3 gold, now 0.
+        let inv = Inventory::default();
+        assert_eq!(inv.count(ItemType::GoldCoin), 0);
+    }
 }
