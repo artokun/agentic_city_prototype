@@ -84,9 +84,10 @@ pub fn spawn_sessions_system(
             }
 
             // Per-agent MCP config with identity baked in.
-            let mcp_binary = std::env::current_dir()
-                .map(|d| d.join("target/debug/mcp-game").to_string_lossy().to_string())
-                .unwrap_or_else(|_| "target/debug/mcp-game".into());
+            // Use absolute path based on the binary's own location, not cwd.
+            let mcp_binary = std::env::current_exe()
+                .map(|exe| exe.parent().unwrap().join("mcp-game").to_string_lossy().to_string())
+                .unwrap_or_else(|_| "/Users/art/code/stripe-prototype/target/debug/mcp-game".into());
             let mcp_config_path = format!("/tmp/mcp-{}.json", agent_uuid);
             let mcp_config_content = serde_json::json!({
                 "mcpServers": {
