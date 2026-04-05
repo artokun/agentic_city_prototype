@@ -359,6 +359,8 @@ async fn handle_game_action(
         "start_conversation", "say", "end_conversation",
         "offer_trade", "accept_trade", "reject_trade",
         "deposit_item",
+        "take_item",
+        "create_document",
     ];
 
     if !valid_actions.contains(&req.action.as_str()) {
@@ -437,8 +439,15 @@ async fn handle_game_action(
         }
         "deposit_item" => {
             let item = req.service.as_deref().unwrap_or("unknown");
-            let building = req.building.as_deref().unwrap_or("current building");
-            result_text = format!("Depositing {} into {}'s inventory. You must be inside the building.", item, building);
+            result_text = format!("Transferring {} from your inventory into the building.", item);
+        }
+        "take_item" => {
+            let item = req.service.as_deref().unwrap_or("unknown");
+            result_text = format!("Taking {} from the building's inventory into yours.", item);
+        }
+        "create_document" => {
+            let title = req.service.as_deref().unwrap_or("untitled.md");
+            result_text = format!("Creating document '{}'. Content from 'text' field will be saved.", title);
         }
         "help" => {
             result_text = "Thank you for your feedback! Your suggestion has been logged and will be reviewed. \

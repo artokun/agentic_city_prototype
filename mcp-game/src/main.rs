@@ -101,7 +101,9 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "offer_trade",
                                     "accept_trade",
                                     "reject_trade",
-                                    "deposit_item"
+                                    "deposit_item",
+                                    "take_item",
+                                    "create_document"
                                 ]
                             },
                             "building": {
@@ -110,7 +112,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "service": {
                                 "type": "string",
-                                "description": "Service to use at a building (eat_cafe, buy_coffee, sleep_hotel, etc). For deposit_item: the item name from your inventory to transfer into the building (e.g. 'gold_egg', 'document'). For offer_trade: comma-separated requested items."
+                                "description": "Service to use at a building (eat_cafe, buy_coffee, sleep_hotel, etc). For deposit_item/take_item: the item name to transfer (e.g. 'gold_egg', 'coffee_beans'). For create_document: the document title (e.g. 'research_report.md'). For offer_trade: comma-separated requested items."
                             },
                             "agent": {
                                 "type": "string",
@@ -118,7 +120,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "text": {
                                 "type": "string",
-                                "description": "Message text (for send_message, say). For claim_bounty: bounty ID (6-char hex from the bounty list). For offer_trade: comma-separated offered items."
+                                "description": "Message text (for send_message, say). For claim_bounty: bounty ID (6-char hex from the bounty list). For create_document: the markdown content of the document. For offer_trade: comma-separated offered items."
                             },
                             "feedback": {
                                 "type": "string",

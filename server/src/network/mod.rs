@@ -41,6 +41,8 @@ impl Plugin for NetworkPlugin {
             .add_systems(Update, action_handler::apply_conversation_messages_system.after(action_handler::apply_mcp_actions_system))
             .add_systems(Update, action_handler::auto_exchange_cards_system.after(action_handler::apply_mcp_actions_system))
             .add_systems(Update, action_handler::process_deposits_system.after(action_handler::apply_mcp_actions_system))
+            .add_systems(Update, action_handler::process_take_items_system.after(action_handler::apply_mcp_actions_system))
+            .add_systems(Update, action_handler::process_create_documents_system.after(action_handler::apply_mcp_actions_system))
             .add_systems(Update, action_handler::give_claim_items_system.after(action_handler::apply_mcp_actions_system))
             .add_systems(Update, action_handler::process_gm_verdicts_system.after(commands::process_commands_system))
             .add_systems(Update, action_handler::deliver_documents_system.after(commands::process_commands_system))

@@ -65,6 +65,20 @@ pub struct PendingDeposit {
     pub building_entity: Entity,
 }
 
+/// Marker component: queued item pickup from a structure into agent.
+#[derive(Component)]
+pub struct PendingTakeItem {
+    pub item_name: String,
+    pub building_entity: Entity,
+}
+
+/// Marker component: agent wants to create a document.
+#[derive(Component)]
+pub struct PendingCreateDocument {
+    pub title: String,
+    pub content: String,
+}
+
 /// Marker component: queued conversation message to apply to both agents' logs.
 #[derive(Component)]
 pub struct PendingConversationMessage {
@@ -240,22 +254,7 @@ pub fn process_deposits_system(
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
 ) {
     for (entity, name, deposit) in &deposits {
-        // Parse item name to ItemType.
-        let item_type = match deposit.item_name.to_lowercase().as_str() {
-            "gold_egg" | "goldegg" | "golden_egg" => Some(crate::items::ItemType::GoldEgg),
-            "gold_coin" | "goldcoin" => Some(crate::items::ItemType::GoldCoin),
-            "coffee" => Some(crate::items::ItemType::Coffee),
-            "muffin" => Some(crate::items::ItemType::Muffin),
-            "sandwich" => Some(crate::items::ItemType::Sandwich),
-            "rations" => Some(crate::items::ItemType::Rations),
-            "soup" => Some(crate::items::ItemType::Soup),
-            "coffee_beans" | "coffeebeans" => Some(crate::items::ItemType::CoffeeBeans),
-            "flour" => Some(crate::items::ItemType::Flour),
-            "raw_meat" | "rawmeat" => Some(crate::items::ItemType::RawMeat),
-            "document" => Some(crate::items::ItemType::Document),
-            "paycheck" => Some(crate::items::ItemType::Paycheck),
-            _ => None,
-        };
+        let item_type = parse_item_name(&deposit.item_name);
 
         if let Some(item) = item_type {
             let mut success = false;
@@ -279,6 +278,82 @@ pub fn process_deposits_system(
         }
 
         commands.entity(entity).remove::<PendingDeposit>();
+    }
+}
+
+/// Parse an item name string into an ItemType.
+fn parse_item_name(name: &str) -> Option<crate::items::ItemType> {
+    match name.to_lowercase().as_str() {
+        "gold_egg" | "goldegg" | "golden_egg" => Some(crate::items::ItemType::GoldEgg),
+        "gold_coin" | "goldcoin" => Some(crate::items::ItemType::GoldCoin),
+        "coffee" => Some(crate::items::ItemType::Coffee),
+        "muffin" => Some(crate::items::ItemType::Muffin),
+        "sandwich" => Some(crate::items::ItemType::Sandwich),
+        "rations" => Some(crate::items::ItemType::Rations),
+        "soup" => Some(crate::items::ItemType::Soup),
+        "coffee_beans" | "coffeebeans" => Some(crate::items::ItemType::CoffeeBeans),
+        "flour" => Some(crate::items::ItemType::Flour),
+        "raw_meat" | "rawmeat" => Some(crate::items::ItemType::RawMeat),
+        "document" => Some(crate::items::ItemType::Document),
+        "paycheck" => Some(crate::items::ItemType::Paycheck),
+        _ => None,
+    }
+}
+
+/// System: process take_item — move item from structure to agent inventory.
+pub fn process_take_items_system(
+    mut commands: Commands,
+    takes: Query<(Entity, &AgentName, &PendingTakeItem)>,
+    mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
+    mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
+) {
+    for (entity, name, take) in &takes {
+        let item_type = parse_item_name(&take.item_name);
+
+        if let Some(item) = item_type {
+            if let Ok(mut bld_inv) = structure_inventories.get_mut(take.building_entity) {
+                if bld_inv.has(item, 1) {
+                    bld_inv.remove(item, 1);
+                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                        agent_inv.add(item, 1);
+                        tracing::info!("[Take] {} took {} from building", name.0, take.item_name);
+                    }
+                } else {
+                    tracing::info!("[Take] Building doesn't have {} for {}", take.item_name, name.0);
+                }
+            }
+        } else {
+            tracing::warn!("[Take] Unknown item: {}", take.item_name);
+        }
+
+        commands.entity(entity).remove::<PendingTakeItem>();
+    }
+}
+
+/// System: process create_document — agent writes a document to their inventory.
+pub fn process_create_documents_system(
+    mut commands: Commands,
+    pending: Query<(Entity, &AgentName, &AgentId, &PendingCreateDocument)>,
+    mut inventories: Query<&mut Inventory, With<AgentName>>,
+    mut doc_inventories: Query<&mut crate::items::DocumentInventory>,
+) {
+    for (entity, name, agent_id, doc) in &pending {
+        // Add to DocumentInventory (with content).
+        if let Ok(mut docs) = doc_inventories.get_mut(entity) {
+            docs.add(doc.title.clone(), doc.content.clone());
+        }
+        // Add Document item type to regular inventory.
+        if let Ok(mut inv) = inventories.get_mut(entity) {
+            inv.add(crate::items::ItemType::Document, 1);
+        }
+
+        // Also save to filesystem.
+        let agent_dir = format!("./documents/{}", name.0.to_lowercase());
+        let _ = std::fs::create_dir_all(&agent_dir);
+        let _ = std::fs::write(format!("{}/{}", agent_dir, doc.title), &doc.content);
+
+        tracing::info!("[CreateDoc] {} created '{}' ({} chars)", name.0, doc.title, doc.content.len());
+        commands.entity(entity).remove::<PendingCreateDocument>();
     }
 }
 
@@ -962,6 +1037,52 @@ pub fn apply_mcp_actions_system(
                     });
                 } else {
                     thought.0 = "ERROR: Must be at a building entrance to deposit items. Go to a building first.".into();
+                }
+            }
+
+            "take_item" => {
+                let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
+
+                let building = structure_list.iter()
+                    .find(|(_, entrance, _)| pos.x == entrance.x && pos.y == entrance.y);
+
+                if let Some((bld_entity, _, bld_name)) = building {
+                    commands.entity(entity).insert(PendingTakeItem {
+                        item_name: item_name.to_string(),
+                        building_entity: *bld_entity,
+                    });
+                    thought.0 = format!("Taking {} from {}.", item_name, bld_name);
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: name.0.clone(),
+                        kind: LogKind::Action,
+                        text: format!("TAKE: {} ← {}", item_name, bld_name),
+                    });
+                } else {
+                    thought.0 = "ERROR: Must be at a building entrance to take items.".into();
+                }
+            }
+
+            "create_document" => {
+                let title = mcp_action.service.as_deref().unwrap_or("untitled.md").to_string();
+                let content = mcp_action.text.as_deref().unwrap_or("").to_string();
+
+                if content.is_empty() {
+                    thought.0 = "ERROR: create_document requires 'text' with the markdown content.".into();
+                } else {
+                    commands.entity(entity).insert(PendingCreateDocument {
+                        title: title.clone(),
+                        content: content.clone(),
+                    });
+                    thought.0 = format!("Created document '{}'.", title);
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: name.0.clone(),
+                        kind: LogKind::Action,
+                        text: format!("CREATED DOC: {}", title),
+                    });
                 }
             }
 
