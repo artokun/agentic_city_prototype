@@ -308,6 +308,10 @@ pub fn execution_system(
                                 tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
                             }
                         }
+                        // Mark bounty as completed to prevent double-payout.
+                        if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                            b.state = BountyState::Completed;
+                        }
                     }
                     anim.0 = AnimState::Idle;
                     *goal = AgentGoal::Idle;
