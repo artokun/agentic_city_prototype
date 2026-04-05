@@ -31,6 +31,10 @@ impl Default for ContextWindow {
 pub struct AgentCost {
     pub total_cost_usd: f64,
     pub session_cost_usd: f64,
+    /// Last reported cumulative cost (to compute deltas).
+    last_reported_cost: f64,
+    /// Last reported cumulative tokens (to compute deltas).
+    last_reported_tokens: u32,
 }
 
 /// Resource: maps agent UUID strings to their token usage receivers.
@@ -51,9 +55,18 @@ pub fn token_drain_system(
 
         let mut rx = rx_arc.lock().unwrap();
         while let Ok(event) = rx.try_recv() {
-            ctx.tokens_used = ctx.tokens_used.saturating_add(event.input_tokens + event.output_tokens);
-            cost.total_cost_usd += event.cost_usd;
-            cost.session_cost_usd += event.cost_usd;
+            // The API reports CUMULATIVE values per session, not deltas.
+            // Compute the delta from the last reported values.
+            let total_tokens = event.input_tokens + event.output_tokens;
+            let token_delta = total_tokens.saturating_sub(cost.last_reported_tokens);
+            let cost_delta = (event.cost_usd - cost.last_reported_cost).max(0.0);
+
+            cost.last_reported_tokens = total_tokens;
+            cost.last_reported_cost = event.cost_usd;
+
+            ctx.tokens_used = ctx.tokens_used.saturating_add(token_delta);
+            cost.total_cost_usd += cost_delta;
+            cost.session_cost_usd += cost_delta;
 
             // Energy = percentage of token budget remaining.
             // At 150k limit, agents hit 0 energy and must sleep (compact).
