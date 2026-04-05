@@ -86,7 +86,7 @@ pub fn update_world_state_json(
             "inventory": items,
             "gold": inv.count(crate::items::ItemType::GoldCoin),
             "gold_debt": inv.gold_debt,
-            "contacts": cards.contacts.iter().collect::<Vec<_>>(),
+            "contacts": cards.contacts.keys().collect::<Vec<_>>(),
             "cards_remaining": cards.cards_remaining,
         })
     }).collect();

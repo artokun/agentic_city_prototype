@@ -5,5 +5,6 @@
 export enum BountyStatus {
   Available = 0,
   Claimed = 1,
-  Completed = 2
+  Completed = 2,
+  Submitted = 3
 }

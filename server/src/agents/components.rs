@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::agents::action_log::ActionLog;
@@ -15,14 +15,15 @@ use crate::world::shifts::PaycheckWallet;
 #[derive(Component, Debug, Clone)]
 pub struct BusinessCards {
     pub cards_remaining: u32,
-    pub contacts: HashSet<String>,
+    /// Contacts: name → agent UUID string.
+    pub contacts: HashMap<String, String>,
 }
 
 impl Default for BusinessCards {
     fn default() -> Self {
         Self {
             cards_remaining: 5,
-            contacts: HashSet::new(),
+            contacts: HashMap::new(),
         }
     }
 }

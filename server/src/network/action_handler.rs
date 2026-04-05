@@ -241,13 +241,22 @@ pub fn process_deposits_system(
 /// System: auto-exchange business cards when agents are in a conversation.
 /// Each agent adds their partner as a contact if not already known.
 pub fn auto_exchange_cards_system(
-    mut agents: Query<(&AgentName, &ActiveConversation, &mut BusinessCards)>,
+    mut agents: Query<(&AgentName, &AgentId, &ActiveConversation, &mut BusinessCards)>,
 ) {
-    for (name, convo, mut cards) in &mut agents {
-        if !cards.contacts.contains(&convo.partner_name) && cards.cards_remaining > 0 {
-            cards.contacts.insert(convo.partner_name.clone());
+    // Collect partner IDs first to avoid borrow conflicts.
+    let partner_ids: std::collections::HashMap<Entity, (String, String)> = agents.iter()
+        .map(|(name, id, _convo, _)| (_convo.partner, (name.0.clone(), id.0.to_string())))
+        .collect();
+
+    for (_name, _id, convo, mut cards) in &mut agents {
+        if !cards.contacts.contains_key(&convo.partner_name) && cards.cards_remaining > 0 {
+            // Look up partner's ID from the pre-collected map.
+            let partner_id = partner_ids.get(&convo.partner)
+                .map(|(_, id)| id.clone())
+                .unwrap_or_default();
+            cards.contacts.insert(convo.partner_name.clone(), partner_id);
             cards.cards_remaining -= 1;
-            tracing::info!("[Cards] {} exchanged card with {}", name.0, convo.partner_name);
+            tracing::info!("[Cards] {} received {}'s business card", _name.0, convo.partner_name);
         }
     }
 }
@@ -268,6 +277,7 @@ pub fn apply_mcp_actions_system(
         &KnownLocations, Option<&ShiftWorker>,
         &mut Needs,
         Option<&ActiveConversation>,
+        &BusinessCards,
     )>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
     mut trade_proposals: Query<(Entity, &mut TradeProposal)>,
@@ -277,15 +287,15 @@ pub fn apply_mcp_actions_system(
 
     // Pre-collect agent info for cross-agent lookups (avoids borrow conflicts).
     let agent_snapshot: Vec<(Entity, String, GridPos, bool)> = agents.iter()
-        .map(|(e, n, p, _, _, _, _, _, ac)| (e, n.0.clone(), *p, ac.is_some()))
+        .map(|(e, n, p, _, _, _, _, _, ac, _)| (e, n.0.clone(), *p, ac.is_some()))
         .collect();
 
     for mcp_action in pending.actions.drain(..) {
         // Find the agent entity by name.
         let agent = agents.iter_mut()
-            .find(|(_, name, _, _, _, _, _, _, _)| name.0 == mcp_action.agent_name);
+            .find(|(_, name, _, _, _, _, _, _, _, _)| name.0 == mcp_action.agent_name);
 
-        let Some((entity, name, pos, mut goal, mut thought, known_locs, shift_worker, mut needs, active_convo)) = agent else {
+        let Some((entity, name, pos, mut goal, mut thought, known_locs, shift_worker, mut needs, active_convo, business_cards)) = agent else {
             tracing::warn!("[MCP] Agent '{}' not found", mcp_action.agent_name);
             continue;
         };
@@ -475,13 +485,18 @@ pub fn apply_mcp_actions_system(
 
             "send_message" => {
                 if let (Some(recipient), Some(text)) = (&mcp_action.agent_target, &mcp_action.text) {
-                    commands.entity(entity).insert(WantsToSendMessage {
-                        recipient_name: recipient.clone(),
-                        text: text.clone(),
-                    });
-                    thought.0 = format!("Sent message to {}.", recipient);
+                    // Must have recipient's business card to send messages.
+                    if business_cards.contacts.contains_key(recipient.as_str()) {
+                        commands.entity(entity).insert(WantsToSendMessage {
+                            recipient_name: recipient.clone(),
+                            text: text.clone(),
+                        });
+                        thought.0 = format!("Sent message to {}.", recipient);
+                    } else {
+                        thought.0 = format!("ERROR: You don't have {}'s business card. Start a face-to-face conversation first to exchange cards.", recipient);
+                    }
                 } else {
-                    thought.0 = "ERROR: send_message requires 'agent' and 'text' parameters.".into();
+                    thought.0 = "ERROR: send_message requires 'agent' (name from your business cards) and 'text' parameters.".into();
                 }
             }
 

@@ -1,7 +1,7 @@
 namespace world;
 
 enum AnimState : byte { Idle = 0, Walking = 1, Working = 2 }
-enum BountyStatus : byte { Available = 0, Claimed = 1, Completed = 2 }
+enum BountyStatus : byte { Available = 0, Claimed = 1, Completed = 2, Submitted = 3 }
 
 struct Vec2i {
   x: int;

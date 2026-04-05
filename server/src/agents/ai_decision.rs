@@ -65,12 +65,16 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
         ctx += &format!("- Carrying: {}\n", items_str.join(", "));
     }
 
-    // Contacts (business cards)
+    // Contacts (business cards collected from conversations)
     if !business_cards.contacts.is_empty() {
-        let contacts: Vec<&String> = business_cards.contacts.iter().collect();
-        ctx += &format!("- Contacts (have their card): {}\n", contacts.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+        ctx += "- Business cards collected (you can send_message to these agents):\n";
+        for (contact_name, contact_id) in &business_cards.contacts {
+            ctx += &format!("  - {} (id: {})\n", contact_name, &contact_id[..6.min(contact_id.len())]);
+        }
+    } else {
+        ctx += "- No business cards yet. Start a face-to-face conversation to exchange cards.\n";
     }
-    ctx += &format!("- Business cards remaining: {}\n", business_cards.cards_remaining);
+    ctx += &format!("- Your cards remaining to give: {}\n", business_cards.cards_remaining);
 
     // Known locations with distances
     ctx += "\n## Known Locations\n";

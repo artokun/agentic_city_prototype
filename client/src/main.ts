@@ -4,8 +4,8 @@ import { BountyStatus } from "./generated/world/bounty-status.js";
 
 const ANIM_NAMES = ["Idle", "Walking", "Working"];
 const ANIM_CLASSES = ["anim-idle", "anim-walking", "anim-working"];
-const BOUNTY_STATES = ["Available", "Claimed", "Completed"];
-const BOUNTY_CLASSES = ["bounty-available", "bounty-claimed", "bounty-completed"];
+const BOUNTY_STATES = ["Available", "Claimed", "Completed", "Submitted"];
+const BOUNTY_CLASSES = ["bounty-available", "bounty-claimed", "bounty-completed", "bounty-submitted"];
 
 const $ = (s: string) => document.getElementById(s)!;
 const connStatus = $("conn-status");

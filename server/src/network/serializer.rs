@@ -145,7 +145,8 @@ pub fn serialize_world(
         let claimed_str = b.claimed_by.and_then(|e| agent_names.get(e).ok().map(|n| fbb.create_string(&n.0)));
         let fb_state = match b.state {
             BountyState::Available => fb::BountyStatus::Available,
-            BountyState::Claimed | BountyState::PendingVerification => fb::BountyStatus::Claimed,
+            BountyState::Claimed => fb::BountyStatus::Claimed,
+            BountyState::PendingVerification => fb::BountyStatus::Submitted,
             BountyState::Completed => fb::BountyStatus::Completed,
         };
         let fb_pos = fb::Vec2i::new(0, 0);

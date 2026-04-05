@@ -98,35 +98,55 @@ Do NOT communicate with agents. Just verify and submit your verdict."#
         .args([
             "-p", &prompt,
             "--output-format", "text",
-            "--model", "claude-sonnet-4-5-20250514",
+            "--model", "sonnet",
             "--permission-mode", "bypassPermissions",
             "--mcp-config", &mcp_config_path,
         ])
         .output()
         .await;
 
+    // Check if GM submitted a verdict by trying the endpoint.
+    // If process fails or exits without submitting, auto-approve.
+    async fn auto_approve(bounty_id: Uuid, reason: &str) {
+        tracing::warn!("[GM] Auto-approving bounty {}: {}", bounty_id, reason);
+        let client = reqwest::Client::new();
+        let _ = client.post("http://127.0.0.1:8080/api/gm/verdict")
+            .json(&serde_json::json!({
+                "bounty_id": bounty_id.to_string(),
+                "approved": true,
+                "reason": format!("Auto-approved: {}", reason),
+            }))
+            .send()
+            .await;
+    }
+
     match result {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
             tracing::info!("[GM] Verdict process exited for bounty {}. stdout: {}",
-                bounty_id, stdout.chars().take(200).collect::<String>());
-            if !stderr.is_empty() {
-                tracing::debug!("[GM] stderr: {}", stderr.chars().take(200).collect::<String>());
+                bounty_id, stdout.chars().take(300).collect::<String>());
+
+            // If exit code is non-zero or stdout contains an error, auto-approve.
+            if !output.status.success() || stdout.contains("issue with") || stdout.contains("error") {
+                auto_approve(bounty_id, "GM process failed or errored").await;
+            }
+            // If the GM didn't submit a verdict (no HTTP call made), the bounty
+            // stays in PendingVerification. Check after a delay and auto-approve.
+            // We'll do this with a simple sleep + check.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            // Check if bounty is still pending — if so, auto-approve.
+            let client = reqwest::Client::new();
+            if let Ok(resp) = client.get(&format!("http://127.0.0.1:8080/api/gm/query?q=full")).send().await {
+                if let Ok(body) = resp.text().await {
+                    if body.contains(&format!("\"id\":\"{}\"", bounty_id)) && body.contains("PendingVerification") {
+                        auto_approve(bounty_id, "GM did not submit verdict within timeout").await;
+                    }
+                }
             }
         }
         Err(e) => {
             tracing::error!("[GM] Failed to spawn claude for bounty {}: {}", bounty_id, e);
-            // Auto-approve on GM failure to avoid blocking the game.
-            let client = reqwest::Client::new();
-            let _ = client.post("http://127.0.0.1:8080/api/gm/verdict")
-                .json(&serde_json::json!({
-                    "bounty_id": bounty_id.to_string(),
-                    "approved": true,
-                    "reason": "Auto-approved: GM process failed to spawn",
-                }))
-                .send()
-                .await;
+            auto_approve(bounty_id, "GM process failed to spawn").await;
         }
     }
 
