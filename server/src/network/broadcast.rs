@@ -79,6 +79,9 @@ pub fn update_world_state_json(
     let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards)| {
         let items: std::collections::HashMap<String, u32> = inv.items.iter()
             .map(|(k, v)| (k.to_string(), *v)).collect();
+        // Get documents from DocumentInventory if available.
+        // (DocumentInventory is not in this query — we'd need a separate lookup.
+        //  For now, documents are tracked via the Document item count.)
         serde_json::json!({
             "name": name.0,
             "position": { "x": pos.x, "y": pos.y },

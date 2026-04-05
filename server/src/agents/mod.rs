@@ -67,6 +67,7 @@ impl Plugin for AgentPlugin {
                         game_events::game_events_system,
                         trading::trade_system,
                         gm::spawn_gm_system,
+                        gm::spawn_research_system,
                     ).chain(),
                 )
                     .chain(),

@@ -27,6 +27,7 @@ impl Plugin for NetworkPlugin {
             .init_resource::<action_handler::PendingActions>()
             .init_resource::<action_handler::SuggestionBox>()
             .init_resource::<commands::PendingVerdicts>()
+            .init_resource::<commands::PendingDocuments>()
             .insert_resource(broadcast::WorldStateJsonHolder(world_json.clone()))
             .insert_resource(WorldJsonArc(world_json))
             .insert_resource(CommandReceiver { rx: cmd_rx })
@@ -42,6 +43,7 @@ impl Plugin for NetworkPlugin {
             .add_systems(Update, action_handler::process_deposits_system.after(action_handler::apply_mcp_actions_system))
             .add_systems(Update, action_handler::give_claim_items_system.after(action_handler::apply_mcp_actions_system))
             .add_systems(Update, action_handler::process_gm_verdicts_system.after(commands::process_commands_system))
+            .add_systems(Update, action_handler::deliver_documents_system.after(commands::process_commands_system))
             .add_systems(Update, broadcast::update_world_state_json);
     }
 }
@@ -68,6 +70,7 @@ fn spawn_axum(
         stripe_secret: std::env::var("STRIPE_SECRET_KEY").ok(),
         agent_relays: relays.0.clone(),
         world_state_json: world_json.0.clone(),
+        documents: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     runtime.spawn_background_task(|_ctx| async move {

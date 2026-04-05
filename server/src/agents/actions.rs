@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::action_log::{ActionEvent, ActionLog};
 use super::components::{AgentAnimation, AnimState, ThoughtBubble};
 use super::needs::Needs;
-use crate::items::{Inventory, ItemType};
+use crate::items::{DocumentInventory, Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::economy::GoldReserve;
 use crate::world::services::ServiceEffects;

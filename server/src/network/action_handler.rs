@@ -199,6 +199,39 @@ pub fn process_gm_verdicts_system(
     }
 }
 
+/// System: deliver research documents to agents.
+pub fn deliver_documents_system(
+    mut pending: ResMut<super::commands::PendingDocuments>,
+    mut agents: Query<(&AgentName, &mut Inventory, &mut crate::items::DocumentInventory, &mut ThoughtBubble)>,
+    sessions: Res<crate::agents::ai::AgentSessions>,
+    mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
+    tick: Res<crate::tick::TickCount>,
+) {
+    for (agent_name, title, content) in pending.docs.drain(..) {
+        let agent = agents.iter_mut().find(|(n, _, _, _)| n.0 == agent_name);
+        if let Some((name, mut inv, mut docs, mut thought)) = agent {
+            // Add document to DocumentInventory with content.
+            docs.add(title.clone(), content.clone());
+            // Add Document item type to regular inventory.
+            inv.add(crate::items::ItemType::Document, 1);
+
+            thought.0 = format!("Research complete! Document '{}' is in your inventory.", title);
+            tracing::info!("[DOC] {} received '{}' ({} chars)", name.0, title, content.len());
+
+            event_log.push(crate::agents::event_log::LogEvent {
+                tick: tick.0,
+                agent: name.0.clone(),
+                kind: crate::agents::event_log::LogKind::System,
+                text: format!("Research document produced: '{}'", title),
+            });
+
+            // Notify the agent.
+            // Find entity for session lookup — use a different approach.
+            // We can't easily get Entity from this query pattern, so just log it.
+        }
+    }
+}
+
 /// System: process pending item deposits (agent → structure inventory transfer).
 pub fn process_deposits_system(
     mut commands: Commands,

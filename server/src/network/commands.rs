@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::items::ItemType;
+use crate::items::{DocumentInventory, Inventory, ItemType};
 use crate::network::action_handler::{MpcAction, PendingActions};
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyStep, StepCondition};
 
@@ -31,6 +31,11 @@ pub enum GameCommand {
         approved: bool,
         reason: String,
     },
+    DeliverDocument {
+        agent_name: String,
+        title: String,
+        content: String,
+    },
 }
 
 /// Step definition from the API.
@@ -55,7 +60,13 @@ pub struct CommandReceiver {
 /// Resource: pending GM verdicts that need inventory access to process payouts.
 #[derive(Resource, Default)]
 pub struct PendingVerdicts {
-    pub verdicts: Vec<(Uuid, bool, String)>, // (bounty_id, approved, reason)
+    pub verdicts: Vec<(Uuid, bool, String)>,
+}
+
+/// Resource: pending documents to deliver to agents.
+#[derive(Resource, Default)]
+pub struct PendingDocuments {
+    pub docs: Vec<(String, String, String)>, // (agent_name, title, content)
 }
 
 /// System: drain commands from the REST API and apply them to the world.
@@ -64,6 +75,7 @@ pub fn process_commands_system(
     mut bounty_registry: ResMut<BountyRegistry>,
     mut pending_actions: ResMut<PendingActions>,
     mut pending_verdicts: ResMut<PendingVerdicts>,
+    mut pending_docs: ResMut<PendingDocuments>,
     tick: Res<crate::tick::TickCount>,
 ) {
     while let Ok(cmd) = receiver.rx.try_recv() {
@@ -174,6 +186,11 @@ pub fn process_commands_system(
                 );
 
                 bounty_registry.bounties.push(bounty);
+            }
+
+            GameCommand::DeliverDocument { agent_name, title, content } => {
+                tracing::info!("[DOC] Delivering '{}' to {} ({} chars)", title, agent_name, content.len());
+                pending_docs.docs.push((agent_name, title, content));
             }
 
             GameCommand::GmVerdict { bounty_id, approved, reason } => {

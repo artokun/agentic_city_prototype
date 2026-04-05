@@ -193,19 +193,37 @@ pub fn execution_system(
                             });
 
                             if let Some(svc) = svc {
-                                thought.0 = format!("{}...", svc.action_name);
-                                commands.entity(agent_entity).insert(InsideBuilding(building));
-                                action_log.log(tick.0, ActionEvent::EnteredBuilding { building: svc_building_name });
-                                commands.entity(agent_entity).insert(ActionTimer {
-                                    action_name: svc.action_name.to_string(),
-                                    remaining_ticks: svc.duration_ticks,
-                                    effects: svc.effects,
-                                    gold_cost: svc.gold_cost,
-                                    paid: false,
-                                    consumes_item: svc.consumes_item,
-                                    produces_item: svc.produces_item,
-                                });
-                                *goal = AgentGoal::PerformingAction;
+                                // Special case: search_internet spawns a real research agent.
+                                if svc.action_name == "search_internet" {
+                                    if inv.has(ItemType::GoldCoin, svc.gold_cost) {
+                                        inv.remove(ItemType::GoldCoin, svc.gold_cost);
+                                        thought.0 = "Researching... (a research agent is doing real web searches)".into();
+                                        commands.entity(agent_entity).insert(InsideBuilding(building));
+                                        commands.entity(agent_entity).insert(
+                                            super::gm::PendingResearch {
+                                                topic: format!("Research for agent {}", name.0),
+                                            },
+                                        );
+                                        *goal = AgentGoal::PerformingAction;
+                                    } else {
+                                        thought.0 = format!("ERROR: search_internet costs {}g but you only have {}g.", svc.gold_cost, inv.count(ItemType::GoldCoin));
+                                        *goal = AgentGoal::Idle;
+                                    }
+                                } else {
+                                    thought.0 = format!("{}...", svc.action_name);
+                                    commands.entity(agent_entity).insert(InsideBuilding(building));
+                                    action_log.log(tick.0, ActionEvent::EnteredBuilding { building: svc_building_name });
+                                    commands.entity(agent_entity).insert(ActionTimer {
+                                        action_name: svc.action_name.to_string(),
+                                        remaining_ticks: svc.duration_ticks,
+                                        effects: svc.effects,
+                                        gold_cost: svc.gold_cost,
+                                        paid: false,
+                                        consumes_item: svc.consumes_item,
+                                        produces_item: svc.produces_item,
+                                    });
+                                    *goal = AgentGoal::PerformingAction;
+                                }
                             } else {
                                 // Service not available at this building!
                                 thought.0 = format!(

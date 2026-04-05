@@ -24,6 +24,8 @@ pub struct AppState {
     pub agent_relays: AgentRelays,
     /// Shared JSON snapshot of world state for GM queries.
     pub world_state_json: Arc<std::sync::RwLock<String>>,
+    /// Document store: agent_name → Vec<(title, content)>.
+    pub documents: Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<(String, String)>>>>,
 }
 
 pub async fn start_server(state: AppState) {
@@ -37,6 +39,8 @@ pub async fn start_server(state: AppState) {
         .route("/api/action", post(handle_game_action))
         .route("/api/gm/query", get(gm_query))
         .route("/api/gm/verdict", post(gm_verdict))
+        .route("/api/gm/document", post(gm_document))
+        .route("/api/documents", get(list_documents))
         .route("/agent/{id}/ws", get({
             let relays = state.agent_relays.clone();
             move |ws, path| agent_relay::agent_ws_handler(ws, path, axum::extract::State(relays))
@@ -485,6 +489,46 @@ struct GmVerdictRequest {
     bounty_id: String,
     approved: bool,
     reason: String,
+}
+
+#[derive(Deserialize)]
+struct GmDocumentRequest {
+    agent_name: String,
+    title: String,
+    content: String,
+}
+
+async fn gm_document(
+    State(state): State<AppState>,
+    Json(req): Json<GmDocumentRequest>,
+) -> impl IntoResponse {
+    tracing::info!("[GM DOC] {} produced '{}' ({} chars)", req.agent_name, req.title, req.content.len());
+
+    // Store in shared document store for HTTP viewing.
+    if let Ok(mut docs) = state.documents.write() {
+        docs.entry(req.agent_name.clone()).or_default().push((req.title.clone(), req.content.clone()));
+    }
+
+    let cmd = GameCommand::DeliverDocument {
+        agent_name: req.agent_name.clone(),
+        title: req.title.clone(),
+        content: req.content,
+    };
+    let _ = state.command_tx.send(cmd).await;
+
+    Json(serde_json::json!({ "result": "Document delivered", "title": req.title }))
+}
+
+async fn list_documents(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let docs = state.documents.read().unwrap_or_else(|e| e.into_inner());
+    let result: serde_json::Value = docs.iter().map(|(agent, doc_list)| {
+        (agent.clone(), serde_json::json!(doc_list.iter().map(|(title, content)| {
+            serde_json::json!({ "title": title, "content": content })
+        }).collect::<Vec<_>>()))
+    }).collect::<serde_json::Map<String, serde_json::Value>>().into();
+    Json(result)
 }
 
 async fn gm_verdict(

@@ -15,6 +15,12 @@ pub struct PendingGmReview {
     pub bounty_id: Uuid,
 }
 
+/// Marker component: this agent is waiting for a research result.
+#[derive(Component)]
+pub struct PendingResearch {
+    pub topic: String,
+}
+
 /// System: spawn a one-shot game master Claude agent for each pending review.
 pub fn spawn_gm_system(
     mut commands: Commands,
@@ -45,6 +51,85 @@ pub fn spawn_gm_system(
             spawn_gm_agent(bounty_id, &agent, &description, &hidden_criteria, reward).await;
         });
     }
+}
+
+/// System: spawn a research agent for agents using search_internet.
+/// Produces a real document via Claude web search.
+pub fn spawn_research_system(
+    mut commands: Commands,
+    runtime: ResMut<TokioTasksRuntime>,
+    pending: Query<(Entity, &super::components::AgentName, &super::components::AgentId, &PendingResearch)>,
+) {
+    for (entity, agent_name, agent_id, research) in &pending {
+        let name = agent_name.0.clone();
+        let topic = research.topic.clone();
+        let agent_uuid = agent_id.0.to_string();
+
+        tracing::info!("[Research] Spawning research agent for {} — topic: {}", name, topic);
+        commands.entity(entity).remove::<PendingResearch>();
+
+        runtime.spawn_background_task(move |_ctx| async move {
+            spawn_research_agent(&name, &agent_uuid, &topic).await;
+        });
+    }
+}
+
+async fn spawn_research_agent(agent_name: &str, agent_id: &str, topic: &str) {
+    let prompt = format!(
+r#"You are a research assistant. Do a brief web search on the following topic and write a short markdown research document (3-5 paragraphs).
+
+Topic: {topic}
+
+Write the document in markdown format. Keep it concise but factual. Include at least 2 key findings.
+Output ONLY the markdown document, nothing else."#
+    );
+
+    tracing::info!("[Research] Launching claude -p for {} (agent: {})", topic, agent_name);
+
+    let result = tokio::process::Command::new("claude")
+        .args([
+            "-p", &prompt,
+            "--output-format", "text",
+            "--model", "haiku",
+            "--permission-mode", "bypassPermissions",
+        ])
+        .output()
+        .await;
+
+    let doc_content = match result {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout).to_string();
+            if text.trim().is_empty() {
+                "Research completed but no content was produced.".to_string()
+            } else {
+                text
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("[Research] Process failed: {}", stderr.chars().take(200).collect::<String>());
+            format!("Research failed: {}", stderr.chars().take(100).collect::<String>())
+        }
+        Err(e) => {
+            tracing::error!("[Research] Failed to spawn: {}", e);
+            format!("Research error: {}", e)
+        }
+    };
+
+    let title = format!("research_{}.md", &agent_id[..6]);
+    tracing::info!("[Research] {} produced document '{}' ({} chars)",
+        agent_name, title, doc_content.len());
+
+    // Post the document back to the game server.
+    let client = reqwest::Client::new();
+    let _ = client.post("http://127.0.0.1:8080/api/gm/document")
+        .json(&serde_json::json!({
+            "agent_name": agent_name,
+            "title": title,
+            "content": doc_content,
+        }))
+        .send()
+        .await;
 }
 
 async fn spawn_gm_agent(
