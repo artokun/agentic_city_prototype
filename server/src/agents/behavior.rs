@@ -93,10 +93,20 @@ pub fn execution_system(
             continue;
         }
 
-        // Just finished an action — go back to Idle for AI to decide next.
+        // Just finished an action — restore previous goal or go Idle.
         if *goal == AgentGoal::PerformingAction {
             if inside.is_some() {
                 commands.entity(agent_entity).remove::<InsideBuilding>();
+            }
+
+            // Check if agent has an active bounty — restore ExecutingBounty.
+            let active_bounty = bounty_registry.bounties.iter()
+                .find(|b| b.claimed_by == Some(agent_entity) && b.state == crate::world::bounty::BountyState::Claimed)
+                .map(|b| b.id);
+
+            if let Some(bounty_id) = active_bounty {
+                *goal = AgentGoal::ExecutingBounty(bounty_id);
+                continue;
             }
             *goal = AgentGoal::Idle;
         }
@@ -163,12 +173,17 @@ pub fn execution_system(
                             anim.0 = AnimState::Working;
                             *goal = AgentGoal::WorkingShift { building };
                         } else {
-                            let svc = services::all_services().into_iter().find(|s| s.action_name == service);
+                            let svc_building_name = structure_list.iter()
+                                .find(|(e, _, _)| *e == building)
+                                .map(|(_, _, s)| s.clone())
+                                .unwrap_or_default();
+
+                            // Validate service is available at THIS building.
+                            let svc = services::all_services().into_iter().find(|s| {
+                                s.action_name == service && s.building_name == svc_building_name
+                            });
+
                             if let Some(svc) = svc {
-                                let svc_building_name = structure_list.iter()
-                                    .find(|(e, _, _)| *e == building)
-                                    .map(|(_, _, s)| s.clone())
-                                    .unwrap_or_default();
                                 thought.0 = format!("{}...", svc.action_name);
                                 commands.entity(agent_entity).insert(InsideBuilding(building));
                                 action_log.log(tick.0, ActionEvent::EnteredBuilding { building: svc_building_name });
@@ -181,7 +196,14 @@ pub fn execution_system(
                                     consumes_item: svc.consumes_item,
                                 });
                                 *goal = AgentGoal::PerformingAction;
-                            } else { *goal = AgentGoal::Idle; }
+                            } else {
+                                // Service not available at this building!
+                                thought.0 = format!(
+                                    "ERROR: '{}' is not available at {}. Check the service list for this building.",
+                                    service, svc_building_name,
+                                );
+                                *goal = AgentGoal::Idle;
+                            }
                         }
                     } else {
                         if let Some((_, entrance, _)) = structure_list.iter().find(|(e, _, _)| *e == building) {
