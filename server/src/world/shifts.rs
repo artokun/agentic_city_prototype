@@ -319,3 +319,70 @@ pub fn paycheck_redemption_system(
         tracing::info!("{} redeemed {} paycheck(s) for {}g", name.0, count, gold);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paycheck(ticks_worked: u32, ticks_per_gold: u32) -> Paycheck {
+        Paycheck {
+            building_name: "test".into(),
+            ticks_worked,
+            ticks_per_gold,
+        }
+    }
+
+    // ---- Paycheck gold_value ----
+
+    #[test]
+    fn gold_value_integer_division() {
+        let p = paycheck(25, 10);
+        assert_eq!(p.gold_value(), 2); // 25 / 10 = 2 (truncated)
+    }
+
+    #[test]
+    fn gold_value_exact() {
+        let p = paycheck(30, 10);
+        assert_eq!(p.gold_value(), 3);
+    }
+
+    #[test]
+    fn gold_value_below_threshold_yields_zero() {
+        let p = paycheck(5, 10);
+        assert_eq!(p.gold_value(), 0);
+    }
+
+    #[test]
+    fn gold_value_zero_ticks() {
+        let p = paycheck(0, 10);
+        assert_eq!(p.gold_value(), 0);
+    }
+
+    // ---- PaycheckWallet ----
+
+    #[test]
+    fn wallet_total_gold() {
+        let mut w = PaycheckWallet::default();
+        w.paychecks.push(paycheck(30, 10)); // 3g
+        w.paychecks.push(paycheck(20, 10)); // 2g
+        assert_eq!(w.total_gold(), 5);
+    }
+
+    #[test]
+    fn redeem_all_clears_and_returns_total() {
+        let mut w = PaycheckWallet::default();
+        w.paychecks.push(paycheck(30, 10)); // 3g
+        w.paychecks.push(paycheck(50, 10)); // 5g
+        let gold = w.redeem_all();
+        assert_eq!(gold, 8);
+        assert!(w.paychecks.is_empty());
+        assert_eq!(w.total_gold(), 0);
+    }
+
+    #[test]
+    fn redeem_all_empty_wallet() {
+        let mut w = PaycheckWallet::default();
+        assert_eq!(w.redeem_all(), 0);
+        assert!(w.paychecks.is_empty());
+    }
+}

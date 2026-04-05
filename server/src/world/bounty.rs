@@ -362,3 +362,343 @@ pub fn bounty_expiry_system(
 
 /// Recycle cost for expired bounties.
 pub const RECYCLE_COST: u32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::action_log::{ActionEvent, ActionLog};
+
+    fn entity(n: u32) -> Entity {
+        Entity::from_raw_u32(n).unwrap()
+    }
+
+    // ---- Bounty constructors ----
+
+    #[test]
+    fn simple_bounty_defaults() {
+        let id = Uuid::new_v4();
+        let b = Bounty::simple(
+            id,
+            "test".into(),
+            BountyObjective::WorkAtBuilding,
+            50,
+            vec![(ItemType::GoldEgg, 1)],
+        );
+        assert_eq!(b.id, id);
+        assert_eq!(b.state, BountyState::Available);
+        assert!(b.claimed_by.is_none());
+        assert_eq!(b.reward_gold, 50);
+        assert_eq!(b.ttl_ticks, 0);
+        assert!(!b.expired);
+        assert!(b.steps.is_empty());
+        assert_eq!(b.claim_items.len(), 1);
+    }
+
+    #[test]
+    fn contract_bounty_defaults() {
+        let id = Uuid::new_v4();
+        let steps = vec![BountyStep {
+            description: "spend gold".into(),
+            condition: StepCondition::SpendGold {
+                building: "cafe".into(),
+                amount: 10,
+            },
+        }];
+        let b = Bounty::contract(
+            id,
+            "contract".into(),
+            BountyObjective::WorkAtBuilding,
+            100,
+            5,
+            20,
+            steps,
+        );
+        assert_eq!(b.id, id);
+        assert_eq!(b.state, BountyState::Available);
+        assert!(b.claimed_by.is_none());
+        assert_eq!(b.created_tick, 5);
+        assert_eq!(b.ttl_ticks, 20);
+        assert_eq!(b.steps.len(), 1);
+        assert!(b.claim_items.is_empty());
+    }
+
+    // ---- TTL / expiry ----
+
+    #[test]
+    fn no_ttl_never_expires() {
+        let b = Bounty::simple(
+            Uuid::new_v4(),
+            "no ttl".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        );
+        assert!(!b.is_expired(0));
+        assert!(!b.is_expired(999_999));
+        assert_eq!(b.ticks_remaining(999_999), Some(u32::MAX));
+    }
+
+    #[test]
+    fn ttl_not_expired_before_deadline() {
+        let mut b = Bounty::contract(
+            Uuid::new_v4(),
+            "ttl".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            0,
+            100,
+            vec![],
+        );
+        b.picked_up_tick = Some(10);
+        assert!(!b.is_expired(50));
+        assert_eq!(b.ticks_remaining(50), Some(60));
+    }
+
+    #[test]
+    fn ttl_expired_at_deadline() {
+        let mut b = Bounty::contract(
+            Uuid::new_v4(),
+            "ttl".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            0,
+            100,
+            vec![],
+        );
+        b.picked_up_tick = Some(10);
+        assert!(b.is_expired(110));
+        assert_eq!(b.ticks_remaining(110), None);
+    }
+
+    #[test]
+    fn ttl_expired_past_deadline() {
+        let mut b = Bounty::contract(
+            Uuid::new_v4(),
+            "ttl".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            0,
+            100,
+            vec![],
+        );
+        b.picked_up_tick = Some(10);
+        assert!(b.is_expired(200));
+        assert_eq!(b.ticks_remaining(200), None);
+    }
+
+    #[test]
+    fn ticks_remaining_none_when_not_picked_up() {
+        let b = Bounty::contract(
+            Uuid::new_v4(),
+            "ttl".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            0,
+            100,
+            vec![],
+        );
+        // picked_up_tick is None → ticks_remaining returns None
+        assert_eq!(b.ticks_remaining(50), None);
+    }
+
+    // ---- BountyRegistry claim ----
+
+    #[test]
+    fn claim_sets_state_and_agent() {
+        let id = Uuid::new_v4();
+        let mut reg = BountyRegistry::default();
+        reg.bounties.push(Bounty::simple(
+            id,
+            "test".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        ));
+        let agent = entity(1);
+        let result = reg.claim(id, agent, 5);
+        assert!(result.is_some());
+        let b = reg.get(id).unwrap();
+        assert_eq!(b.state, BountyState::Claimed);
+        assert_eq!(b.claimed_by, Some(agent));
+        assert_eq!(b.picked_up_tick, Some(5));
+    }
+
+    #[test]
+    fn max_one_bounty_per_agent() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let mut reg = BountyRegistry::default();
+        reg.bounties.push(Bounty::simple(
+            id1,
+            "first".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        ));
+        reg.bounties.push(Bounty::simple(
+            id2,
+            "second".into(),
+            BountyObjective::WorkAtBuilding,
+            20,
+            vec![],
+        ));
+        let agent = entity(1);
+        assert!(reg.claim(id1, agent, 0).is_some());
+        assert!(reg.claim(id2, agent, 1).is_none());
+    }
+
+    #[test]
+    fn claim_unavailable_bounty_fails() {
+        let id = Uuid::new_v4();
+        let mut reg = BountyRegistry::default();
+        let mut b = Bounty::simple(
+            id,
+            "taken".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        );
+        b.state = BountyState::Claimed;
+        b.claimed_by = Some(entity(1));
+        reg.bounties.push(b);
+
+        let agent2 = entity(2);
+        assert!(reg.claim(id, agent2, 0).is_none());
+    }
+
+    #[test]
+    fn claim_expired_bounty_fails() {
+        let id = Uuid::new_v4();
+        let mut reg = BountyRegistry::default();
+        let mut b = Bounty::simple(
+            id,
+            "expired".into(),
+            BountyObjective::WorkAtBuilding,
+            10,
+            vec![],
+        );
+        b.expired = true;
+        reg.bounties.push(b);
+        assert!(reg.claim(id, entity(1), 0).is_none());
+    }
+
+    // ---- BoardQueue ----
+
+    #[test]
+    fn board_queue_try_interact_grants_access() {
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        assert!(q.try_interact(a));
+        assert_eq!(q.interacting, Some(a));
+    }
+
+    #[test]
+    fn board_queue_try_interact_same_agent_returns_true() {
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        assert!(q.try_interact(a));
+        assert!(q.try_interact(a));
+    }
+
+    #[test]
+    fn board_queue_mutual_exclusion() {
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        let b = entity(2);
+        assert!(q.try_interact(a));
+        assert!(!q.try_interact(b));
+    }
+
+    #[test]
+    fn board_queue_advance_promotes_next_waiter() {
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        let b = entity(2);
+        q.try_interact(a);
+        q.join_queue(b);
+        q.leave(a);
+        let next = q.advance();
+        assert_eq!(next, Some(b));
+        assert_eq!(q.interacting, Some(b));
+    }
+
+    #[test]
+    fn board_queue_advance_noop_when_occupied() {
+        let mut q = BoardQueue::default();
+        let a = entity(1);
+        let b = entity(2);
+        q.try_interact(a);
+        q.join_queue(b);
+        let next = q.advance();
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn board_queue_advance_empty() {
+        let mut q = BoardQueue::default();
+        assert_eq!(q.advance(), None);
+    }
+
+    // ---- Step verification: SpendGold ----
+
+    #[test]
+    fn spend_gold_step_passes_when_sufficient() {
+        let step = BountyStep {
+            description: "spend gold".into(),
+            condition: StepCondition::SpendGold {
+                building: "cafe".into(),
+                amount: 10,
+            },
+        };
+        let bounty_id = Uuid::new_v4();
+        let mut log = ActionLog::default();
+        log.log(5, ActionEvent::GoldSpent { amount: 6, building: "cafe".into() });
+        log.log(7, ActionEvent::GoldSpent { amount: 5, building: "cafe".into() });
+        assert!(step.verify(&log, 0, 10, bounty_id, None));
+    }
+
+    #[test]
+    fn spend_gold_step_fails_when_insufficient() {
+        let step = BountyStep {
+            description: "spend gold".into(),
+            condition: StepCondition::SpendGold {
+                building: "cafe".into(),
+                amount: 10,
+            },
+        };
+        let bounty_id = Uuid::new_v4();
+        let mut log = ActionLog::default();
+        log.log(5, ActionEvent::GoldSpent { amount: 4, building: "cafe".into() });
+        assert!(!step.verify(&log, 0, 10, bounty_id, None));
+    }
+
+    #[test]
+    fn spend_gold_wrong_building_not_counted() {
+        let step = BountyStep {
+            description: "spend gold".into(),
+            condition: StepCondition::SpendGold {
+                building: "cafe".into(),
+                amount: 5,
+            },
+        };
+        let bounty_id = Uuid::new_v4();
+        let mut log = ActionLog::default();
+        log.log(5, ActionEvent::GoldSpent { amount: 10, building: "market".into() });
+        assert!(!step.verify(&log, 0, 10, bounty_id, None));
+    }
+
+    #[test]
+    fn spend_gold_outside_tick_range_ignored() {
+        let step = BountyStep {
+            description: "spend gold".into(),
+            condition: StepCondition::SpendGold {
+                building: "cafe".into(),
+                amount: 5,
+            },
+        };
+        let bounty_id = Uuid::new_v4();
+        let mut log = ActionLog::default();
+        log.log(20, ActionEvent::GoldSpent { amount: 10, building: "cafe".into() });
+        assert!(!step.verify(&log, 0, 10, bounty_id, None));
+    }
+}

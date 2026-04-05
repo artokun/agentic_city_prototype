@@ -159,3 +159,130 @@ pub fn init_map(mut commands: Commands) {
 
     commands.insert_resource(WorldMap { tiles });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a WorldMap using the same logic as init_map, but without bevy Commands.
+    fn build_test_map() -> WorldMap {
+        let mut tiles = HashMap::new();
+        let buildings = city_buildings();
+
+        for y in 0..MAP_HEIGHT {
+            for x in 0..MAP_WIDTH {
+                tiles.insert(GridPos { x, y }, TileType::Street);
+            }
+        }
+
+        for bld in &buildings {
+            for x in (bld.x - 1)..=(bld.x + bld.w) {
+                for y in (bld.y - 1)..=(bld.y + bld.h) {
+                    let pos = GridPos { x, y };
+                    if x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT {
+                        if let Some(tile) = tiles.get_mut(&pos) {
+                            if *tile == TileType::Street {
+                                *tile = TileType::Sidewalk;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for bld in &buildings {
+            for x in bld.x..(bld.x + bld.w) {
+                for y in bld.y..(bld.y + bld.h) {
+                    tiles.insert(GridPos { x, y }, TileType::Building);
+                }
+            }
+        }
+
+        for bld in &buildings {
+            let entrance = bld.entrance_pos();
+            if entrance.x >= 0 && entrance.x < MAP_WIDTH && entrance.y >= 0 && entrance.y < MAP_HEIGHT {
+                tiles.insert(entrance, TileType::Entrance);
+            }
+        }
+
+        for x in 14..26 {
+            for y in 33..38 {
+                tiles.insert(GridPos { x, y }, TileType::Park);
+            }
+        }
+
+        tiles.insert(GridPos { x: 20, y: 32 }, TileType::Sidewalk);
+
+        WorldMap { tiles }
+    }
+
+    #[test]
+    fn building_footprints_not_walkable() {
+        let map = build_test_map();
+        for bld in &city_buildings() {
+            for x in bld.x..(bld.x + bld.w) {
+                for y in bld.y..(bld.y + bld.h) {
+                    let pos = GridPos { x, y };
+                    // Skip entrance tiles (which overlap the footprint edge).
+                    let entrance = bld.entrance_pos();
+                    if pos == entrance {
+                        continue;
+                    }
+                    assert!(
+                        !map.is_walkable(&pos),
+                        "Building '{}' tile ({},{}) should not be walkable",
+                        bld.name, x, y,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn entrances_are_walkable() {
+        let map = build_test_map();
+        for bld in &city_buildings() {
+            let entrance = bld.entrance_pos();
+            assert!(
+                map.is_walkable(&entrance),
+                "Entrance for '{}' at ({},{}) should be walkable",
+                bld.name, entrance.x, entrance.y,
+            );
+        }
+    }
+
+    #[test]
+    fn street_tiles_are_walkable() {
+        let map = build_test_map();
+        // Check a few corners that should remain street.
+        let street_positions = vec![
+            GridPos { x: 0, y: 0 },
+            GridPos { x: 39, y: 0 },
+            GridPos { x: 0, y: 39 },
+            GridPos { x: 39, y: 39 },
+        ];
+        for pos in &street_positions {
+            assert!(
+                map.is_walkable(pos),
+                "Street tile ({},{}) should be walkable",
+                pos.x, pos.y,
+            );
+        }
+    }
+
+    #[test]
+    fn tile_type_walkability() {
+        assert!(TileType::Street.is_walkable());
+        assert!(TileType::Sidewalk.is_walkable());
+        assert!(TileType::Park.is_walkable());
+        assert!(TileType::Entrance.is_walkable());
+        assert!(!TileType::Building.is_walkable());
+    }
+
+    #[test]
+    fn out_of_bounds_not_walkable() {
+        let map = build_test_map();
+        assert!(!map.is_walkable(&GridPos { x: -1, y: 0 }));
+        assert!(!map.is_walkable(&GridPos { x: 0, y: MAP_HEIGHT }));
+    }
+}

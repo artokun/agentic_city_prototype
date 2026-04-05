@@ -212,3 +212,137 @@ fn extract_json(text: &str) -> Option<String> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_plain_json_go_to_board() {
+        let input = r#"{"action": "go_to_board", "thought": "need bounties"}"#;
+        let (action, thought) = parse_action(input);
+        assert!(matches!(action, AgentAction::GoToBoard));
+        assert_eq!(thought, "need bounties");
+    }
+
+    #[test]
+    fn parse_json_in_code_block() {
+        let input = r#"I think I should go to the board.
+```json
+{"action": "go_to_board", "thought": "checking for work"}
+```
+That's my plan."#;
+        let (action, thought) = parse_action(input);
+        assert!(matches!(action, AgentAction::GoToBoard));
+        assert_eq!(thought, "checking for work");
+    }
+
+    #[test]
+    fn parse_go_to_service() {
+        let input = r#"{"action": "go_to_service", "building": "cafe", "service": "eat_cafe", "thought": "hungry"}"#;
+        let (action, thought) = parse_action(input);
+        match action {
+            AgentAction::GoToService { building, service } => {
+                assert_eq!(building, "cafe");
+                assert_eq!(service, "eat_cafe");
+            }
+            other => panic!("expected GoToService, got {:?}", other),
+        }
+        assert_eq!(thought, "hungry");
+    }
+
+    #[test]
+    fn parse_work_shift() {
+        let input = r#"{"action": "work_shift", "building": "warehouse", "thought": "earn gold"}"#;
+        let (action, thought) = parse_action(input);
+        match action {
+            AgentAction::WorkShift { building } => {
+                assert_eq!(building, "warehouse");
+            }
+            other => panic!("expected WorkShift, got {:?}", other),
+        }
+        assert_eq!(thought, "earn gold");
+    }
+
+    #[test]
+    fn parse_send_message() {
+        let input = r#"{"action": "send_message", "recipient": "Alice", "text": "hello!", "thought": "being friendly"}"#;
+        let (action, thought) = parse_action(input);
+        match action {
+            AgentAction::SendMessage { recipient, text } => {
+                assert_eq!(recipient, "Alice");
+                assert_eq!(text, "hello!");
+            }
+            other => panic!("expected SendMessage, got {:?}", other),
+        }
+        assert_eq!(thought, "being friendly");
+    }
+
+    #[test]
+    fn parse_look_around() {
+        let input = r#"{"action": "look_around", "thought": "exploring"}"#;
+        let (action, _) = parse_action(input);
+        assert!(matches!(action, AgentAction::LookAround));
+    }
+
+    #[test]
+    fn parse_wander() {
+        let input = r#"{"action": "wander", "thought": "bored"}"#;
+        let (action, _) = parse_action(input);
+        assert!(matches!(action, AgentAction::Wander));
+    }
+
+    #[test]
+    fn parse_chat_with() {
+        let input = r#"{"action": "chat_with", "agent": "Bob", "thought": "socialize"}"#;
+        let (action, _) = parse_action(input);
+        match action {
+            AgentAction::ChatWith { agent } => assert_eq!(agent, "Bob"),
+            other => panic!("expected ChatWith, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_leave_shift() {
+        let input = r#"{"action": "leave_shift", "thought": "tired"}"#;
+        let (action, _) = parse_action(input);
+        assert!(matches!(action, AgentAction::LeaveShift));
+    }
+
+    #[test]
+    fn parse_unknown_action_returns_do_nothing() {
+        let input = r#"{"action": "fly_away", "thought": "imagination"}"#;
+        let (action, _) = parse_action(input);
+        assert!(matches!(action, AgentAction::DoNothing));
+    }
+
+    #[test]
+    fn garbage_input_returns_do_nothing() {
+        let (action, thought) = parse_action("this is not json at all!!!");
+        assert!(matches!(action, AgentAction::DoNothing));
+        assert_eq!(thought, "couldn't parse response");
+    }
+
+    #[test]
+    fn empty_input_returns_do_nothing() {
+        let (action, thought) = parse_action("");
+        assert!(matches!(action, AgentAction::DoNothing));
+        assert_eq!(thought, "couldn't parse response");
+    }
+
+    #[test]
+    fn json_embedded_in_prose() {
+        let input = r#"After thinking carefully, I've decided: {"action": "wander", "thought": "need to explore"} and that's my plan."#;
+        let (action, thought) = parse_action(input);
+        assert!(matches!(action, AgentAction::Wander));
+        assert_eq!(thought, "need to explore");
+    }
+
+    #[test]
+    fn missing_thought_field() {
+        let input = r#"{"action": "go_to_board"}"#;
+        let (action, thought) = parse_action(input);
+        assert!(matches!(action, AgentAction::GoToBoard));
+        assert_eq!(thought, "");
+    }
+}
