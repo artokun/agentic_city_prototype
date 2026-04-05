@@ -9,6 +9,7 @@ use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
+use crate::world::structures::InsideBuilding;
 
 /// A building that can be staffed.
 #[derive(Component, Debug)]
@@ -101,17 +102,23 @@ pub fn shift_tracking_system(
     mut staffable: Query<&mut Staffable>,
 ) {
     for (entity, name, mut shift, mut needs, mut inv, mut goal, mut thought) in &mut workers {
-        shift.ticks_worked += 1;
+        // Detect voluntary exit: AI set goal away from WorkingShift (e.g. LeaveShift).
+        let voluntary_exit = !matches!(*goal, AgentGoal::WorkingShift { .. });
+
+        if !voluntary_exit {
+            shift.ticks_worked += 1;
+        }
 
         // Food perk: working at cafe/market stops hunger from dropping.
         if let Ok(staff) = staffable.get(shift.building) {
-            if staff.food_perk {
+            if staff.food_perk && !voluntary_exit {
                 needs.hunger = (needs.hunger + 0.08).min(100.0); // counteract decay
             }
         }
 
         // Auto-eject on critical needs.
-        let should_eject = needs.energy < 10.0
+        let should_eject = voluntary_exit
+            || needs.energy < 10.0
             || (needs.hunger < 10.0 && !staffable.get(shift.building).is_ok_and(|s| s.food_perk));
 
         if should_eject {
@@ -119,6 +126,8 @@ pub fn shift_tracking_system(
             if gold_earned > 0 {
                 inv.add(ItemType::GoldCoin, gold_earned);
             }
+
+            let reason = if voluntary_exit { "Left" } else { "Ejected from" };
 
             thought.0 = format!(
                 "Shift over at {} — earned {}g for {} ticks",
@@ -130,14 +139,14 @@ pub fn shift_tracking_system(
                 agent: name.0.clone(),
                 kind: LogKind::Action,
                 text: format!(
-                    "Ejected from shift at {} ({}t worked → {}g)",
-                    shift.building_name, shift.ticks_worked, gold_earned,
+                    "{} shift at {} ({}t worked → {}g)",
+                    reason, shift.building_name, shift.ticks_worked, gold_earned,
                 ),
             });
 
             tracing::info!(
-                "{} ejected from {} shift ({}t → {}g)",
-                name.0, shift.building_name, shift.ticks_worked, gold_earned,
+                "{} {} {} shift ({}t → {}g)",
+                name.0, reason.to_lowercase(), shift.building_name, shift.ticks_worked, gold_earned,
             );
 
             // Clear the staffable slot.
@@ -146,6 +155,7 @@ pub fn shift_tracking_system(
             }
 
             commands.entity(entity).remove::<ShiftWorker>();
+            commands.entity(entity).remove::<InsideBuilding>();
             *goal = AgentGoal::Idle;
         }
     }

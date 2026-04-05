@@ -67,6 +67,8 @@ pub enum AgentGoal {
     GoingToService { building: Entity, service: String },
     /// Performing a timed action (ActionTimer is ticking).
     PerformingAction,
+    /// Working a shift at a building (ShiftWorker tracks progress).
+    WorkingShift { building: Entity },
 }
 
 impl Default for AgentGoal {

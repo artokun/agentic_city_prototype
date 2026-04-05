@@ -69,7 +69,7 @@ pub fn execution_system(
     )>,
     mut boards: Query<(Entity, &Entrance, &mut BoardQueue), With<BountyBoard>>,
     mut structures: Query<
-        (Entity, &Entrance, &SpriteType, &mut Inventory),
+        (Entity, &Entrance, &SpriteType, &mut Inventory, Option<&mut Staffable>),
         (With<StructureId>, Without<AgentName>),
     >,
 ) {
@@ -77,7 +77,7 @@ pub fn execution_system(
     let Some((board_entity, board_entrance)) = board_info.first().copied() else { return };
 
     let structure_list: Vec<(Entity, GridPos, String)> = structures
-        .iter().map(|(e, ent, sprite, _)| (e, ent.0, sprite.0.clone())).collect();
+        .iter().map(|(e, ent, sprite, _, _)| (e, ent.0, sprite.0.clone())).collect();
 
     for (
         agent_entity, name, pos, speed, mut goal, mut thought, mut anim, mut inv,
@@ -141,7 +141,14 @@ pub fn execution_system(
                                 .find(|(e, _, _)| *e == building)
                                 .map(|(_, _, s)| s.clone())
                                 .unwrap_or_default();
-                            let ticks_per_gold = 100; // default, will be overridden by Staffable
+                            // Read ticks_per_gold from Staffable and mark building as staffed.
+                            let ticks_per_gold = if let Ok((_, _, _, _, Some(mut staffable))) = structures.get_mut(building) {
+                                staffable.worker = Some(agent_entity);
+                                staffable.needs_worker = false;
+                                staffable.ticks_per_gold
+                            } else {
+                                100 // fallback if building has no Staffable
+                            };
                             commands.entity(agent_entity).insert(InsideBuilding(building));
                             commands.entity(agent_entity).insert(ShiftWorker {
                                 building,
@@ -151,7 +158,7 @@ pub fn execution_system(
                             });
                             thought.0 = format!("Starting shift at {}...", building_name);
                             anim.0 = AnimState::Working;
-                            *goal = AgentGoal::PerformingAction;
+                            *goal = AgentGoal::WorkingShift { building };
                         } else {
                             let svc = services::all_services().into_iter().find(|s| s.action_name == service);
                             if let Some(svc) = svc {
@@ -257,7 +264,7 @@ pub fn execution_system(
                                     if at_pos(pos, entrance) {
                                         commands.entity(agent_entity).insert(InsideBuilding(*se));
                                         if inv.remove(item, 1) {
-                                            if let Ok((_, _, _, mut sinv)) = structures.get_mut(*se) {
+                                            if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(*se) {
                                                 sinv.add(item, 1);
                                                 thought.0 = format!("Hid {} in {}!", item, sname);
                                                 tracing::info!("{} hid {} in {}", name.0, item, sname);
@@ -294,7 +301,7 @@ pub fn execution_system(
                             let mut found_at = None;
                             for (se, entrance, sname) in &structure_list {
                                 if sname == "bounty_board" { continue; }
-                                if let Ok((_, _, _, sinv)) = structures.get(*se) {
+                                if let Ok((_, _, _, sinv, _)) = structures.get(*se) {
                                     if sinv.has(item, 1) {
                                         found_at = Some((*se, *entrance, sname.clone()));
                                         break;
@@ -304,7 +311,7 @@ pub fn execution_system(
                             if let Some((se, entrance, sname)) = found_at {
                                 if at_pos(pos, &entrance) {
                                     commands.entity(agent_entity).insert(InsideBuilding(se));
-                                    if let Ok((_, _, _, mut sinv)) = structures.get_mut(se) {
+                                    if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(se) {
                                         if sinv.remove(item, 1) {
                                             inv.add(item, 1);
                                             thought.0 = format!("Found {} in {}!", item, sname);
@@ -363,7 +370,7 @@ pub fn execution_system(
                                 if let Some((de, d_entrance, dname)) = dest {
                                     if at_pos(pos, d_entrance) {
                                         if inv.remove(item, quantity) {
-                                            if let Ok((_, _, _, mut sinv)) = structures.get_mut(*de) {
+                                            if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(*de) {
                                                 sinv.add(item, quantity);
                                             }
                                             thought.0 = format!("Delivered {} {} to {}!", quantity, item, dname);
@@ -455,6 +462,8 @@ pub fn execution_system(
             }
 
             AgentGoal::PerformingAction => {} // handled above
+
+            AgentGoal::WorkingShift { .. } => {} // handled by shift_tracking_system
         }
     }
 }

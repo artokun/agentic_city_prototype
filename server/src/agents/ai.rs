@@ -16,7 +16,8 @@ use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::BountyRegistry;
 use crate::world::map::{GridPos, WorldMap};
-use crate::world::structures::{Entrance, SpriteType, StructureId};
+use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
+use crate::world::shifts::ShiftWorker;
 use crate::network::agent_relay::AgentRelays;
 
 use super::actions::ActionTimer;
@@ -183,6 +184,7 @@ pub fn ai_decision_system(
         &mut AgentGoal, &mut ThoughtBubble,
         &Needs, &Inventory, &KnownLocations, &Relationships,
         Option<&ActionTimer>, Option<&Path>,
+        Option<&InsideBuilding>, Option<&ShiftWorker>,
     )>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
@@ -194,6 +196,7 @@ pub fn ai_decision_system(
         entity, name, pos, speed, mut goal, mut thought,
         needs, inv, known_locs, rels,
         action_timer, path,
+        inside_building, shift_worker,
     ) in &mut agents {
         if action_timer.is_some() { continue; }
         let has_path = path.is_some_and(|p| !p.0.is_empty());
@@ -245,7 +248,7 @@ pub fn ai_decision_system(
 
         // Rate limit.
         if tick.0 - session.last_decision_tick < DECISION_INTERVAL { continue; }
-        if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering) { continue; }
+        if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WorkingShift { .. }) { continue; }
 
         // Build context and send.
         let available_bounties: Vec<String> = bounty_registry
@@ -257,9 +260,31 @@ pub fn ai_decision_system(
             .filter(|(_, p)| (p.x - pos.x).abs() + (p.y - pos.y).abs() <= 10)
             .map(|(n, p)| (n.0.clone(), *p)).collect();
 
+        // Determine location-specific tools based on building type and shift status.
+        let mut location_tools: Vec<&str> = vec!["look_around", "wander", "go_to_board", "go_to_service", "chat_with", "work_shift"];
+        if let Some(inside) = inside_building {
+            if let Ok((_, _, sprite)) = structures.get(inside.0) {
+                let on_shift = shift_worker.is_some();
+                match sprite.0.as_str() {
+                    "google" => { location_tools.push("search_internet"); }
+                    "cafe" if on_shift => { location_tools.push("brew_coffee"); location_tools.push("sell_to_customer"); }
+                    "market" if on_shift => { location_tools.push("stock_shelves"); location_tools.push("sell_to_customer"); }
+                    "warehouse" if on_shift => { location_tools.push("buy_wholesale"); }
+                    "hotel" if on_shift => { location_tools.push("check_in_guest"); }
+                    "apartments" => { location_tools.push("cook_meal"); location_tools.push("rest"); }
+                    "bounty_board" => { location_tools.push("claim_bounty"); location_tools.push("redeem_paycheck"); }
+                    _ => {}
+                }
+            }
+        }
+        if shift_worker.is_some() {
+            location_tools.push("leave_shift");
+        }
+        let location_tool_refs: Vec<&str> = location_tools.iter().copied().collect();
+
         let context = super::ai_decision::build_context(
             &name.0, pos, needs, inv, &goal, known_locs, rels,
-            speed.0, &available_bounties, &nearby, &[],
+            speed.0, &available_bounties, &nearby, &location_tool_refs,
         );
 
         if let Err(e) = session.prompt_tx.try_send(context) {
