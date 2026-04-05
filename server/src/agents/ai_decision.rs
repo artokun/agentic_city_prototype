@@ -169,27 +169,12 @@ Shifts pay in paychecks. You must go to bounty_board to redeem_paycheck for gold
 Bounties pay 4-15g and are much faster than shifts for earning gold.
 The apartments are FREE for sleep and food but far away — hotel costs 1g but is closer.
 
-## Respond with ONE JSON action:
-```json
-{"action": "go_to_board", "thought": "why"}
-{"action": "go_to_service", "building": "cafe", "service": "eat_cafe", "thought": "why"}
-{"action": "go_to_service", "building": "cafe", "service": "buy_coffee", "thought": "why"}
-{"action": "go_to_service", "building": "hotel", "service": "sleep_hotel", "thought": "why"}
-{"action": "go_to_service", "building": "apartments", "service": "sleep_at_home", "thought": "why"}
-{"action": "go_to_service", "building": "apartments", "service": "cook_at_home", "thought": "why"}
-{"action": "go_to_service", "building": "library", "service": "read_library", "thought": "why"}
-{"action": "go_to_service", "building": "cafe", "service": "hang_out", "thought": "why"}
-{"action": "go_to_service", "building": "google", "service": "browse_for_fun", "thought": "why"}
-{"action": "go_to_service", "building": "bounty_board", "service": "redeem_paycheck", "thought": "why"}
-{"action": "look_around", "thought": "why"}
-{"action": "wander", "thought": "why"}
-{"action": "work_shift", "building": "cafe", "thought": "why"}
-{"action": "leave_shift", "thought": "why"}
-{"action": "complete_bounty", "thought": "why"}
-```
-Shifts are open-ended — you work until you leave or get ejected (low energy/hunger).
-Shifts pay in paychecks (not direct gold). You must go to the bounty board and use redeem_paycheck to convert paychecks into gold.
-Prioritize: critical needs first, then earning gold (redeem paychecks!), then socializing. Be strategic about time/money tradeoffs.
+## How to Act
+Use the game_action MCP tool for ALL actions. Do NOT respond with JSON — use the tool.
+Key actions: go_to_board, go_to_service, look_around, wander, work_shift, leave_shift,
+claim_bounty, complete_bounty, deposit_item, start_conversation, say, end_conversation, help.
+Shifts pay in paychecks (not direct gold). Redeem at the bounty board with redeem_paycheck service.
+Prioritize: critical needs first, then earning gold, then socializing.
 "#;
 
     ctx

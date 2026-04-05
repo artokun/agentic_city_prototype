@@ -226,17 +226,10 @@ pub fn execution_system(
 
             AgentGoal::GoingToBoard => {
                 if !has_path && at_pos(pos, &board_entrance) {
-                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
-                        if queue.try_interact(agent_entity) {
-                            thought.0 = "Browsing the bounty board...".into();
-                            anim.0 = AnimState::Working;
-                            *goal = AgentGoal::InteractingWithBoard;
-                        } else {
-                            queue.join_queue(agent_entity);
-                            thought.0 = "Waiting in line...".into();
-                            *goal = AgentGoal::WaitingAtBoard;
-                        }
-                    }
+                    // No queue — multiple agents can browse simultaneously.
+                    thought.0 = "Browsing the bounty board...".into();
+                    anim.0 = AnimState::Working;
+                    *goal = AgentGoal::InteractingWithBoard;
                 } else if !has_path {
                     if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
                         commands.entity(agent_entity).insert(Path(p));
@@ -245,22 +238,10 @@ pub fn execution_system(
             }
 
             AgentGoal::WaitingAtBoard => {
-                // Leave queue if critical need.
-                if let Some(need) = needs.most_urgent(CRITICAL_THRESHOLD) {
-                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
-                        queue.leave(agent_entity);
-                    }
-                    thought.0 = format!("Can't wait, {:?} critical!", need);
-                    *goal = AgentGoal::Idle;
-                    continue;
-                }
-                if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
-                    if queue.try_interact(agent_entity) {
-                        thought.0 = "My turn! Browsing bounties...".into();
-                        anim.0 = AnimState::Working;
-                        *goal = AgentGoal::InteractingWithBoard;
-                    }
-                }
+                // Legacy state — immediately transition to interacting.
+                thought.0 = "Browsing bounties...".into();
+                anim.0 = AnimState::Working;
+                *goal = AgentGoal::InteractingWithBoard;
             }
 
             AgentGoal::InteractingWithBoard => {
@@ -300,45 +281,33 @@ pub fn execution_system(
 
             AgentGoal::ReturningToBoard(bounty_id) => {
                 if !has_path && at_pos(pos, &board_entrance) {
-                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
-                        if queue.try_interact(agent_entity) {
-                            action_log.log(tick.0, ActionEvent::BountyReturned { bounty_id });
-                            if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
-                                if bounty.expired {
-                                    // Expired bounty — recycling fee (can cause debt).
-                                    inv.deduct_gold_with_debt(RECYCLE_COST);
-                                    thought.0 = format!("Recycled expired bounty (-{}g)", RECYCLE_COST);
-                                    tracing::info!(
-                                        "{} recycled expired bounty '{}' (-{}g, balance: {})",
-                                        name.0, bounty.description, RECYCLE_COST, inv.gold_balance(),
-                                    );
-                                } else {
-                                    let can_claim = match bounty.objective {
-                                        BountyObjective::FindItem(item) => inv.has(item, 1),
-                                        _ => true,
-                                    };
-                                    if can_claim {
-                                        if let BountyObjective::FindItem(item) = bounty.objective {
-                                            inv.remove(item, 1);
-                                        }
-                                        inv.add(ItemType::GoldCoin, bounty.reward_gold);
-                                        thought.0 = format!("Collected {} gold!", bounty.reward_gold);
-                                        tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
-                                    }
-                                }
-                            }
-                            queue.leave(agent_entity);
-                            anim.0 = AnimState::Idle;
-                            *goal = AgentGoal::Idle;
+                    // No queue — pay out immediately.
+                    action_log.log(tick.0, ActionEvent::BountyReturned { bounty_id });
+                    if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
+                        if bounty.expired {
+                            inv.deduct_gold_with_debt(RECYCLE_COST);
+                            thought.0 = format!("Recycled expired bounty (-{}g)", RECYCLE_COST);
+                            tracing::info!(
+                                "{} recycled expired bounty '{}' (-{}g, balance: {})",
+                                name.0, bounty.description, RECYCLE_COST, inv.gold_balance(),
+                            );
                         } else {
-                            queue.join_queue(agent_entity);
-                            thought.0 = if bounty_registry.get(bounty_id).is_some_and(|b| b.expired) {
-                                "Waiting to recycle expired bounty...".into()
-                            } else {
-                                "Waiting to claim reward...".into()
+                            let can_claim = match bounty.objective {
+                                BountyObjective::FindItem(item) => inv.has(item, 1),
+                                _ => true,
                             };
+                            if can_claim {
+                                if let BountyObjective::FindItem(item) = bounty.objective {
+                                    inv.remove(item, 1);
+                                }
+                                inv.add(ItemType::GoldCoin, bounty.reward_gold);
+                                thought.0 = format!("Collected {} gold!", bounty.reward_gold);
+                                tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
+                            }
                         }
                     }
+                    anim.0 = AnimState::Idle;
+                    *goal = AgentGoal::Idle;
                 } else if !has_path {
                     if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
                         commands.entity(agent_entity).insert(Path(p));
