@@ -6,6 +6,7 @@ use crate::agents::mailbox::Mailbox;
 use crate::agents::needs::Needs;
 use crate::agents::perception::{InspectionLog, KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
+use crate::agents::thinking_log::ThinkingLog;
 use crate::items::{DocumentInventory, Inventory};
 use crate::world::map::GridPos;
 use crate::world::shifts::PaycheckWallet;
@@ -100,6 +101,7 @@ pub struct AgentBundle {
     pub goal: AgentGoal,
     pub paycheck_wallet: PaycheckWallet,
     pub documents: DocumentInventory,
+    pub thinking_log: ThinkingLog,
 }
 
 impl AgentBundle {
@@ -128,6 +130,7 @@ impl AgentBundle {
             goal: AgentGoal::default(),
             paycheck_wallet: PaycheckWallet::default(),
             documents: DocumentInventory::default(),
+            thinking_log: ThinkingLog::default(),
         }
     }
 }

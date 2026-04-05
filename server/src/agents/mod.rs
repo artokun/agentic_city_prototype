@@ -15,6 +15,7 @@ pub mod pathfinding;
 pub mod perception;
 pub mod personality;
 pub mod social;
+pub mod thinking_log;
 
 use bevy::prelude::*;
 
@@ -30,6 +31,7 @@ impl Plugin for AgentPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ai::AgentSessions>()
             .init_resource::<event_log::AgentEventLog>()
+            .init_resource::<thinking_log::ThinkingLogCursor>()
             .add_systems(Startup, spawn_agents.after(init_map))
             .add_systems(
                 Update,
@@ -50,6 +52,8 @@ impl Plugin for AgentPlugin {
                     behavior::execution_system,
                     mailbox::process_outgoing_mail_system,
                     mailbox::deliver_mail_system,
+                    thinking_log::capture_thinking_system,
+                    thinking_log::flush_thinking_log_system,
                     game_events::ensure_event_state_system,
                     game_events::game_events_system,
                 )

@@ -31,6 +31,7 @@ pub async fn start_server(state: AppState) {
         .route("/api/bounties", post(create_bounty))
         .route("/api/bounties", get(list_bounties))
         .route("/api/contracts", post(create_contract))
+        .route("/api/stripe/test", get(stripe_test))
         .route("/agent/{id}/ws", get({
             let relays = state.agent_relays.clone();
             move |ws, path| agent_relay::agent_ws_handler(ws, path, axum::extract::State(relays))
@@ -214,12 +215,31 @@ async fn list_bounties() -> impl IntoResponse {
     Json(serde_json::json!({ "note": "Connect to /ws for real-time bounty state" }))
 }
 
+// --- Stripe test endpoint ---
+
+async fn stripe_test(State(state): State<AppState>) -> impl IntoResponse {
+    let configured = state.stripe_secret.is_some();
+    let mode = if configured { "live" } else { "test" };
+    Json(serde_json::json!({
+        "configured": configured,
+        "mode": mode,
+    }))
+}
+
 // --- Stripe verification ---
+
+/// Expected currency for all payments.
+const EXPECTED_CURRENCY: &str = "usd";
 
 async fn verify_stripe_payment(
     secret_key: &str,
     payment_intent_id: &str,
 ) -> Result<u64, String> {
+    // Validate payment intent ID format.
+    if !payment_intent_id.starts_with("pi_") {
+        return Err("Invalid payment intent ID format".to_string());
+    }
+
     let client = reqwest::Client::new();
     let url = format!(
         "https://api.stripe.com/v1/payment_intents/{}",
@@ -234,7 +254,9 @@ async fn verify_stripe_payment(
         .map_err(|e| format!("HTTP error: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Stripe returned {}", resp.status()));
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Stripe returned {status}: {body}"));
     }
 
     let body: serde_json::Value = resp
@@ -242,14 +264,59 @@ async fn verify_stripe_payment(
         .await
         .map_err(|e| format!("JSON parse error: {e}"))?;
 
+    // Validate currency.
+    let currency = body["currency"].as_str().unwrap_or("");
+    if currency != EXPECTED_CURRENCY {
+        return Err(format!(
+            "Currency mismatch: expected {EXPECTED_CURRENCY}, got {currency}"
+        ));
+    }
+
+    // Check payment status.
     let status = body["status"].as_str().unwrap_or("");
-    if status != "succeeded" {
-        return Err(format!("Payment not succeeded: status={status}"));
+    match status {
+        "succeeded" => {}
+        "requires_payment_method" | "requires_confirmation" | "requires_action" | "processing" => {
+            return Err(format!("Payment not complete: status={status}"));
+        }
+        "canceled" => {
+            return Err("Payment was canceled".to_string());
+        }
+        other => {
+            return Err(format!("Unexpected payment status: {other}"));
+        }
     }
 
     let amount = body["amount"]
         .as_u64()
         .ok_or_else(|| "Missing amount".to_string())?;
 
-    Ok(amount)
+    // Check for partial refunds — use net amount.
+    let amount_received = body["amount_received"].as_u64().unwrap_or(amount);
+    if amount_received < amount {
+        tracing::warn!(
+            "Partial payment: charged={} received={} for {}",
+            amount, amount_received, payment_intent_id
+        );
+    }
+
+    // Check for refunds.
+    let refunded = body["amount_refunded"].as_u64().unwrap_or(0);
+    if refunded > 0 {
+        if refunded >= amount_received {
+            return Err("Payment has been fully refunded".to_string());
+        }
+        tracing::warn!(
+            "Partial refund: received={} refunded={} for {}",
+            amount_received, refunded, payment_intent_id
+        );
+    }
+
+    // Return net amount after refunds.
+    let net = amount_received.saturating_sub(refunded);
+    if net == 0 {
+        return Err("Net payment amount is zero".to_string());
+    }
+
+    Ok(net)
 }
