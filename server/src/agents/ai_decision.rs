@@ -261,20 +261,22 @@ fn extract_json(text: &str) -> Option<String> {
         }
     }
 
-    // Look for first { ... } block.
+    // Look for first { ... } block (using byte offsets, not char indices).
     if let Some(start) = text.find('{') {
         let mut depth = 0;
-        for (i, ch) in text[start..].chars().enumerate() {
+        let mut byte_offset = 0;
+        for ch in text[start..].chars() {
             match ch {
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        return Some(text[start..start + i + 1].to_string());
+                        return Some(text[start..start + byte_offset + ch.len_utf8()].to_string());
                     }
                 }
                 _ => {}
             }
+            byte_offset += ch.len_utf8();
         }
     }
 
@@ -411,5 +413,20 @@ That's my plan."#;
         let (action, thought) = parse_action(input);
         assert!(matches!(action, AgentAction::GoToBoard));
         assert_eq!(thought, "");
+    }
+
+    #[test]
+    fn parse_unicode_response_no_panic() {
+        // Regression: slicing multi-byte UTF-8 at byte boundary caused panics.
+        let response = "🤔 Let me think about this... {\"action\": \"go_to_board\", \"thought\": \"I need gold! 💰\"}";
+        let (action, _thought) = parse_action(response);
+        assert!(matches!(action, AgentAction::GoToBoard));
+    }
+
+    #[test]
+    fn parse_emoji_heavy_response() {
+        let response = "😊🎉🏆💪 {\"action\": \"wander\", \"thought\": \"exploring! 🗺️\"}";
+        let (action, _) = parse_action(response);
+        assert!(matches!(action, AgentAction::Wander));
     }
 }

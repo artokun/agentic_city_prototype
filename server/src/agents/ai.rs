@@ -270,10 +270,24 @@ pub fn ai_decision_system(
         // Allow decisions when idle, wandering, working a shift, OR executing a bounty.
         if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_)) { continue; }
 
-        // Build context and send.
-        let available_bounties: Vec<String> = bounty_registry
-            .available().iter()
-            .map(|b| format!("{} ({}g)", b.description, b.reward_gold)).collect();
+        // Only show bounties if agent is at the bounty board.
+        let at_board = inside_building.map_or(false, |ib| {
+            structures.get(ib.0).map_or(false, |(_, _, s)| s.0 == "bounty_board")
+        });
+        let available_bounties: Vec<String> = if at_board {
+            bounty_registry.available().iter()
+                .map(|b| format!("{} ({}g) — {}", b.description, b.reward_gold,
+                    match &b.objective {
+                        crate::world::bounty::BountyObjective::HideItem(item) => format!("You'll receive a {} to hide in any structure.", item),
+                        crate::world::bounty::BountyObjective::FindItem(item) => format!("Search structures to find a hidden {}.", item),
+                        crate::world::bounty::BountyObjective::RestockDelivery { item, quantity, destination } =>
+                            format!("Buy {} {} from warehouse and deliver to {}.", quantity, item, destination),
+                        crate::world::bounty::BountyObjective::WorkAtBuilding => "Go to the specified building and complete the task.".into(),
+                    }
+                )).collect()
+        } else {
+            vec![] // Can't see bounties unless at the board
+        };
 
         let nearby: Vec<(String, GridPos)> = all_agents.iter()
             .filter(|(n, _)| n.0 != name.0)
