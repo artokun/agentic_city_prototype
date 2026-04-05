@@ -220,11 +220,8 @@ pub fn ai_decision_system(
 
                 event_log.push(LogEvent {
                     tick: tick.0, agent: name.0.clone(),
-                    kind: LogKind::Thought, text: thought_text,
-                });
-                event_log.push(LogEvent {
-                    tick: tick.0, agent: name.0.clone(),
-                    kind: LogKind::Decision, text: format!("{:?}", action),
+                    kind: LogKind::Decision,
+                    text: format!("{} → {:?}", thought_text, action),
                 });
 
                 match &action {

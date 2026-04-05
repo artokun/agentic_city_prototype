@@ -32,6 +32,8 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 - Speed: {speed} tiles/sec
 - Energy: {:.0}/100  Hunger: {:.0}/100  Boredom: {:.0}/100
 - Current goal: {:?}
+- Need levels: >50 is fine, 25-50 is low, <25 is urgent, <10 is CRITICAL (auto-handled)
+- DO NOT panic about needs above 25. Focus on earning gold.
 "#,
         pos.x, pos.y, needs.energy, needs.hunger, needs.boredom, goal,
     );
@@ -188,7 +190,35 @@ pub fn parse_action(response: &str) -> (AgentAction, String) {
         }
     }
 
-    (AgentAction::DoNothing, "couldn't parse response".into())
+    // Fallback: try to infer action from prose keywords.
+    let lower = response.to_lowercase();
+    let thought = response.lines().next().unwrap_or("thinking...").to_string();
+
+    if lower.contains("bounty board") || lower.contains("check the board") || lower.contains("go to the board") {
+        return (AgentAction::GoToBoard, thought);
+    }
+    if lower.contains("work a shift") || lower.contains("take a shift") || lower.contains("start working") {
+        if lower.contains("cafe") {
+            return (AgentAction::WorkShift { building: "cafe".into() }, thought);
+        }
+        if lower.contains("market") {
+            return (AgentAction::WorkShift { building: "market".into() }, thought);
+        }
+        if lower.contains("warehouse") {
+            return (AgentAction::WorkShift { building: "warehouse".into() }, thought);
+        }
+    }
+    if lower.contains("look around") || lower.contains("scan") || lower.contains("survey") {
+        return (AgentAction::LookAround, thought);
+    }
+    if lower.contains("wander") || lower.contains("explore") || lower.contains("walk around") {
+        return (AgentAction::Wander, thought);
+    }
+    if lower.contains("complete") && lower.contains("bounty") {
+        return (AgentAction::CompleteBounty, thought);
+    }
+
+    (AgentAction::Wander, format!("(no JSON) {}", thought))
 }
 
 fn extract_json(text: &str) -> Option<String> {
