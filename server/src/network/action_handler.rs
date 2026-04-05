@@ -360,7 +360,12 @@ pub fn apply_mcp_actions_system(
                             thought.0 = "Couldn't claim that bounty — it may already be taken.".into();
                         }
                     } else {
-                        thought.0 = format!("No bounty matching '{}' found.", keyword);
+                        let avail = bounty_registry.available().len();
+                        if avail == 0 {
+                            thought.0 = "No bounties available right now. Check back later or work a shift to earn gold while you wait.".into();
+                        } else {
+                            thought.0 = format!("No bounty matching '{}'. {} bounties available — try claim_bounty without a keyword to grab the first one.", keyword, avail);
+                        }
                     }
                 }
             }
