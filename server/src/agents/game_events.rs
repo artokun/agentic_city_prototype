@@ -70,6 +70,8 @@ pub fn game_events_system(
         &GridPos,
         &Needs,
         &Inventory,
+        &AgentGoal,
+        &BusinessCards,
         Option<&Path>,
         &mut LastEventState,
     )>,
@@ -78,7 +80,7 @@ pub fn game_events_system(
     // Pre-compute: detect new bounties (global, not per-agent).
     let current_bounty_count = bounty_registry.bounties.len();
 
-    for (entity, name, pos, needs, inv, path, mut event_state) in &mut agents {
+    for (entity, name, pos, needs, inv, goal, cards, path, mut event_state) in &mut agents {
         let Some(session) = sessions.sessions.get(&entity) else {
             continue;
         };
@@ -125,34 +127,69 @@ pub fn game_events_system(
             event_state.last_bounty_count = current_bounty_count;
         }
 
-        // --- Periodic stat + inventory refresh ---
+        // --- Periodic stat + inventory + quest refresh ---
         if tick.0.saturating_sub(event_state.last_stat_tick) >= STAT_REFRESH_INTERVAL {
             let gold = inv.count(ItemType::GoldCoin);
             let mut status = format!(
-                "Status update: E:{:.0} H:{:.0} B:{:.0} Gold:{}",
-                needs.energy, needs.hunger, needs.boredom, gold,
+                "=== STATUS UPDATE (tick {}) ===\nNeeds: E:{:.0} H:{:.0} B:{:.0}\nGold: {}",
+                tick.0, needs.energy, needs.hunger, needs.boredom, gold,
             );
 
-            // Remind about inventory items (non-gold).
+            if inv.gold_debt > 0 {
+                status += &format!(" (DEBT: {}g!)", inv.gold_debt);
+            }
+
+            // Current goal / quest state.
+            match goal {
+                AgentGoal::ExecutingBounty(bid) => {
+                    if let Some(bounty) = bounty_registry.get(*bid) {
+                        status += &format!("\nACTIVE BOUNTY: '{}' ({}g reward)", bounty.description, bounty.reward_gold);
+                        // Show agent-facing instructions.
+                        let instructions = bounty.hidden_criteria
+                            .split("\n\nGM:")
+                            .next()
+                            .unwrap_or("")
+                            .strip_prefix("Instructions for agent: ")
+                            .unwrap_or("");
+                        if !instructions.is_empty() {
+                            status += &format!("\n  HOW TO COMPLETE: {}", instructions);
+                        }
+                        status += "\n  When done, go to the bounty board and use complete_bounty.";
+                    }
+                }
+                AgentGoal::Idle => {
+                    status += "\nNo active bounty. Go to the bounty board to claim one.";
+                }
+                _ => {
+                    status += &format!("\nCurrent goal: {:?}", goal);
+                }
+            }
+
+            // Full inventory.
             let items: Vec<String> = inv.items.iter()
                 .filter(|(t, c)| **t != ItemType::GoldCoin && **c > 0)
                 .map(|(t, c)| format!("{} x{}", t, c))
                 .collect();
             if !items.is_empty() {
-                status += &format!("\nYou are carrying: {}", items.join(", "));
+                status += &format!("\nInventory: {}", items.join(", "));
+            } else {
+                status += "\nInventory: empty";
             }
 
-            // Remind about active bounty goal.
+            // Business card contacts.
+            if !cards.contacts.is_empty() {
+                let names: Vec<&String> = cards.contacts.keys().collect();
+                status += &format!("\nContacts: {} (can send_message to them)", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+            }
+
+            // Walking state.
             if let Some(crate::agents::components::Path(ref path_deque)) = path {
                 if !path_deque.is_empty() {
-                    status += &format!("\nYou are walking ({} tiles remaining).", path_deque.len());
+                    status += &format!("\nWalking: {} tiles remaining", path_deque.len());
                 }
             }
 
-            if inv.gold_debt > 0 {
-                status += &format!("\nWARNING: You owe {} gold in debt!", inv.gold_debt);
-            }
-
+            status += "\n=== END STATUS ===";
             messages.push(status);
             event_state.last_stat_tick = tick.0;
         }
