@@ -5,17 +5,17 @@ A headless Bevy ECS simulation of a San Francisco city where autonomous Claude A
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Claude CLI  │◄───►│  MCP Server  │◄───►│ Game Server  │
 │ (per agent)  │     │  (mcp-game)  │     │ (Bevy ECS)   │
 │  --sdk-url   │     │  stdio JSON  │     │  Axum HTTP   │
-└─────────────┘     └──────────────┘     └──────┬───────┘
+└──────────────┘     └──────────────┘     └──────┬───────┘
                                                 │ FlatBuffers
                                                 │ WebSocket
-                                          ┌─────▼───────┐
-                                          │  Web Client  │
+                                          ┌───────▼───────┐
+                                          │  Web Client   │
                                           │ (TypeScript)  │
-                                          └──────────────┘
+                                          └───────────────┘
 ```
 
 ### Components
