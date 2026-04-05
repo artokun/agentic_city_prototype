@@ -304,8 +304,7 @@ pub fn ai_context_system(
         // PerformingAction is NOT included — let the action timer finish first.
         if matches!(goal, AgentGoal::PerformingAction) { continue; }
 
-        // Show bounties if at the board (either via InsideBuilding or InteractingWithBoard goal).
-        // Agents can always see bounty status (available/taken), but can only claim at the board.
+        // Agents can always see bounty board status. Must be at board to claim.
         let available_bounties: Vec<String> = bounty_registry.bounties.iter()
             .filter(|b| b.state == crate::world::bounty::BountyState::Available
                      || b.state == crate::world::bounty::BountyState::Claimed)
@@ -313,17 +312,7 @@ pub fn ai_context_system(
                 let status = if b.state == crate::world::bounty::BountyState::Claimed {
                     if b.claimed_by == Some(entity) { "(YOUR ACTIVE BOUNTY)" } else { "(taken)" }
                 } else { "(available)" };
-                let desc = match &b.objective {
-                    crate::world::bounty::BountyObjective::HideItem(item) =>
-                        format!("You'll receive a {} to hide in any structure.", item),
-                    crate::world::bounty::BountyObjective::FindItem(item) =>
-                        format!("Search structures to find a hidden {}.", item),
-                    crate::world::bounty::BountyObjective::RestockDelivery { item, quantity, destination } =>
-                        format!("Buy {} {} from warehouse and deliver to {}.", quantity, item, destination),
-                    crate::world::bounty::BountyObjective::WorkAtBuilding =>
-                        "Go to the specified building and complete the task.".into(),
-                };
-                format!("{} ({}g) {} — {}", b.description, b.reward_gold, status, desc)
+                format!("{} — {}g {}", b.description, b.reward_gold, status)
             }).collect();
 
         let nearby: Vec<(String, GridPos)> = all_agents.iter()
