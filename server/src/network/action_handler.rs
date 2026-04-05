@@ -16,7 +16,7 @@ use crate::agents::perception::{KnownLocations, WantsToLook};
 use crate::agents::trading::{self, TradeProposal};
 use crate::items::Inventory;
 use crate::tick::TickCount;
-use crate::world::bounty::{BountyBoard, BountyTokenStore};
+use crate::world::bounty::{BountyBoard, BountyDropbox, BountyTokenStore, Library};
 use crate::world::map::{GridPos, WorldMap};
 use crate::world::shifts::ShiftWorker;
 use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
@@ -140,15 +140,19 @@ pub fn give_claim_items_system(
 }
 
 /// System: process GM verdicts — pay out approved bounties, reject others.
+/// On approval: pay gold, move docs from dropbox to Library, clear dropbox slot.
+/// On rejection: return all items from dropbox to agent, mark bounty Claimed (retry).
 pub fn process_gm_verdicts_system(
+    mut commands: Commands,
     mut verdicts: ResMut<super::commands::PendingVerdicts>,
-    mut boards_verdict: Query<&mut BountyTokenStore, With<BountyBoard>>,
-    mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut ThoughtBubble)>,
+    mut boards_verdict: Query<(&mut BountyTokenStore, &mut BountyDropbox), With<BountyBoard>>,
+    mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut ThoughtBubble, &mut AgentGoal)>,
     mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
     tick: Res<crate::tick::TickCount>,
     sessions: Res<crate::agents::ai::AgentSessions>,
+    mut library: ResMut<Library>,
 ) {
-    let Some(mut bounty_registry) = boards_verdict.iter_mut().next() else { return; };
+    let Some((mut bounty_registry, mut dropbox)) = boards_verdict.iter_mut().next() else { return; };
     for (bounty_id, approved, reason) in verdicts.verdicts.drain(..) {
         let bounty = bounty_registry.tokens.get(&bounty_id).cloned();
         let Some(bounty) = bounty else {
@@ -162,12 +166,14 @@ pub fn process_gm_verdicts_system(
 
         if approved {
             // Pay out.
-            if let Ok((_, name, mut inv, mut thought)) = agents.get_mut(agent_entity) {
+            let agent_name_str;
+            if let Ok((_, name, mut inv, mut thought, mut goal)) = agents.get_mut(agent_entity) {
+                agent_name_str = name.0.clone();
                 inv.add(crate::items::ItemType::GoldCoin, bounty.reward_gold);
                 thought.0 = format!("GM approved! Collected {} gold!", bounty.reward_gold);
+                *goal = AgentGoal::Idle;
                 tracing::info!("[GM APPROVED] {} +{} gold for '{}'", name.0, bounty.reward_gold, bounty.description);
 
-                // System commentary in the activity log (visible to viewers).
                 event_log.push(crate::agents::event_log::LogEvent {
                     tick: tick.0,
                     agent: "SYSTEM".into(),
@@ -175,24 +181,44 @@ pub fn process_gm_verdicts_system(
                     text: format!("[to {}] {}", name.0, reason),
                 });
 
-                // Notify the agent.
                 if let Some(session) = sessions.sessions.get(&agent_entity) {
                     let _ = session.prompt_tx.try_send(
                         format!("BOUNTY APPROVED by the Game Master! You earned {} gold for '{}'. Reason: {}", bounty.reward_gold, bounty.description, reason),
                     );
                 }
+            } else {
+                agent_name_str = "unknown".into();
             }
+
+            // Move documents from dropbox to Library and save to disk.
+            if let Some(slot) = dropbox.clear_slot(agent_entity) {
+                for (title, content) in &slot.documents {
+                    library.documents.push(crate::world::bounty::LibraryEntry {
+                        title: title.clone(),
+                        content: content.clone(),
+                        author: agent_name_str.clone(),
+                        tick: tick.0,
+                        bounty_description: bounty.description.clone(),
+                    });
+                    // Save to filesystem.
+                    let agent_dir = format!("./documents/{}", agent_name_str.to_lowercase());
+                    let _ = std::fs::create_dir_all(&agent_dir);
+                    let _ = std::fs::write(format!("{}/{}", agent_dir, title), content);
+                    tracing::info!("[Library] Archived '{}' by {} (bounty: {})", title, agent_name_str, bounty.description);
+                }
+                // Token is consumed, proof items are consumed on approval.
+            }
+
             // Mark completed.
             if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
                 b.state = crate::world::bounty::BountyState::Completed;
             }
         } else {
-            // Rejected — bounty goes back to available.
-            if let Ok((_, name, _, mut thought)) = agents.get_mut(agent_entity) {
+            // Rejected — return all items from dropbox to agent, keep bounty Claimed.
+            if let Ok((_, name, _inv, mut thought, _goal)) = agents.get_mut(agent_entity) {
                 thought.0 = format!("GM rejected bounty: {}", reason);
                 tracing::info!("[GM REJECTED] {} bounty '{}': {}", name.0, bounty.description, reason);
 
-                // System commentary in the activity log (visible to viewers).
                 event_log.push(crate::agents::event_log::LogEvent {
                     tick: tick.0,
                     agent: "SYSTEM".into(),
@@ -202,16 +228,53 @@ pub fn process_gm_verdicts_system(
 
                 if let Some(session) = sessions.sessions.get(&agent_entity) {
                     let _ = session.prompt_tx.try_send(
-                        format!("BOUNTY REJECTED by the Game Master. Your submission for '{}' was not approved. Reason: {}. The bounty is back on the board.", bounty.description, reason),
+                        format!("BOUNTY REJECTED by the Game Master. Your submission for '{}' was not approved. Reason: {}. Your items have been returned — fix the issues and try again.", bounty.description, reason),
                     );
                 }
             }
-            // Return bounty to available.
-            if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
-                b.state = crate::world::bounty::BountyState::Available;
-                b.claimed_by = None;
-                b.picked_up_tick = None;
+
+            // Return all items from dropbox to agent.
+            let mut return_items: Vec<(crate::items::ItemType, u32)> = Vec::new();
+            if let Some(slot) = dropbox.clear_slot(agent_entity) {
+                // Return bounty token.
+                if slot.bounty_token_id.is_some() {
+                    return_items.push((crate::items::ItemType::BountyToken, 1));
+                    // Re-add BountyTokenInfo.
+                    let instructions = bounty.hidden_criteria
+                        .split("\n\nGM:")
+                        .next()
+                        .unwrap_or("")
+                        .strip_prefix("Instructions for agent: ")
+                        .unwrap_or("Complete the task and return to the board.")
+                        .to_string();
+                    commands.entity(agent_entity).insert(crate::items::BountyTokenInfo {
+                        bounty_id: bounty_id.to_string(),
+                        title: bounty.description.clone(),
+                        reward: bounty.reward_gold,
+                        instructions,
+                    });
+                }
+                // Return proof items.
+                for (item, count) in &slot.items {
+                    return_items.push((*item, *count));
+                }
+                // Return documents back to agent's DocumentInventory.
+                for (title, content) in &slot.documents {
+                    commands.entity(agent_entity).insert(PendingCreateDocument {
+                        title: title.clone(),
+                        content: content.clone(),
+                    });
+                }
             }
+
+            if !return_items.is_empty() {
+                commands.entity(agent_entity).insert(PendingClaimItems {
+                    items: return_items,
+                });
+            }
+
+            // Keep bounty as Claimed — agent can retry.
+            // (Don't change state; it stays Claimed with the same agent.)
         }
     }
 }
@@ -252,7 +315,7 @@ pub fn deliver_documents_system(
 /// System: process pending item deposits (agent → structure/tile transfer).
 /// Special cases:
 /// - "body:AgentName" at hospital → starts their recovery
-/// - "all_documents" → transfers all documents from agent to building
+/// - At the bounty board → items go into the BountyDropbox instead of building inventory
 pub fn process_deposits_system(
     mut commands: Commands,
     deposits: Query<(Entity, &AgentName, &PendingDeposit)>,
@@ -261,18 +324,24 @@ pub fn process_deposits_system(
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
     structures: Query<(&crate::world::structures::SpriteType,), With<StructureId>>,
     mut incapacitated_agents: Query<(Entity, &AgentName, &mut ThoughtBubble), With<crate::world::hospital::Incapacitated>>,
+    mut dropbox_boards: Query<&mut BountyDropbox, With<BountyBoard>>,
+    board_entities: Query<Entity, With<BountyBoard>>,
+    agent_token_info: Query<&crate::items::BountyTokenInfo>,
 ) {
+    // Pre-check: is the deposit target a bounty board?
+    let board_entity_set: std::collections::HashSet<Entity> = board_entities.iter().collect();
+
     for (entity, name, deposit) in &deposits {
+        let is_bounty_board = board_entity_set.contains(&deposit.building_entity);
+
         // Special case: depositing a body at the hospital.
         if deposit.item_name.starts_with("body:") {
             let victim_name = &deposit.item_name[5..];
-            // Check if this is the hospital.
             let is_hospital = structures.get(deposit.building_entity)
                 .map(|(sprite,)| sprite.0 == "hospital")
                 .unwrap_or(false);
 
             if is_hospital {
-                // Find the incapacitated agent and start their recovery.
                 for (victim_entity, vname, mut vthought) in &mut incapacitated_agents {
                     if vname.0 == victim_name {
                         commands.entity(victim_entity).insert(crate::world::hospital::Recovering {
@@ -284,21 +353,77 @@ pub fn process_deposits_system(
                     }
                 }
             } else {
-                // Not the hospital — just drop the body on this tile.
                 tracing::info!("[Deposit] {} dropped {} here (not the hospital)", name.0, deposit.item_name);
             }
+        } else if is_bounty_board {
+            // --- Bounty board: route into BountyDropbox ---
+            if deposit.item_name == "bounty_token" || deposit.item_name == "bountytoken" {
+                // Deposit bounty token into dropbox.
+                let bounty_id = agent_token_info.get(entity).ok()
+                    .and_then(|info| uuid::Uuid::parse_str(&info.bounty_id).ok());
+                if let Some(bid) = bounty_id {
+                    // Remove from agent inventory.
+                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                        agent_inv.remove(crate::items::ItemType::BountyToken, 1);
+                    }
+                    // Put in dropbox.
+                    if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
+                        dropbox.deposit_token(entity, bid);
+                    }
+                    // Remove BountyTokenInfo component.
+                    commands.entity(entity).remove::<crate::items::BountyTokenInfo>();
+                    tracing::info!("[Dropbox] {} deposited bounty_token (bounty {})", name.0, &bid.to_string()[..6]);
+                } else {
+                    tracing::warn!("[Dropbox] {} tried to deposit bounty_token but has no BountyTokenInfo", name.0);
+                }
+            } else if deposit.item_name.starts_with("doc:") || deposit.item_name.ends_with(".md") {
+                // Deposit document into dropbox.
+                let doc_title = deposit.item_name.strip_prefix("doc:").unwrap_or(&deposit.item_name);
+                let mut found = false;
+                if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                    if let Some(content) = docs.documents.remove(doc_title) {
+                        found = true;
+                        if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                            agent_inv.remove(crate::items::ItemType::Document, 1);
+                        }
+                        if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
+                            dropbox.deposit_document(entity, doc_title.to_string(), content.clone());
+                        }
+                        tracing::info!("[Dropbox] {} deposited document '{}' ({} chars)", name.0, doc_title, content.len());
+                    }
+                }
+                if !found {
+                    tracing::info!("[Dropbox] {} doesn't have document '{}' — available docs listed in inventory", name.0, doc_title);
+                }
+            } else {
+                // Regular item deposit into dropbox.
+                let item_type = parse_item_name(&deposit.item_name);
+                if let Some(item) = item_type {
+                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                        if agent_inv.has(item, 1) {
+                            agent_inv.remove(item, 1);
+                            if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
+                                dropbox.deposit_item(entity, item, 1);
+                            }
+                            tracing::info!("[Dropbox] {} deposited {} into bounty board dropbox", name.0, deposit.item_name);
+                        } else {
+                            tracing::info!("[Dropbox] {} doesn't have {} in inventory", name.0, deposit.item_name);
+                        }
+                    }
+                } else {
+                    tracing::warn!("[Dropbox] Unknown item '{}'. Check your inventory for valid item names.", deposit.item_name);
+                }
+            }
         } else if deposit.item_name.starts_with("doc:") || deposit.item_name.ends_with(".md") {
-            // Named document deposit.
+            // Named document deposit at a regular building.
             let doc_title = deposit.item_name.strip_prefix("doc:").unwrap_or(&deposit.item_name);
             let mut found = false;
             if let Ok(mut docs) = agent_docs.get_mut(entity) {
                 if let Some(content) = docs.documents.remove(doc_title) {
                     found = true;
-                    // Remove the Document item count too.
                     if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                         agent_inv.remove(crate::items::ItemType::Document, 1);
                     }
-                    // Add to building inventory.
                     if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
                         bld_inv.add(crate::items::ItemType::Document, 1);
                     }
@@ -309,7 +434,7 @@ pub fn process_deposits_system(
                 tracing::info!("[Deposit] {} doesn't have document '{}' — available docs listed in inventory", name.0, doc_title);
             }
         } else {
-            // Regular item deposit.
+            // Regular item deposit at a regular building.
             let item_type = parse_item_name(&deposit.item_name);
             if let Some(item) = item_type {
                 let mut success = false;
@@ -472,7 +597,7 @@ pub fn apply_mcp_actions_system(
     map: Res<WorldMap>,
     mut event_log: ResMut<AgentEventLog>,
     mut suggestion_box: ResMut<SuggestionBox>,
-    mut boards_mcp: Query<&mut BountyTokenStore, With<BountyBoard>>,
+    mut boards_mcp: Query<(&mut BountyTokenStore, &mut BountyDropbox), With<BountyBoard>>,
     sessions: Res<AgentSessions>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos,
@@ -485,7 +610,7 @@ pub fn apply_mcp_actions_system(
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
     mut trade_proposals: Query<(Entity, &mut TradeProposal)>,
 ) {
-    let Some(mut bounty_registry) = boards_mcp.iter_mut().next() else { return; };
+    let Some((mut bounty_registry, mut dropbox)) = boards_mcp.iter_mut().next() else { return; };
 
     let structure_list: Vec<(Entity, GridPos, String)> = structures
         .iter().map(|(e, ent, sprite)| (e, ent.0, sprite.0.clone())).collect();
@@ -644,22 +769,26 @@ pub fn apply_mcp_actions_system(
                 if !at_board {
                     thought.0 = "You must be at the bounty board to submit a bounty for completion. Use go_to_board first.".into();
                 } else {
-                    let bounty_id = match *goal {
-                        AgentGoal::ExecutingBounty(id) => Some(id),
-                        AgentGoal::ReturningToBoard(id) => Some(id),
-                        _ => {
-                            bounty_registry.tokens.values()
-                                .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
-                                .map(|b| b.id)
-                        }
-                    };
+                    // Check if agent has deposited a bounty token in the dropbox.
+                    let dropbox_slot = dropbox.get_slot(entity);
+                    let dropbox_bounty_id = dropbox_slot.and_then(|s| s.bounty_token_id);
 
-                    if let Some(bounty_id) = bounty_id {
-                        // Submit for GM verification directly (already at board).
+                    if let Some(bounty_id) = dropbox_bounty_id {
+                        // Token is in the dropbox — submit for GM verification.
                         *goal = AgentGoal::ReturningToBoard(bounty_id);
-                        thought.0 = "Bounty submitted for Game Master review! Waiting for verdict...".into();
+                        thought.0 = "Bounty submitted for Game Master review! Your token and proof items are in the dropbox. Waiting for verdict...".into();
                     } else {
-                        thought.0 = "ERROR: No active bounty to complete. Claim one at the bounty board first.".into();
+                        // No token in dropbox — check if they have an active bounty.
+                        let has_active = match *goal {
+                            AgentGoal::ExecutingBounty(_) | AgentGoal::ReturningToBoard(_) => true,
+                            _ => bounty_registry.tokens.values()
+                                .any(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed),
+                        };
+                        if has_active {
+                            thought.0 = "ERROR: You must deposit your bounty_token at the board first! Use deposit_item with service='bounty_token', then deposit your proof documents/items, THEN call complete_bounty.".into();
+                        } else {
+                            thought.0 = "ERROR: No active bounty to complete. Claim one at the bounty board first.".into();
+                        }
                     }
                 }
             }
@@ -1242,17 +1371,48 @@ pub fn apply_mcp_actions_system(
                             b.claimed_by = None;
                             b.picked_up_tick = None;
                         }
-                        // Remove bounty token from agent (via deferred — we don't have inventory here).
-                        // The token removal happens when PendingDeposit processes "bounty_token".
+
+                        // Clear the dropbox slot and return all items to agent.
+                        // We queue the returns via PendingClaimItems since we don't have
+                        // inventory access in this query.
+                        let mut return_items: Vec<(crate::items::ItemType, u32)> = Vec::new();
+                        if let Some(slot) = dropbox.clear_slot(entity) {
+                            // Return bounty token if it was in dropbox.
+                            if slot.bounty_token_id.is_some() {
+                                return_items.push((crate::items::ItemType::BountyToken, 1));
+                            }
+                            // Return proof items.
+                            for (item, count) in &slot.items {
+                                return_items.push((*item, *count));
+                            }
+                            // Return documents — re-add via PendingCreateDocument.
+                            // (Documents go back to the agent's DocumentInventory.)
+                            for (title, content) in &slot.documents {
+                                commands.entity(entity).insert(PendingCreateDocument {
+                                    title: title.clone(),
+                                    content: content.clone(),
+                                });
+                            }
+                        } else {
+                            // Token wasn't in dropbox — return it to inventory.
+                            return_items.push((crate::items::ItemType::BountyToken, 1));
+                        }
+
+                        if !return_items.is_empty() {
+                            commands.entity(entity).insert(PendingClaimItems {
+                                items: return_items,
+                            });
+                        }
+
                         commands.entity(entity).remove::<crate::items::BountyTokenInfo>();
                         *goal = AgentGoal::Idle;
-                        thought.0 = "Bounty cancelled. Token returned to the board.".into();
+                        thought.0 = "Bounty cancelled. Token and items returned to your inventory.".into();
 
                         event_log.push(LogEvent {
                             tick: tick.0,
                             agent: name.0.clone(),
                             kind: LogKind::Action,
-                            text: "Cancelled bounty — token returned to board.".into(),
+                            text: "Cancelled bounty — token and items returned.".into(),
                         });
                     } else {
                         thought.0 = "You don't have an active bounty to cancel.".into();

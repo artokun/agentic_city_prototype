@@ -294,6 +294,76 @@ impl BountyTokenData {
     }
 }
 
+/// A single agent's submission at the dropbox.
+#[derive(Debug, Clone, Default)]
+pub struct DropboxSlot {
+    /// The bounty token ID being submitted (if deposited).
+    pub bounty_token_id: Option<Uuid>,
+    /// Proof items deposited by the agent.
+    pub items: Vec<(ItemType, u32)>,
+    /// Documents deposited by the agent: (title, content).
+    pub documents: Vec<(String, String)>,
+}
+
+/// Per-agent ephemeral submission boxes on the bounty board.
+/// Agent deposits their bounty token + proof items here before calling complete_bounty.
+#[derive(Component, Default)]
+pub struct BountyDropbox {
+    /// Per-agent submission boxes: agent Entity → DropboxSlot.
+    pub slots: HashMap<Entity, DropboxSlot>,
+}
+
+impl BountyDropbox {
+    /// Deposit a bounty token into the agent's dropbox slot.
+    pub fn deposit_token(&mut self, agent: Entity, bounty_id: Uuid) {
+        let slot = self.slots.entry(agent).or_default();
+        slot.bounty_token_id = Some(bounty_id);
+    }
+
+    /// Deposit a regular item into the agent's dropbox slot.
+    pub fn deposit_item(&mut self, agent: Entity, item: ItemType, count: u32) {
+        let slot = self.slots.entry(agent).or_default();
+        // Merge with existing entry if same item type.
+        if let Some(existing) = slot.items.iter_mut().find(|(t, _)| *t == item) {
+            existing.1 += count;
+        } else {
+            slot.items.push((item, count));
+        }
+    }
+
+    /// Deposit a document into the agent's dropbox slot.
+    pub fn deposit_document(&mut self, agent: Entity, title: String, content: String) {
+        let slot = self.slots.entry(agent).or_default();
+        slot.documents.push((title, content));
+    }
+
+    /// Get a reference to an agent's dropbox slot.
+    pub fn get_slot(&self, agent: Entity) -> Option<&DropboxSlot> {
+        self.slots.get(&agent)
+    }
+
+    /// Remove and return an agent's dropbox slot.
+    pub fn clear_slot(&mut self, agent: Entity) -> Option<DropboxSlot> {
+        self.slots.remove(&agent)
+    }
+}
+
+/// A single archived document in the library.
+#[derive(Debug, Clone)]
+pub struct LibraryEntry {
+    pub title: String,
+    pub content: String,
+    pub author: String,
+    pub tick: u64,
+    pub bounty_description: String,
+}
+
+/// Permanent global archive of all completed bounty documents.
+#[derive(Resource, Default)]
+pub struct Library {
+    pub documents: Vec<LibraryEntry>,
+}
+
 /// Central store of all bounty tokens — lives as a component on the bounty board entity.
 #[derive(Component, Default)]
 pub struct BountyTokenStore {

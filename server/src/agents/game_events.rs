@@ -210,8 +210,10 @@ fn building_arrival_message(building_name: &str) -> String {
             Available actions here:\n\
             - claim_bounty — pick a bounty from the board to work on\n\
             - redeem_paycheck — convert any paychecks from shifts into gold\n\
-            - complete_bounty — if you have an active bounty, return here to collect your reward\n\
-            - look_around — see nearby agents and buildings".to_string(),
+            - deposit_item — deposit your bounty_token and proof items/documents into the dropbox\n\
+            - complete_bounty — submit for GM review (you MUST deposit bounty_token first!)\n\
+            - look_around — see nearby agents and buildings\n\
+            WORKFLOW: deposit_item(bounty_token) → deposit_item(doc:yourfile.md) → complete_bounty".to_string(),
 
         "cafe" => "You arrived at the CAFE.\n\
             A cozy spot for food, coffee, and socializing.\n\

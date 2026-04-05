@@ -73,12 +73,14 @@ pub fn update_world_state_json(
         (&SpriteType, &GridPos, &Inventory),
         (With<StructureId>, Without<AgentName>),
     >,
-    boards_json: Query<&BountyTokenStore, With<BountyBoard>>,
+    boards_json: Query<(&BountyTokenStore, &crate::world::bounty::BountyDropbox), With<BountyBoard>>,
     event_log: Res<AgentEventLog>,
     holder: Res<WorldStateJsonHolder>,
+    library: Res<crate::world::bounty::Library>,
+    agent_names_json: Query<&AgentName>,
 ) {
     if tick.0 % 10 != 0 { return; }
-    let Some(bounty_registry) = boards_json.iter().next() else { return; };
+    let Some((bounty_registry, board_dropbox)) = boards_json.iter().next() else { return; };
 
     let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards, ctx_window, agent_cost)| {
         let items: std::collections::HashMap<String, u32> = inv.items.iter()
@@ -132,11 +134,32 @@ pub fn update_world_state_json(
         })
     }).collect();
 
+    // Dropbox contents — keyed by agent name for GM visibility.
+    let dropbox_json: Vec<serde_json::Value> = board_dropbox.slots.iter().map(|(agent_entity, slot)| {
+        let agent_name = agent_names_json.get(*agent_entity)
+            .map(|n| n.0.clone())
+            .unwrap_or_else(|_| format!("entity_{}", agent_entity.to_bits()));
+        let items: Vec<serde_json::Value> = slot.items.iter().map(|(item, count)| {
+            serde_json::json!({ "item": item.to_string(), "count": count })
+        }).collect();
+        let docs: Vec<serde_json::Value> = slot.documents.iter().map(|(title, content)| {
+            serde_json::json!({ "title": title, "content_length": content.len() })
+        }).collect();
+        serde_json::json!({
+            "agent": agent_name,
+            "bounty_token_id": slot.bounty_token_id.map(|id| id.to_string()),
+            "items": items,
+            "documents": docs,
+        })
+    }).collect();
+
     let world = serde_json::json!({
         "tick": tick.0,
         "agents": agents_json,
         "structures": structures_json,
         "bounties": bounties_json,
+        "dropbox": dropbox_json,
+        "library_document_count": library.documents.len(),
         "recent_logs": recent_logs,
     });
 

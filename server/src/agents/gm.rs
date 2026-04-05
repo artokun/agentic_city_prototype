@@ -183,9 +183,10 @@ YOUR TASK:
 4. Use submit_verdict with bounty_id="{bounty_id}" to approve or reject
 
 IMPORTANT VERIFICATION STEPS:
-- Check the BOUNTY BOARD's inventory for deposited proof items (documents, eggs, etc.)
-- Agents must deposit_item their proof at the bounty board BEFORE submitting
-- If required documents are in the AGENT's inventory but NOT the board, REJECT — they forgot to deposit
+- Check the DROPBOX section in the world state for this agent's deposited proof items (documents, eggs, etc.)
+- Agents must deposit their bounty_token and proof items into the DROPBOX at the bounty board BEFORE submitting
+- The dropbox shows per-agent submission slots with their deposited token, items, and documents
+- If required documents are in the AGENT's inventory but NOT the dropbox, REJECT — they forgot to deposit
 - If documents are missing entirely, REJECT
 
 The reason field in your verdict should be entertaining commentary shown to viewers.
@@ -194,8 +195,8 @@ Be STRICT on the actual criteria. Do not give credit for effort.
 When APPROVING: be grudgingly impressed. Backhanded compliments only.
 When REJECTING: be sarcastic but HELPFUL. Tell them exactly what they did wrong and what they need to do to fix it. They're idiots but they're YOUR idiots.
 
-Example approved: "Achievement unlocked: Not Completely Useless! {agent_name} actually deposited the documents at the board like a functioning adult. {reward}g deposited. Don't spend it all on coffee."
-Example rejected: "REJECTED. You have 3 documents in your inventory but ZERO at the bounty board. Did you think I could read your backpack from here? Go to the board, use deposit_item to submit your docs, THEN try again. I swear to god."
+Example approved: "Achievement unlocked: Not Completely Useless! {agent_name} actually deposited the documents in the dropbox like a functioning adult. {reward}g deposited. Don't spend it all on coffee."
+Example rejected: "REJECTED. You have 3 documents in your inventory but ZERO in the dropbox. Did you think I could read your backpack from here? Go to the board, use deposit_item to submit your docs to the dropbox, THEN try again. I swear to god."
 
 Submit ONE verdict. Do not communicate with agents directly."#
     );

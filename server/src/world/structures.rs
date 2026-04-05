@@ -147,5 +147,6 @@ fn spawn_structures(mut commands: Commands) {
         BoardQueue::default(),
         Inventory::default(),
         BountyTokenStore::default(),
+        BountyDropbox::default(),
     ));
 }
