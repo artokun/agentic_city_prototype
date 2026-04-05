@@ -109,12 +109,17 @@ fn initial_bounties() -> Vec<BountyTemplate> {
 }
 
 /// System: seed initial bounties once, then stop.
+/// If a `ScenarioBountyConfig` resource exists, this system is a no-op
+/// (scenario bounties are seeded by `scenario::seed_scenario_bounties_system`).
 pub fn bounty_injection_system(
     tick: Res<TickCount>,
     mut bounty_registry: ResMut<BountyRegistry>,
     mut state: ResMut<InjectorState>,
+    scenario_config: Option<Res<crate::scenario::ScenarioBountyConfig>>,
 ) {
     if state.seeded { return; }
+    // If scenario bounties are configured, skip normal injection entirely.
+    if scenario_config.is_some() { state.seeded = true; return; }
     // Wait for tick 0 to seed.
     if tick.0 > 10 { state.seeded = true; return; }
     if tick.0 != 0 { return; }

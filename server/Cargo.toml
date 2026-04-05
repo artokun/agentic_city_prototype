@@ -18,3 +18,7 @@ tracing-subscriber = "0.3"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json"] }
 schemas = { path = "../schemas" }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+uuid = { version = "1", features = ["v4"] }

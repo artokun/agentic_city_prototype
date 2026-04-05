@@ -48,7 +48,9 @@ pub fn spawn_sessions_system(
     mut sessions: ResMut<AgentSessions>,
     relays: Res<AgentRelaysResource>,
     agents: Query<(Entity, &AgentId, &AgentName, &Personality, &ClaudeModel)>,
+    server_port: Option<Res<crate::network::ws::ServerPort>>,
 ) {
+    let port = server_port.map(|p| p.0).unwrap_or(8080);
     for (entity, agent_id, name, personality, claude_model) in &agents {
         if sessions.sessions.contains_key(&entity) {
             continue;
@@ -103,7 +105,7 @@ pub fn spawn_sessions_system(
             });
             let _ = std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&mcp_config_content).unwrap());
 
-            let sdk_url = format!("ws://127.0.0.1:8080/agent/{}/ws", agent_uuid);
+            let sdk_url = format!("ws://127.0.0.1:{}/agent/{}/ws", port, agent_uuid);
             let mut env: HashMap<String, String> = std::env::vars().collect();
             env.remove("ANTHROPIC_API_KEY");
 

@@ -2,6 +2,7 @@ pub mod config;
 mod agents;
 mod items;
 mod network;
+mod scenario;
 mod tick;
 mod world;
 

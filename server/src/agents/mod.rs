@@ -83,14 +83,29 @@ fn spawn_agents(
     map: Res<WorldMap>,
     boards: Query<(Entity, &GridPos, &Entrance), With<BountyBoard>>,
     all_structures: Query<(Entity, &GridPos, &Entrance, &crate::world::structures::SpriteType)>,
+    scenario_config: Option<Res<crate::scenario::ScenarioAgentConfig>>,
 ) {
     let walkable = map.walkable_positions();
-    // Each agent gets a different Claude model to test speed vs intelligence.
-    let agents_config: Vec<(&str, f32, &str)> = vec![
-        ("Alice", 2.0, "haiku"),   // fastest model, fastest speed
-        ("Bob", 1.5, "sonnet"),    // balanced model, moderate speed
-        ("Carol", 3.0, "opus"),    // smartest model, fastest legs
-    ];
+
+    // If scenario config is provided, use it; otherwise use defaults.
+    let agents_config: Vec<(&str, f32, &str)>;
+    let scenario_agents: Vec<(String, f32, String)>;
+
+    if let Some(ref config) = scenario_config {
+        scenario_agents = config.agents.iter()
+            .map(|a| (a.name.clone(), a.speed, a.model.clone()))
+            .collect();
+        agents_config = scenario_agents.iter()
+            .map(|(n, s, m)| (n.as_str(), *s, m.as_str()))
+            .collect();
+    } else {
+        // Default: each agent gets a different Claude model to test speed vs intelligence.
+        agents_config = vec![
+            ("Alice", 2.0, "haiku"),   // fastest model, fastest speed
+            ("Bob", 1.5, "sonnet"),    // balanced model, moderate speed
+            ("Carol", 3.0, "opus"),    // smartest model, fastest legs
+        ];
+    }
 
     let board_info: Option<(Entity, GridPos, GridPos)> = boards
         .iter()

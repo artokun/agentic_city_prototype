@@ -13,8 +13,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
+use bevy::prelude::Resource;
+
 use super::agent_relay::{self, AgentRelays};
 use super::commands::GameCommand;
+
+/// Bevy resource: the port the server is bound to.
+/// Used by scenario tests to bind to an OS-assigned port for isolation.
+#[derive(Resource, Clone, Copy)]
+pub struct ServerPort(pub u16);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -29,6 +36,10 @@ pub struct AppState {
 }
 
 pub async fn start_server(state: AppState) {
+    start_server_on_port(state, 8080).await;
+}
+
+pub async fn start_server_on_port(state: AppState, port: u16) {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws_upgrade))
@@ -48,11 +59,13 @@ pub async fn start_server(state: AppState) {
         }))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+    let bind_addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .expect("Failed to bind to port 8080");
+        .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", bind_addr, e));
 
-    tracing::info!("axum listening on 0.0.0.0:8080");
+    let local_addr = listener.local_addr().expect("Failed to get local address");
+    tracing::info!("axum listening on {}", local_addr);
     axum::serve(listener, app).await.expect("axum server failed");
 }
 

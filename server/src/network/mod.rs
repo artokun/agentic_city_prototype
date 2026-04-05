@@ -65,10 +65,13 @@ fn spawn_axum(
     cmd_sender: Res<CommandSenderHolder>,
     relays: Res<RelaysHolder>,
     world_json: Res<WorldJsonArc>,
+    server_port: Option<Res<ws::ServerPort>>,
 ) {
     let documents_dir = std::env::var("DOCUMENTS_DIR")
         .unwrap_or_else(|_| "./documents".into());
     let _ = std::fs::create_dir_all(&documents_dir);
+
+    let port = server_port.map(|p| p.0).unwrap_or(8080);
 
     let state = AppState {
         broadcast_tx: broadcast_tx.sender.clone(),
@@ -79,7 +82,7 @@ fn spawn_axum(
         documents_dir,
     };
 
-    runtime.spawn_background_task(|_ctx| async move {
-        ws::start_server(state).await;
+    runtime.spawn_background_task(move |_ctx| async move {
+        ws::start_server_on_port(state, port).await;
     });
 }
