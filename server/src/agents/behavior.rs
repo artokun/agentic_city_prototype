@@ -111,6 +111,15 @@ pub fn execution_system(
             *goal = AgentGoal::Idle;
         }
 
+        // Auto-leave board queue if agent is no longer at the board.
+        if !matches!(*goal, AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard) {
+            if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
+                if queue.interacting == Some(agent_entity) || queue.waiting.contains(&agent_entity) {
+                    queue.leave(agent_entity);
+                }
+            }
+        }
+
         let has_path = path.is_some_and(|p| !p.0.is_empty());
         let gold = inv.count(ItemType::GoldCoin);
         let current_goal = goal.clone();
