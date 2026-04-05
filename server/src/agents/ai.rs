@@ -94,10 +94,25 @@ pub fn spawn_sessions_system(
             let mut env: HashMap<String, String> = std::env::vars().collect();
             env.remove("ANTHROPIC_API_KEY");
 
-            // MCP config for game engine tool.
-            let mcp_config = std::env::current_dir()
-                .map(|d| d.join("mcp-config.json").to_string_lossy().to_string())
-                .unwrap_or_else(|_| "mcp-config.json".into());
+            // Write per-agent MCP config with identity baked in.
+            let mcp_binary = std::env::current_dir()
+                .map(|d| d.join("target/debug/mcp-game").to_string_lossy().to_string())
+                .unwrap_or_else(|_| "target/debug/mcp-game".into());
+            let mcp_config_path = format!("/tmp/mcp-{}.json", agent_uuid);
+            let mcp_config_content = serde_json::json!({
+                "mcpServers": {
+                    "game-engine": {
+                        "command": mcp_binary,
+                        "args": [],
+                        "env": {
+                            "AGENT_NAME": agent_name.clone(),
+                            "AGENT_ID": agent_uuid.clone(),
+                        }
+                    }
+                }
+            });
+            let _ = std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&mcp_config_content).unwrap());
+            let mcp_config = mcp_config_path.clone();
 
             let child = tokio::process::Command::new("claude")
                 .args([

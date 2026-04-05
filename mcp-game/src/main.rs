@@ -10,6 +10,12 @@ use std::io::{self, BufRead, Write};
 const GAME_SERVER: &str = "http://127.0.0.1:8080";
 
 fn main() {
+    // Agent identity is set by the game server when spawning this MCP process.
+    // Cannot be overridden by the agent — prevents impersonation.
+    let agent_name = std::env::var("AGENT_NAME")
+        .expect("AGENT_NAME env var must be set by the game server");
+    let agent_id = std::env::var("AGENT_ID").unwrap_or_default();
+
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -67,10 +73,6 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "agent_name": {
-                                "type": "string",
-                                "description": "YOUR name (the agent calling this tool)"
-                            },
                             "action": {
                                 "type": "string",
                                 "description": "The action to perform",
@@ -103,7 +105,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                 "description": "Message text (for send_message)"
                             }
                         },
-                        "required": ["agent_name", "action"]
+                        "required": ["action"]
                     }
                 }
             ]
@@ -118,6 +120,13 @@ fn handle_tool_call(msg: &Value, id: &Option<Value>) -> Value {
     if tool_name != "game_action" {
         return json_rpc_error(id, -32602, &format!("Unknown tool: {}", tool_name));
     }
+
+    // Inject server-side identity — cannot be forged by the agent.
+    let agent_name = std::env::var("AGENT_NAME").unwrap_or_else(|_| "unknown".into());
+    let agent_id_env = std::env::var("AGENT_ID").unwrap_or_default();
+    let mut arguments = arguments;
+    arguments["agent_name"] = json!(agent_name);
+    arguments["agent_id"] = json!(agent_id_env);
 
     let action = arguments.get("action").and_then(|a| a.as_str()).unwrap_or("unknown");
 
