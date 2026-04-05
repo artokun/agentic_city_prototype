@@ -21,7 +21,10 @@ const relsTable = $("rels-table");
 // Per-agent history (persisted across renders).
 const agentThoughts: Record<string, string[]> = {};
 const agentActions: Record<string, { tick: number; text: string }[]> = {};
+// Conversation history — persists even after conversations end.
+const conversationHistory: { speaker: string; text: string }[] = [];
 const MAX_HISTORY = 10;
+const MAX_CONVO_HISTORY = 30;
 
 let messageCount = 0;
 setInterval(() => { msgRate.textContent = `${messageCount} msg/s`; messageCount = 0; }, 1000);
@@ -181,30 +184,47 @@ function render(s: WorldSnapshot) {
   }
   agentCardsEl.innerHTML = cardsHtml;
 
-  // Active chats (deduplicate)
+  // Conversations — accumulate into persistent history.
   const seenConvos = new Set<string>();
-  let chatHtml = "";
   for (let i = 0; i < s.agentsLength(); i++) {
     const a = s.agents(i)!;
     if (a.activeChatLength() > 0) {
       const speakers = new Set<string>();
-      for (let j = 0; j < a.activeChatLength(); j++) {
-        speakers.add(a.activeChat(j)!.speaker() ?? "?");
-      }
+      for (let j = 0; j < a.activeChatLength(); j++) speakers.add(a.activeChat(j)!.speaker() ?? "?");
       speakers.add(a.name() ?? "?");
       const key = [...speakers].sort().join("+");
       if (seenConvos.has(key)) continue;
       seenConvos.add(key);
-
-      chatHtml += `<div class="chat-header" style="color:#888;margin-top:4px"><em>${a.name()}'s conversation:</em></div>`;
       for (let j = 0; j < a.activeChatLength(); j++) {
         const msg = a.activeChat(j)!;
         const speaker = msg.speaker() ?? "?";
-        chatHtml += `<div class="chat-msg"><strong style="color:${agentColor(speaker)}">${speaker}</strong>: ${msg.text()}</div>`;
+        const text = msg.text() ?? "";
+        const last = conversationHistory.length > 0 ? conversationHistory[conversationHistory.length - 1] : null;
+        if (!last || last.speaker !== speaker || last.text !== text) {
+          conversationHistory.push({ speaker, text });
+          if (conversationHistory.length > MAX_CONVO_HISTORY) conversationHistory.shift();
+        }
       }
     }
   }
-  chatLog.innerHTML = chatHtml || '<span class="muted">No active conversations</span>';
+  // Also capture SYSTEM speech from activity log.
+  for (let i = 0; i < s.eventLogLength(); i++) {
+    const entry = s.eventLog(i)!;
+    if (entry.kind() === "speech") {
+      const agent = entry.agent() ?? "?";
+      const text = entry.text() ?? "";
+      const last = conversationHistory.length > 0 ? conversationHistory[conversationHistory.length - 1] : null;
+      if (!last || last.speaker !== agent || last.text !== text) {
+        conversationHistory.push({ speaker: agent, text });
+        if (conversationHistory.length > MAX_CONVO_HISTORY) conversationHistory.shift();
+      }
+    }
+  }
+  let chatHtml = "";
+  for (const msg of conversationHistory) {
+    chatHtml += `<div class="chat-msg"><strong style="color:${agentColor(msg.speaker)}">${msg.speaker}</strong>: ${msg.text}</div>`;
+  }
+  chatLog.innerHTML = chatHtml || '<span class="muted">No conversations yet</span>';
 
   // Relationships
   let rh = "";

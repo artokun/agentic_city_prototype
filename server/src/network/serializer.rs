@@ -71,14 +71,15 @@ pub fn serialize_world(
                 }
             }
 
-            // Add active bounty notice.
-            if let AgentGoal::ExecutingBounty(bid) = goal {
-                if let Some(bounty) = bounty_registry.get(*bid) {
-                    let item_str = fbb.create_string(&format!("📋 bounty: {}", bounty.description));
-                    inv_slots.push(fb::InventorySlot::create(&mut fbb, &fb::InventorySlotArgs {
-                        item_type: Some(item_str), count: 1,
-                    }));
-                }
+            // Show bounty token with its actual name instead of generic "bounty_token".
+            // Look up the agent's active bounty from the store.
+            if let Some(bounty) = bounty_registry.tokens.values()
+                .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
+            {
+                let item_str = fbb.create_string(&format!("bounty: {}", bounty.description));
+                inv_slots.push(fb::InventorySlot::create(&mut fbb, &fb::InventorySlotArgs {
+                    item_type: Some(item_str), count: 1,
+                }));
             }
 
             let inv_vec = fbb.create_vector(&inv_slots);
@@ -240,8 +241,8 @@ fn serialize_inventory<'a, A: flatbuffers::Allocator + 'a>(
     fbb: &mut FlatBufferBuilder<'a, A>, inv: &Inventory,
 ) -> Vec<flatbuffers::WIPOffset<fb::InventorySlot<'a>>> {
     inv.items.iter()
-        // Skip Document/Paycheck — shown as named items from DocumentInventory.
-        .filter(|(item, count)| **item != ItemType::Document && **count > 0)
+        // Skip items shown as named variants elsewhere.
+        .filter(|(item, count)| **item != ItemType::Document && **item != ItemType::BountyToken && **count > 0)
         .map(|(item, count)| {
             let item_str = fbb.create_string(&item.to_string());
             fb::InventorySlot::create(fbb, &fb::InventorySlotArgs { item_type: Some(item_str), count: *count })
