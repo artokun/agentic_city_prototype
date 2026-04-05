@@ -38,6 +38,11 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
         pos.x, pos.y, needs.energy, needs.hunger, needs.boredom, goal,
     );
 
+    // Gold balance with debt info
+    if inv.gold_debt > 0 {
+        ctx += &format!("- DEBT: {} gold owed! Earn gold to pay it off.\n", inv.gold_debt);
+    }
+
     // Inventory
     let items: Vec<String> = inv.items.iter()
         .filter(|(t, _)| **t != ItemType::GoldCoin)
@@ -109,24 +114,45 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
         }
     }
 
-    // Action format
+    // Service price list
     ctx += r#"
+## Service Costs & Effects
+| Service | Building | Cost | Duration | Effect |
+|---------|----------|------|----------|--------|
+| eat_cafe | cafe | 1g | 10 ticks | +40 hunger |
+| buy_coffee | cafe | 1g | 5 ticks | +20 energy (instant boost!) |
+| cook_at_home | apartments | FREE | 30 ticks | +60 hunger |
+| sleep_hotel | hotel | 1g | 30 ticks | +50 energy |
+| sleep_at_home | apartments | FREE | 50 ticks | +80 energy |
+| redeem_paycheck | bounty_board | FREE | 5 ticks | converts paychecks to gold |
+
+## Shift Pay Rates
+| Building | Pay Rate | Food Perk |
+|----------|----------|-----------|
+| cafe | 1g per 1000 ticks | Yes (hunger stable) |
+| market | 1g per 1000 ticks | Yes |
+| warehouse | 1g per 1200 ticks | No |
+| hotel | 1g per 1100 ticks | No |
+
+Shifts pay in paychecks. You must go to bounty_board to redeem_paycheck for gold.
+Bounties pay 4-15g and are much faster than shifts for earning gold.
+The apartments are FREE for sleep and food but far away — hotel costs 1g but is closer.
+
 ## Respond with ONE JSON action:
 ```json
 {"action": "go_to_board", "thought": "why"}
 {"action": "go_to_service", "building": "cafe", "service": "eat_cafe", "thought": "why"}
+{"action": "go_to_service", "building": "cafe", "service": "buy_coffee", "thought": "why"}
 {"action": "go_to_service", "building": "hotel", "service": "sleep_hotel", "thought": "why"}
-{"action": "go_to_service", "building": "library", "service": "read_library", "thought": "why"}
-{"action": "go_to_service", "building": "google", "service": "search_internet", "thought": "why"}
+{"action": "go_to_service", "building": "apartments", "service": "sleep_at_home", "thought": "why"}
+{"action": "go_to_service", "building": "apartments", "service": "cook_at_home", "thought": "why"}
+{"action": "go_to_service", "building": "bounty_board", "service": "redeem_paycheck", "thought": "why"}
 {"action": "look_around", "thought": "why"}
 {"action": "wander", "thought": "why"}
-{"action": "chat_with", "agent": "AgentName", "thought": "why"}
-{"action": "send_message", "recipient": "AgentName", "text": "short message", "thought": "why"}
 {"action": "work_shift", "building": "cafe", "thought": "why"}
 {"action": "leave_shift", "thought": "why"}
-{"action": "go_to_service", "building": "bounty_board", "service": "redeem_paycheck", "thought": "why"}
+{"action": "complete_bounty", "thought": "why"}
 ```
-You can work shifts at: cafe (1g/100t, food perk), market (1g/100t, food perk), warehouse (1g/150t), hotel (1g/120t).
 Shifts are open-ended — you work until you leave or get ejected (low energy/hunger).
 Shifts pay in paychecks (not direct gold). You must go to the bounty board and use redeem_paycheck to convert paychecks into gold.
 Prioritize: critical needs first, then earning gold (redeem paychecks!), then socializing. Be strategic about time/money tradeoffs.

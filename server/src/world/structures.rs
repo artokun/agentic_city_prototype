@@ -54,12 +54,12 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Muffin, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 150, // 1g per 150 ticks (~15 sec)
+                    ticks_per_gold: 1000, // 1g per 150 ticks (~15 sec)
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
                 });
-                ecmds.insert(GoldReserve(0));
+                ecmds.insert(GoldReserve(100));
                 ecmds.insert(RetailConfig {
                     stock: vec![
                         StockItem { item: ItemType::Coffee, max: 10, reorder_at: 2, reorder_qty: 10 },
@@ -75,12 +75,12 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Rations, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 150,
+                    ticks_per_gold: 1000,
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
                 });
-                ecmds.insert(GoldReserve(0));
+                ecmds.insert(GoldReserve(100));
                 ecmds.insert(RetailConfig {
                     stock: vec![
                         StockItem { item: ItemType::Coffee, max: 10, reorder_at: 2, reorder_qty: 10 },
@@ -97,23 +97,23 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::RawMeat, 999);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 200,
+                    ticks_per_gold: 1200,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,
                 });
-                ecmds.insert(GoldReserve(0));
+                ecmds.insert(GoldReserve(100));
                 ecmds.insert(Warehouse);
             }
             "hotel" => {
                 ecmds.insert(Inventory::default());
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 180,
+                    ticks_per_gold: 1100,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,
                 });
-                ecmds.insert(GoldReserve(0));
+                ecmds.insert(GoldReserve(100));
             }
             "google" => {
                 ecmds.insert(Inventory::default());
