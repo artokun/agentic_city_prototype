@@ -30,8 +30,8 @@ fn bounty_templates() -> Vec<BountyTemplate> {
         // --- Free bounties first (no gold required) ---
         BountyTemplate {
             title: "Research project at Google",
-            instructions: "Go to Google and use search_internet or browse_for_fun to do research. Then return to the board.",
-            hidden_criteria: "GM: verify agent visited Google (check action log for google visit or service use at google).",
+            instructions: "Go to Google and use search_internet (costs 1g) to do research. This produces a document in your inventory. Return to the board with the document.",
+            hidden_criteria: "GM: STRICT — verify agent has a 'document' item in their inventory. If no document, REJECT. Simply visiting Google is NOT enough — they must use search_internet which costs 1g and produces a document.",
             objective: BountyObjective::WorkAtBuilding,
             reward: 8,
             claim_items: vec![],
@@ -46,8 +46,8 @@ fn bounty_templates() -> Vec<BountyTemplate> {
         },
         BountyTemplate {
             title: "Warehouse inventory audit",
-            instructions: "Go to the warehouse and look around. Report back to the board.",
-            hidden_criteria: "GM: verify agent visited the warehouse (check action log for warehouse visit).",
+            instructions: "Go to the warehouse and use look_around to inspect the inventory. Report back to the board.",
+            hidden_criteria: "GM: verify agent visited the warehouse AND used look_around there (check action log for both warehouse arrival AND look_around action while at warehouse position).",
             objective: BountyObjective::WorkAtBuilding,
             reward: 6,
             claim_items: vec![],
@@ -78,8 +78,8 @@ fn bounty_templates() -> Vec<BountyTemplate> {
         },
         BountyTemplate {
             title: "Egyptian cats research paper",
-            instructions: "Go to Google and research the history of Egyptian cats. Use search_internet to gather data.",
-            hidden_criteria: "GM: verify agent visited Google and used search_internet or browse_for_fun service.",
+            instructions: "Go to Google and use search_internet (costs 1g) to research the history of Egyptian cats. This produces a document. Return to the board with the document.",
+            hidden_criteria: "GM: STRICT — verify agent has a 'document' item in inventory. Simply visiting Google is NOT enough. They must have used search_internet which produces a document.",
             objective: BountyObjective::WorkAtBuilding,
             reward: 10,
             claim_items: vec![],

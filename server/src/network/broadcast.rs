@@ -34,10 +34,11 @@ pub fn broadcast_state(
     broadcast_tx: Res<BroadcastTx>,
     tick: Res<TickCount>,
     agents: Query<(
-        &AgentId, &AgentName, &GridPos, &AgentAnimation, &ThoughtBubble,
+        Entity, &AgentId, &AgentName, &GridPos, &AgentAnimation, &ThoughtBubble,
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
-        Option<&ActionTimer>, Option<&ActiveConversation>, Option<&ConversationLog>,
+        Option<&ActionTimer>, Option<&ActiveConversation>,
     )>,
+    agent_extras: Query<(Option<&ConversationLog>, Option<&BusinessCards>)>,
     structures: Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,
@@ -48,7 +49,7 @@ pub fn broadcast_state(
     event_log: Res<AgentEventLog>,
 ) {
     let bytes = serializer::serialize_world(
-        &tick, &agents, &structures, &bounty_registry, &board_queues, &agent_names, &event_log,
+        &tick, &agents, &agent_extras, &structures, &bounty_registry, &board_queues, &agent_names, &event_log,
     );
     let _ = broadcast_tx.sender.send(bytes);
 }

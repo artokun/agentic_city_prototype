@@ -9,7 +9,7 @@ use crate::agents::needs::Needs;
 use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
-use crate::items::Inventory;
+use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::bounty::*;
 use crate::world::map::GridPos;
@@ -20,10 +20,11 @@ use schemas::world as fb;
 pub fn serialize_world(
     tick: &TickCount,
     agents: &Query<(
-        &AgentId, &AgentName, &GridPos, &AgentAnimation, &ThoughtBubble,
+        Entity, &AgentId, &AgentName, &GridPos, &AgentAnimation, &ThoughtBubble,
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
-        Option<&ActionTimer>, Option<&ActiveConversation>, Option<&ConversationLog>,
+        Option<&ActionTimer>, Option<&ActiveConversation>,
     )>,
+    agent_extras: &Query<(Option<&ConversationLog>, Option<&BusinessCards>)>,
     structures: &Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,
@@ -37,7 +38,8 @@ pub fn serialize_world(
 
     let agent_offsets: Vec<_> = agents
         .iter()
-        .map(|(id, name, pos, anim, thought, inv, goal, needs, rels, vision, tracking, known_locs, action, active_convo, convo_log)| {
+        .map(|(entity, id, name, pos, anim, thought, inv, goal, needs, rels, vision, tracking, known_locs, action, active_convo)| {
+            let (convo_log, cards) = agent_extras.get(entity).unwrap_or((None, None));
             let id_str = fbb.create_string(&id.0.to_string());
             let name_str = fbb.create_string(&name.0);
             let thought_str = fbb.create_string(&thought.0);
@@ -46,7 +48,28 @@ pub fn serialize_world(
             let action_str = action.map(|a| fbb.create_string(&a.action_name));
             let action_ticks = action.map(|a| a.remaining_ticks).unwrap_or(0);
 
-            let inv_slots = serialize_inventory(&mut fbb, inv);
+            let mut inv_slots = serialize_inventory(&mut fbb, inv);
+
+            // Add business cards as virtual inventory items.
+            if let Some(c) = cards {
+                for (contact_name, _) in &c.contacts {
+                    let item_str = fbb.create_string(&format!("card:{}", contact_name));
+                    inv_slots.push(fb::InventorySlot::create(&mut fbb, &fb::InventorySlotArgs {
+                        item_type: Some(item_str), count: 1,
+                    }));
+                }
+            }
+
+            // Add active bounty notice.
+            if let AgentGoal::ExecutingBounty(bid) = goal {
+                if let Some(bounty) = bounty_registry.get(*bid) {
+                    let item_str = fbb.create_string(&format!("📋 bounty: {}", bounty.description));
+                    inv_slots.push(fb::InventorySlot::create(&mut fbb, &fb::InventorySlotArgs {
+                        item_type: Some(item_str), count: 1,
+                    }));
+                }
+            }
+
             let inv_vec = fbb.create_vector(&inv_slots);
 
             // Relationships.

@@ -86,8 +86,10 @@ YOUR TASK:
 2. Evaluate whether the agent actually completed the bounty based on the criteria
 3. Use submit_verdict with bounty_id="{bounty_id}" to approve or reject
 
-Be FAIR but STRICT. If the agent clearly made an effort and the criteria are loosely met, approve.
-If there's no evidence of completion, reject with a clear explanation.
+Be STRICT. The criteria say exactly what must be verified. Check inventories and action logs carefully.
+If the criteria say "verify agent has document in inventory" and they don't, REJECT.
+If the criteria say "verify agent visited X" and the logs don't show it, REJECT.
+Do not give credit for "effort" — verify the actual evidence.
 
 Do NOT communicate with agents. Just verify and submit your verdict."#
     );
