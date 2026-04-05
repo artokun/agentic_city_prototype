@@ -80,7 +80,7 @@ pub fn flush_thinking_log_system(
                     let json = serde_json::json!({
                         "tick": entry.tick,
                         "agent": name.0,
-                        "response": entry.response,
+                        "text": entry.response,
                     });
                     if let Err(e) = writeln!(file, "{}", json) {
                         tracing::warn!("Failed to write thinking log for {}: {}", name.0, e);

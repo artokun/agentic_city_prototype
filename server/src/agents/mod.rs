@@ -15,6 +15,7 @@ pub mod pathfinding;
 pub mod perception;
 pub mod personality;
 pub mod social;
+pub mod summarizer;
 pub mod thinking_log;
 
 use bevy::prelude::*;
@@ -36,26 +37,31 @@ impl Plugin for AgentPlugin {
             .add_systems(
                 Update,
                 (
-                    needs::needs_decay_system,
-                    movement::movement_system,
-                    actions::action_timer_system,
-                    perception::tracking_update_system,
-                    perception::look_around_system,
-                    perception::start_tracking_system,
-                    perception::inspect_system,
-                    perception::passive_discovery_system,
-                    social::social_matchmaking_system,
-                    social::social_memory_system,
-                    ai::spawn_sessions_system,
-                    ai_chat::ai_chat_system,
-                    ai::ai_decision_system,
-                    behavior::execution_system,
-                    mailbox::process_outgoing_mail_system,
-                    mailbox::deliver_mail_system,
-                    thinking_log::capture_thinking_system,
-                    thinking_log::flush_thinking_log_system,
-                    game_events::ensure_event_state_system,
-                    game_events::game_events_system,
+                    (
+                        needs::needs_decay_system,
+                        movement::movement_system,
+                        actions::action_timer_system,
+                        perception::tracking_update_system,
+                        perception::look_around_system,
+                        perception::start_tracking_system,
+                        perception::inspect_system,
+                        perception::passive_discovery_system,
+                        social::social_matchmaking_system,
+                        social::social_memory_system,
+                    ).chain(),
+                    (
+                        ai::spawn_sessions_system,
+                        ai_chat::ai_chat_system,
+                        ai::ai_decision_system,
+                        summarizer::summarize_thoughts_system,
+                        behavior::execution_system,
+                        mailbox::process_outgoing_mail_system,
+                        mailbox::deliver_mail_system,
+                        thinking_log::capture_thinking_system,
+                        thinking_log::flush_thinking_log_system,
+                        game_events::ensure_event_state_system,
+                        game_events::game_events_system,
+                    ).chain(),
                 )
                     .chain(),
             );
