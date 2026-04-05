@@ -301,13 +301,8 @@ pub fn ai_context_system(
         if tick.0 - session.last_decision_tick < CONTEXT_INTERVAL { continue; }
 
         // Only send context when agent can act.
-        // GoingToBoard/GoingToService/PerformingAction are NOT included — let the agent arrive/finish first.
-        if !matches!(goal,
-            AgentGoal::Idle | AgentGoal::Wandering |
-            AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_) |
-            AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard |
-            AgentGoal::ReturningToBoard(_)
-        ) { continue; }
+        // PerformingAction is NOT included — let the action timer finish first.
+        if matches!(goal, AgentGoal::PerformingAction) { continue; }
 
         // Show bounties if at the board (either via InsideBuilding or InteractingWithBoard goal).
         let at_board = matches!(goal, AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard)
