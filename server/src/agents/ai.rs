@@ -277,6 +277,7 @@ pub fn ai_context_system(
         &AgentGoal, &Needs, &Inventory, &KnownLocations, &Relationships,
         Option<&ActionTimer>, Option<&Path>,
         Option<&InsideBuilding>, Option<&ShiftWorker>,
+        &crate::items::CarrySlots, &BusinessCards,
     )>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
@@ -284,6 +285,7 @@ pub fn ai_context_system(
     for (
         entity, name, pos, speed, goal, needs, inv, known_locs, rels,
         action_timer, path, inside_building, shift_worker,
+        carry_slots, business_cards,
     ) in &agents {
         if action_timer.is_some() { continue; }
         let has_path = path.is_some_and(|p| !p.0.is_empty());
@@ -366,6 +368,7 @@ pub fn ai_context_system(
             &name.0, pos, needs, inv, goal, known_locs, rels,
             speed.0, &available_bounties, &nearby, &location_tools,
             active_bounty_desc.as_deref(),
+            carry_slots, business_cards,
         );
 
         // Send context as a user message. Claude will think and call game_action tool.

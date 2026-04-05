@@ -72,6 +72,85 @@ impl ItemType {
     }
 }
 
+impl ItemType {
+    pub fn is_carry_food(&self) -> bool {
+        matches!(self, ItemType::Muffin | ItemType::Sandwich | ItemType::Rations | ItemType::Soup)
+    }
+
+    pub fn is_carry_drink(&self) -> bool {
+        matches!(self, ItemType::Coffee)
+    }
+}
+
+#[derive(Component, Debug, Clone)]
+pub struct CarrySlots {
+    pub food: [Option<ItemType>; 2],
+    pub drink: Option<ItemType>,
+}
+
+impl Default for CarrySlots {
+    fn default() -> Self {
+        Self {
+            food: [None, None],
+            drink: None,
+        }
+    }
+}
+
+impl CarrySlots {
+    pub fn add_food(&mut self, item: ItemType) -> bool {
+        if !item.is_carry_food() {
+            return false;
+        }
+        for slot in &mut self.food {
+            if slot.is_none() {
+                *slot = Some(item);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn add_drink(&mut self, item: ItemType) -> bool {
+        if !item.is_carry_drink() {
+            return false;
+        }
+        if self.drink.is_none() {
+            self.drink = Some(item);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_food(&mut self, item: ItemType) -> bool {
+        for slot in &mut self.food {
+            if *slot == Some(item) {
+                *slot = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn has_food(&self, item: ItemType) -> bool {
+        self.food.iter().any(|s| *s == Some(item))
+    }
+
+    pub fn contents(&self) -> Vec<ItemType> {
+        let mut out = Vec::new();
+        for slot in &self.food {
+            if let Some(item) = slot {
+                out.push(*item);
+            }
+        }
+        if let Some(item) = self.drink {
+            out.push(item);
+        }
+        out
+    }
+}
+
 impl fmt::Display for ItemType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

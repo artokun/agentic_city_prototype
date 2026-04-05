@@ -1,10 +1,12 @@
 use bevy::prelude::*;
 
 use super::components::*;
+use super::conversation::ActiveConversation;
 use crate::world::map::GridPos;
 
 /// Advances agents along their path based on speed.
 /// Each tick of the MoveTimer, the agent moves one tile.
+/// Agents in an active conversation do not move.
 pub fn movement_system(
     time: Res<Time>,
     mut agents: Query<(
@@ -13,9 +15,17 @@ pub fn movement_system(
         &mut AgentAnimation,
         &mut MoveTimer,
         Option<&mut Path>,
+        Option<&ActiveConversation>,
     )>,
 ) {
-    for (name, mut pos, mut anim, mut move_timer, path) in &mut agents {
+    for (name, mut pos, mut anim, mut move_timer, path, active_convo) in &mut agents {
+        // Agents in a conversation don't move.
+        if active_convo.is_some() {
+            if anim.0 == AnimState::Walking {
+                anim.0 = AnimState::Idle;
+            }
+            continue;
+        }
         move_timer.0.tick(time.delta());
 
         let Some(mut path) = path else {

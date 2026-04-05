@@ -94,7 +94,13 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "claim_bounty",
                                     "leave_board",
                                     "go_to",
-                                    "help"
+                                    "help",
+                                    "start_conversation",
+                                    "say",
+                                    "end_conversation",
+                                    "offer_trade",
+                                    "accept_trade",
+                                    "reject_trade"
                                 ]
                             },
                             "building": {
@@ -103,7 +109,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "service": {
                                 "type": "string",
-                                "description": "Service to use (eat_cafe, buy_coffee, sleep_hotel, sleep_at_home, cook_at_home, redeem_paycheck, search_internet)"
+                                "description": "Service to use (eat_cafe, buy_coffee, sleep_hotel, sleep_at_home, cook_at_home, redeem_paycheck, search_internet). For offer_trade: comma-separated requested items (e.g. 'gold_coin,coffee')"
                             },
                             "agent": {
                                 "type": "string",
@@ -111,7 +117,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "text": {
                                 "type": "string",
-                                "description": "Message text (for send_message)"
+                                "description": "Message text (for send_message, say). For offer_trade: comma-separated offered items (e.g. 'muffin,sandwich')"
                             },
                             "feedback": {
                                 "type": "string",

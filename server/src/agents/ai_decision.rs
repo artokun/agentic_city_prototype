@@ -2,7 +2,7 @@ use crate::agents::components::*;
 use crate::agents::needs::Needs;
 use crate::agents::perception::KnownLocations;
 use crate::agents::social::Relationships;
-use crate::items::{Inventory, ItemType};
+use crate::items::{CarrySlots, Inventory, ItemType};
 use crate::world::bounty::BountyRegistry;
 use crate::world::map::GridPos;
 
@@ -20,6 +20,8 @@ pub fn build_context(
     nearby_agents: &[(String, GridPos)],
     location_tools: &[&str],
     active_bounty: Option<&str>,
+    carry_slots: &CarrySlots,
+    business_cards: &BusinessCards,
 ) -> String {
     let gold = inv.count(ItemType::GoldCoin);
 
@@ -55,6 +57,20 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
     if !items.is_empty() {
         ctx += &format!("- Inventory: {}\n", items.join(", "));
     }
+
+    // Carry slots
+    let carried = carry_slots.contents();
+    if !carried.is_empty() {
+        let items_str: Vec<String> = carried.iter().map(|i| format!("{}", i)).collect();
+        ctx += &format!("- Carrying: {}\n", items_str.join(", "));
+    }
+
+    // Contacts (business cards)
+    if !business_cards.contacts.is_empty() {
+        let contacts: Vec<&String> = business_cards.contacts.iter().collect();
+        ctx += &format!("- Contacts (have their card): {}\n", contacts.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+    }
+    ctx += &format!("- Business cards remaining: {}\n", business_cards.cards_remaining);
 
     // Known locations with distances
     ctx += "\n## Known Locations\n";

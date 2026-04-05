@@ -4,12 +4,16 @@
 use bevy::prelude::*;
 use tokio::sync::mpsc;
 
+use crate::agents::ai::AgentSessions;
 use crate::agents::ai_decision::AgentAction;
 use crate::agents::components::*;
+use crate::agents::conversation::{ActiveConversation, ConversationLog, ConversationMessage};
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::mailbox::WantsToSendMessage;
+use crate::agents::needs::Needs;
 use crate::agents::pathfinding;
 use crate::agents::perception::{KnownLocations, WantsToLook};
+use crate::agents::trading::{self, TradeProposal};
 use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::BountyRegistry;
@@ -48,6 +52,38 @@ pub struct MpcAction {
     pub y: Option<i32>,
 }
 
+/// Marker component: queued conversation message to apply to both agents' logs.
+#[derive(Component)]
+pub struct PendingConversationMessage {
+    pub message: ConversationMessage,
+    pub partner: Entity,
+}
+
+/// System: apply pending conversation messages to ConversationLog on both agents
+/// and boost partner's boredom.
+pub fn apply_conversation_messages_system(
+    mut commands: Commands,
+    pending: Query<(Entity, &PendingConversationMessage)>,
+    mut logs: Query<&mut ConversationLog>,
+    mut needs: Query<&mut Needs>,
+) {
+    for (entity, pending_msg) in &pending {
+        // Add message to speaker's log.
+        if let Ok(mut log) = logs.get_mut(entity) {
+            log.messages.push(pending_msg.message.clone());
+        }
+        // Add message to partner's log and boost boredom.
+        if let Ok(mut log) = logs.get_mut(pending_msg.partner) {
+            log.messages.push(pending_msg.message.clone());
+        }
+        if let Ok(mut partner_needs) = needs.get_mut(pending_msg.partner) {
+            partner_needs.boredom = (partner_needs.boredom + 1.0).min(100.0);
+        }
+        // Remove the marker.
+        commands.entity(entity).remove::<PendingConversationMessage>();
+    }
+}
+
 /// System: apply pending MCP actions to agent entities.
 pub fn apply_mcp_actions_system(
     mut commands: Commands,
@@ -57,22 +93,31 @@ pub fn apply_mcp_actions_system(
     mut event_log: ResMut<AgentEventLog>,
     mut suggestion_box: ResMut<SuggestionBox>,
     mut bounty_registry: ResMut<BountyRegistry>,
+    sessions: Res<AgentSessions>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos,
         &mut AgentGoal, &mut ThoughtBubble,
         &KnownLocations, Option<&ShiftWorker>,
+        &mut Needs,
+        Option<&ActiveConversation>,
     )>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
+    mut trade_proposals: Query<(Entity, &mut TradeProposal)>,
 ) {
     let structure_list: Vec<(Entity, GridPos, String)> = structures
         .iter().map(|(e, ent, sprite)| (e, ent.0, sprite.0.clone())).collect();
 
+    // Pre-collect agent info for cross-agent lookups (avoids borrow conflicts).
+    let agent_snapshot: Vec<(Entity, String, GridPos, bool)> = agents.iter()
+        .map(|(e, n, p, _, _, _, _, _, ac)| (e, n.0.clone(), *p, ac.is_some()))
+        .collect();
+
     for mcp_action in pending.actions.drain(..) {
         // Find the agent entity by name.
         let agent = agents.iter_mut()
-            .find(|(_, name, _, _, _, _, _)| name.0 == mcp_action.agent_name);
+            .find(|(_, name, _, _, _, _, _, _, _)| name.0 == mcp_action.agent_name);
 
-        let Some((entity, name, pos, mut goal, mut thought, known_locs, shift_worker)) = agent else {
+        let Some((entity, name, pos, mut goal, mut thought, known_locs, shift_worker, mut needs, active_convo)) = agent else {
             tracing::warn!("[MCP] Agent '{}' not found", mcp_action.agent_name);
             continue;
         };
@@ -297,6 +342,325 @@ pub fn apply_mcp_actions_system(
             "leave_board" => {
                 *goal = AgentGoal::Idle;
                 thought.0 = "Left the bounty board.".into();
+            }
+
+            "start_conversation" => {
+                let target_name = mcp_action.agent_target.as_deref().unwrap_or("unknown");
+
+                if active_convo.is_some() {
+                    thought.0 = "ERROR: Already in a conversation. Use end_conversation first.".into();
+                } else {
+                    // Look up target from pre-collected snapshot (avoids borrow conflict).
+                    let target_info = agent_snapshot.iter()
+                        .find(|(_, n, _, _)| n == target_name)
+                        .map(|(e, n, p, in_convo)| (*e, n.clone(), *p, *in_convo));
+
+                    match target_info {
+                        None => {
+                            thought.0 = format!("ERROR: Agent '{}' not found.", target_name);
+                        }
+                        Some((_, _, _, true)) => {
+                            thought.0 = format!("ERROR: {} is already in a conversation.", target_name);
+                        }
+                        Some((target_entity, partner_name, target_pos, false)) => {
+                            let dist = (pos.x - target_pos.x).abs() + (pos.y - target_pos.y).abs();
+                            if dist > 2 {
+                                thought.0 = format!(
+                                    "ERROR: {} is {} tiles away — must be within 2 tiles to start a conversation.",
+                                    target_name, dist,
+                                );
+                            } else {
+                                // Stop both agents from walking.
+                                commands.entity(entity).remove::<Path>();
+                                commands.entity(target_entity).remove::<Path>();
+
+                                // Insert ActiveConversation and ConversationLog on both.
+                                let self_name = name.0.clone();
+
+                                commands.entity(entity).insert((
+                                    ActiveConversation {
+                                        partner: target_entity,
+                                        partner_name: partner_name.clone(),
+                                        started_tick: tick.0,
+                                    },
+                                    ConversationLog::default(),
+                                ));
+
+                                commands.entity(target_entity).insert((
+                                    ActiveConversation {
+                                        partner: entity,
+                                        partner_name: self_name.clone(),
+                                        started_tick: tick.0,
+                                    },
+                                    ConversationLog::default(),
+                                ));
+
+                                thought.0 = format!("Started conversation with {}.", partner_name);
+
+                                event_log.push(LogEvent {
+                                    tick: tick.0,
+                                    agent: self_name.clone(),
+                                    kind: LogKind::System,
+                                    text: format!("Started conversation with {}", partner_name),
+                                });
+
+                                // Notify the target agent via their session.
+                                if let Some(session) = sessions.sessions.get(&target_entity) {
+                                    let _ = session.prompt_tx.try_send(
+                                        format!("{} started a face-to-face conversation with you! Use 'say' to respond or 'end_conversation' to leave.", self_name),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            "say" => {
+                let message_text = mcp_action.text.as_deref().unwrap_or("");
+
+                if message_text.is_empty() {
+                    thought.0 = "ERROR: 'say' requires a 'text' parameter.".into();
+                } else if let Some(convo) = active_convo {
+                    let partner_entity = convo.partner;
+                    let partner_name = convo.partner_name.clone();
+                    let self_name = name.0.clone();
+
+                    let msg = ConversationMessage {
+                        speaker: self_name.clone(),
+                        text: message_text.to_string(),
+                        tick: tick.0,
+                    };
+
+                    // Add message to both agents' ConversationLogs via commands.
+                    // We can't mutably access ConversationLog from the current query,
+                    // so we use a deferred approach: insert updated logs.
+                    // For simplicity, we'll use commands to add a marker component
+                    // and handle it. But since ConversationLog isn't in the query,
+                    // let's just use commands to run a closure.
+
+                    // Actually, we can't access ConversationLog here since it's not
+                    // in the query. We'll queue a pending conversation message instead.
+                    // For now, let's insert the message on the entity directly.
+                    // We'll handle this with a separate small system or direct commands.
+
+                    // Use a simpler approach: store pending messages in a resource.
+                    // But to keep it self-contained, we'll just rebuild the log component.
+
+                    thought.0 = format!("Said: \"{}\"", message_text);
+
+                    // Boost boredom for the speaker.
+                    needs.boredom = (needs.boredom + 1.0).min(100.0);
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: self_name.clone(),
+                        kind: LogKind::Speech,
+                        text: format!("[to {}] {}", partner_name, message_text),
+                    });
+
+                    // Notify the partner via their session.
+                    if let Some(session) = sessions.sessions.get(&partner_entity) {
+                        let _ = session.prompt_tx.try_send(
+                            format!("{} says: \"{}\"", self_name, message_text),
+                        );
+                    }
+
+                    // Boost partner's boredom too (via deferred command).
+                    // We can't get mut Needs for the partner from the same query,
+                    // so we'll queue a pending boredom boost.
+                    // Store the message and partner boredom boost as pending.
+                    // We'll use a simple approach: insert a marker component.
+                    commands.entity(entity).insert(PendingConversationMessage {
+                        message: msg.clone(),
+                        partner: partner_entity,
+                    });
+                } else {
+                    thought.0 = "ERROR: Not in a conversation. Use start_conversation first.".into();
+                }
+            }
+
+            "end_conversation" => {
+                if let Some(convo) = active_convo {
+                    let partner_entity = convo.partner;
+                    let partner_name = convo.partner_name.clone();
+                    let self_name = name.0.clone();
+
+                    // Remove conversation components from both agents.
+                    commands.entity(entity).remove::<ActiveConversation>();
+                    commands.entity(entity).remove::<ConversationLog>();
+                    commands.entity(partner_entity).remove::<ActiveConversation>();
+                    commands.entity(partner_entity).remove::<ConversationLog>();
+
+                    thought.0 = format!("Ended conversation with {}.", partner_name);
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: self_name.clone(),
+                        kind: LogKind::System,
+                        text: format!("Ended conversation with {}", partner_name),
+                    });
+
+                    // Notify the partner.
+                    if let Some(session) = sessions.sessions.get(&partner_entity) {
+                        let _ = session.prompt_tx.try_send(
+                            format!("{} ended the conversation.", self_name),
+                        );
+                    }
+                } else {
+                    thought.0 = "ERROR: Not in a conversation. Nothing to end.".into();
+                }
+            }
+
+            "offer_trade" => {
+                if let Some(convo) = active_convo {
+                    let partner_entity = convo.partner;
+                    let partner_name = convo.partner_name.clone();
+                    let self_name = name.0.clone();
+
+                    // Parse offered items from 'text' and requested items from 'service'.
+                    let offered_str = mcp_action.text.as_deref().unwrap_or("");
+                    let requested_str = mcp_action.service.as_deref().unwrap_or("");
+
+                    let offered = trading::parse_item_list(offered_str);
+                    let requested = trading::parse_item_list(requested_str);
+
+                    match (offered, requested) {
+                        (Ok(offered_items), Ok(requested_items)) if !offered_items.is_empty() || !requested_items.is_empty() => {
+                            // Check for existing trade proposal between these agents.
+                            let existing = trade_proposals.iter()
+                                .any(|(_, tp)| {
+                                    (tp.proposer == entity && tp.responder == partner_entity)
+                                    || (tp.proposer == partner_entity && tp.responder == entity)
+                                });
+
+                            if existing {
+                                thought.0 = "ERROR: A trade is already pending with this partner. Accept, reject, or wait.".into();
+                            } else {
+                                let offered_desc: Vec<String> = offered_items.iter().map(|i| i.to_string()).collect();
+                                let requested_desc: Vec<String> = requested_items.iter().map(|i| i.to_string()).collect();
+
+                                // Spawn a TradeProposal entity.
+                                commands.spawn(TradeProposal {
+                                    proposer: entity,
+                                    responder: partner_entity,
+                                    offered_items,
+                                    requested_items,
+                                    proposer_accepted: true, // proposer auto-accepts their own offer
+                                    responder_accepted: false,
+                                });
+
+                                thought.0 = format!(
+                                    "Offered trade to {}: giving [{}] for [{}].",
+                                    partner_name,
+                                    offered_desc.join(", "),
+                                    requested_desc.join(", "),
+                                );
+
+                                event_log.push(LogEvent {
+                                    tick: tick.0,
+                                    agent: self_name.clone(),
+                                    kind: LogKind::Action,
+                                    text: format!(
+                                        "Offered trade to {}: [{}] for [{}]",
+                                        partner_name,
+                                        offered_desc.join(", "),
+                                        requested_desc.join(", "),
+                                    ),
+                                });
+
+                                // Notify the partner.
+                                if let Some(session) = sessions.sessions.get(&partner_entity) {
+                                    let _ = session.prompt_tx.try_send(
+                                        format!(
+                                            "{} offers a trade: they give [{}] and want [{}]. Use accept_trade or reject_trade to respond.",
+                                            self_name,
+                                            offered_desc.join(", "),
+                                            requested_desc.join(", "),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        (Err(e), _) | (_, Err(e)) => {
+                            thought.0 = format!("ERROR: {}", e);
+                        }
+                        _ => {
+                            thought.0 = "ERROR: offer_trade requires 'text' (offered items, comma-separated) and 'service' (requested items, comma-separated).".into();
+                        }
+                    }
+                } else {
+                    thought.0 = "ERROR: Must be in a conversation to offer a trade. Use start_conversation first.".into();
+                }
+            }
+
+            "accept_trade" => {
+                let self_name = name.0.clone();
+
+                // Find a trade proposal where this agent is a participant.
+                let proposal = trade_proposals.iter_mut()
+                    .find(|(_, tp)| tp.proposer == entity || tp.responder == entity);
+
+                if let Some((_, mut tp)) = proposal {
+                    if tp.proposer == entity {
+                        tp.proposer_accepted = true;
+                        thought.0 = "Accepted the trade on your side.".into();
+                    } else {
+                        tp.responder_accepted = true;
+                        thought.0 = "Accepted the trade on your side.".into();
+                    }
+
+                    let partner = if tp.proposer == entity { tp.responder } else { tp.proposer };
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: self_name.clone(),
+                        kind: LogKind::Action,
+                        text: "Accepted trade.".into(),
+                    });
+
+                    // Notify the partner.
+                    if let Some(session) = sessions.sessions.get(&partner) {
+                        let _ = session.prompt_tx.try_send(
+                            format!("{} accepted the trade!", self_name),
+                        );
+                    }
+                } else {
+                    thought.0 = "ERROR: No pending trade to accept.".into();
+                }
+            }
+
+            "reject_trade" => {
+                let self_name = name.0.clone();
+
+                // Find and remove a trade proposal where this agent is a participant.
+                let proposal = trade_proposals.iter()
+                    .find(|(_, tp)| tp.proposer == entity || tp.responder == entity)
+                    .map(|(e, tp)| (e, tp.proposer, tp.responder));
+
+                if let Some((proposal_entity, proposer, responder)) = proposal {
+                    let partner = if proposer == entity { responder } else { proposer };
+
+                    commands.entity(proposal_entity).despawn();
+
+                    thought.0 = "Rejected the trade.".into();
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: self_name.clone(),
+                        kind: LogKind::Action,
+                        text: "Rejected trade.".into(),
+                    });
+
+                    // Notify the partner.
+                    if let Some(session) = sessions.sessions.get(&partner) {
+                        let _ = session.prompt_tx.try_send(
+                            format!("{} rejected the trade.", self_name),
+                        );
+                    }
+                } else {
+                    thought.0 = "ERROR: No pending trade to reject.".into();
+                }
             }
 
             "help" => {

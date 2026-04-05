@@ -347,6 +347,8 @@ async fn handle_game_action(
         "go_to_board", "go_to_service", "look_around", "wander",
         "work_shift", "leave_shift", "complete_bounty", "chat_with", "send_message",
         "claim_bounty", "leave_board", "go_to", "help",
+        "start_conversation", "say", "end_conversation",
+        "offer_trade", "accept_trade", "reject_trade",
     ];
 
     if !valid_actions.contains(&req.action.as_str()) {
@@ -400,6 +402,28 @@ async fn handle_game_action(
             let recipient = req.agent.as_deref().unwrap_or("unknown");
             let text = req.text.as_deref().unwrap_or("");
             result_text = format!("Message sent to {}.", recipient);
+        }
+        "start_conversation" => {
+            let target = req.agent.as_deref().unwrap_or("unknown");
+            result_text = format!(
+                "Starting face-to-face conversation with {}. Both agents will stop moving. Use 'say' to speak and 'end_conversation' to finish.",
+                target,
+            );
+        }
+        "say" => {
+            result_text = "Message delivered to your conversation partner.".into();
+        }
+        "end_conversation" => {
+            result_text = "Conversation ended. Both agents are free to move again.".into();
+        }
+        "offer_trade" => {
+            result_text = "Trade offer sent to your conversation partner. They can accept_trade or reject_trade. Pass offered items in 'text' (comma-separated) and requested items in 'service' (comma-separated).".into();
+        }
+        "accept_trade" => {
+            result_text = "Accepted the trade. If both sides have accepted, items will be swapped automatically.".into();
+        }
+        "reject_trade" => {
+            result_text = "Trade rejected and removed. Both parties are notified.".into();
         }
         "help" => {
             result_text = "Thank you for your feedback! Your suggestion has been logged and will be reviewed. \

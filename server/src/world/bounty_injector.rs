@@ -121,6 +121,12 @@ fn bounty_templates() -> Vec<(&'static str, BountyObjective, u32, Vec<(ItemType,
             12,
             vec![],
         ),
+        (
+            "Talk to 2 agents and collect their business cards",
+            BountyObjective::WorkAtBuilding,
+            2,
+            vec![],
+        ),
     ]
 }
 

@@ -6,6 +6,7 @@ pub mod ai_decision;
 pub mod behavior;
 pub mod claude;
 pub mod components;
+pub mod conversation;
 pub mod event_log;
 pub mod game_events;
 pub mod mailbox;
@@ -17,6 +18,7 @@ pub mod personality;
 pub mod social;
 pub mod summarizer;
 pub mod thinking_log;
+pub mod trading;
 
 use bevy::prelude::*;
 
@@ -62,6 +64,7 @@ impl Plugin for AgentPlugin {
                         thinking_log::flush_thinking_log_system,
                         game_events::ensure_event_state_system,
                         game_events::game_events_system,
+                        trading::trade_system,
                     ).chain(),
                 )
                     .chain(),

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::agents::action_log::ActionLog;
@@ -7,9 +8,24 @@ use crate::agents::needs::Needs;
 use crate::agents::perception::{InspectionLog, KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
 use crate::agents::thinking_log::ThinkingLog;
-use crate::items::{DocumentInventory, Inventory};
+use crate::items::{CarrySlots, DocumentInventory, Inventory};
 use crate::world::map::GridPos;
 use crate::world::shifts::PaycheckWallet;
+
+#[derive(Component, Debug, Clone)]
+pub struct BusinessCards {
+    pub cards_remaining: u32,
+    pub contacts: HashSet<String>,
+}
+
+impl Default for BusinessCards {
+    fn default() -> Self {
+        Self {
+            cards_remaining: 5,
+            contacts: HashSet::new(),
+        }
+    }
+}
 
 #[derive(Component)]
 pub struct AgentId(pub Uuid);
@@ -105,6 +121,8 @@ pub struct AgentBundle {
     pub paycheck_wallet: PaycheckWallet,
     pub documents: DocumentInventory,
     pub thinking_log: ThinkingLog,
+    pub carry_slots: CarrySlots,
+    pub business_cards: BusinessCards,
 }
 
 impl AgentBundle {
@@ -134,6 +152,8 @@ impl AgentBundle {
             paycheck_wallet: PaycheckWallet::default(),
             documents: DocumentInventory::default(),
             thinking_log: ThinkingLog::default(),
+            carry_slots: CarrySlots::default(),
+            business_cards: BusinessCards::default(),
         }
     }
 }
