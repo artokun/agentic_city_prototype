@@ -333,6 +333,12 @@ fn apply_action(
             }
         }
         AgentAction::ChatWith { .. } => { **goal = AgentGoal::Wandering; }
+        AgentAction::SendMessage { recipient, text } => {
+            commands.entity(entity).insert(super::mailbox::WantsToSendMessage {
+                recipient_name: recipient.clone(),
+                text: text.clone(),
+            });
+        }
         AgentAction::WorkShift { .. } | AgentAction::LeaveShift => {}
         AgentAction::DoNothing => {}
     }

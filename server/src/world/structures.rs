@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::items::{Inventory, ItemType};
 use crate::world::bounty::*;
+use crate::world::economy::{GoldReserve, RetailConfig, StockItem, Warehouse};
 use crate::world::map::{city_buildings, GridPos};
 use crate::world::shifts::Staffable;
 
@@ -58,6 +59,13 @@ fn spawn_structures(mut commands: Commands) {
                     needs_worker: false,
                     food_perk: true,
                 });
+                ecmds.insert(GoldReserve(0));
+                ecmds.insert(RetailConfig {
+                    stock: vec![
+                        StockItem { item: ItemType::Coffee, max: 10, reorder_at: 2, reorder_qty: 10 },
+                        StockItem { item: ItemType::Muffin, max: 10, reorder_at: 2, reorder_qty: 5 },
+                    ],
+                });
             }
             "market" => {
                 let mut inv = Inventory::default();
@@ -71,6 +79,15 @@ fn spawn_structures(mut commands: Commands) {
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
+                });
+                ecmds.insert(GoldReserve(0));
+                ecmds.insert(RetailConfig {
+                    stock: vec![
+                        StockItem { item: ItemType::Coffee, max: 10, reorder_at: 2, reorder_qty: 10 },
+                        StockItem { item: ItemType::Muffin, max: 10, reorder_at: 2, reorder_qty: 5 },
+                        StockItem { item: ItemType::Sandwich, max: 10, reorder_at: 2, reorder_qty: 5 },
+                        StockItem { item: ItemType::Rations, max: 10, reorder_at: 2, reorder_qty: 10 },
+                    ],
                 });
             }
             "warehouse" => {
@@ -87,6 +104,8 @@ fn spawn_structures(mut commands: Commands) {
                     needs_worker: false,
                     food_perk: false,
                 });
+                ecmds.insert(GoldReserve(0));
+                ecmds.insert(Warehouse);
             }
             "hotel" => {
                 ecmds.insert(Inventory::default());
@@ -96,6 +115,7 @@ fn spawn_structures(mut commands: Commands) {
                     needs_worker: false,
                     food_perk: false,
                 });
+                ecmds.insert(GoldReserve(0));
             }
             "google" => {
                 ecmds.insert(Inventory::default());

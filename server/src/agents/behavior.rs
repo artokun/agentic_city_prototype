@@ -170,6 +170,7 @@ pub fn execution_system(
                                     effects: svc.effects,
                                     gold_cost: svc.gold_cost,
                                     paid: false,
+                                    consumes_item: svc.consumes_item,
                                 });
                                 *goal = AgentGoal::PerformingAction;
                             } else { *goal = AgentGoal::Idle; }
@@ -405,6 +406,7 @@ pub fn execution_system(
                                         effects: services::ServiceEffects { boredom: 15.0, ..Default::default() },
                                         gold_cost: 0,
                                         paid: true,
+                                        consumes_item: None,
                                     });
                                     thought.0 = format!("Working: {}...", bounty.description);
                                     tracing::info!("{} working: {}", name.0, bounty.description);

@@ -6,6 +6,7 @@ pub mod map;
 pub mod services;
 pub mod shifts;
 pub mod structures;
+pub mod transactions;
 
 use bevy::prelude::*;
 
@@ -23,6 +24,7 @@ impl Plugin for WorldPlugin {
             .add_systems(Update, bounty_contract::bounty_expiry_system)
             .add_systems(Update, economy::auto_restock_system)
             .add_systems(Update, shifts::shift_demand_system)
-            .add_systems(Update, shifts::shift_tracking_system);
+            .add_systems(Update, shifts::shift_tracking_system)
+            .add_systems(Update, transactions::transaction_system);
     }
 }

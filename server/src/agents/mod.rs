@@ -8,6 +8,7 @@ pub mod claude;
 pub mod components;
 pub mod event_log;
 pub mod game_events;
+pub mod mailbox;
 pub mod movement;
 pub mod needs;
 pub mod pathfinding;
@@ -47,6 +48,8 @@ impl Plugin for AgentPlugin {
                     ai_chat::ai_chat_system,
                     ai::ai_decision_system,
                     behavior::execution_system,
+                    mailbox::process_outgoing_mail_system,
+                    mailbox::deliver_mail_system,
                     game_events::ensure_event_state_system,
                     game_events::game_events_system,
                 )

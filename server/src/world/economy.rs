@@ -33,7 +33,7 @@ pub struct Warehouse;
 /// System: check retail buildings for low stock, auto-create restock bounties.
 pub fn auto_restock_system(
     tick: Res<TickCount>,
-    retailers: Query<(Entity, &SpriteType, &Inventory, &RetailConfig, &GoldReserve)>,
+    mut retailers: Query<(Entity, &SpriteType, &Inventory, &RetailConfig, &mut GoldReserve)>,
     mut bounty_registry: ResMut<BountyRegistry>,
 ) {
     // Only check every 50 ticks (5 seconds).
@@ -41,7 +41,7 @@ pub fn auto_restock_system(
         return;
     }
 
-    for (_entity, sprite, inv, config, gold_reserve) in &retailers {
+    for (_entity, sprite, inv, config, mut gold_reserve) in &mut retailers {
         for stock in &config.stock {
             let current = inv.count(stock.item);
 

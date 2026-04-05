@@ -109,6 +109,7 @@ pub fn social_matchmaking_system(
                         effects: ServiceEffects { boredom: CHAT_BOREDOM_BOOST, ..Default::default() },
                         gold_cost: 0,
                         paid: true,
+                        consumes_item: None,
                     },
                 ));
 
@@ -120,6 +121,7 @@ pub fn social_matchmaking_system(
                         effects: ServiceEffects { boredom: CHAT_BOREDOM_BOOST, ..Default::default() },
                         gold_cost: 0,
                         paid: true,
+                        consumes_item: None,
                     },
                 ));
 

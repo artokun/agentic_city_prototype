@@ -109,6 +109,7 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 {"action": "look_around", "thought": "why"}
 {"action": "wander", "thought": "why"}
 {"action": "chat_with", "agent": "AgentName", "thought": "why"}
+{"action": "send_message", "recipient": "AgentName", "text": "short message", "thought": "why"}
 {"action": "work_shift", "building": "cafe", "thought": "why"}
 {"action": "leave_shift", "thought": "why"}
 ```
@@ -130,6 +131,7 @@ pub enum AgentAction {
     ChatWith { agent: String },
     WorkShift { building: String },
     LeaveShift,
+    SendMessage { recipient: String, text: String },
     DoNothing,
 }
 
@@ -154,6 +156,11 @@ pub fn parse_action(response: &str) -> (AgentAction, String) {
                 "chat_with" => {
                     let agent = val.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
                     AgentAction::ChatWith { agent }
+                }
+                "send_message" => {
+                    let recipient = val.get("recipient").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                    let text = val.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                    AgentAction::SendMessage { recipient, text }
                 }
                 "work_shift" => {
                     let building = val.get("building").and_then(|b| b.as_str()).unwrap_or("").to_string();
