@@ -297,13 +297,15 @@ pub fn ai_context_system(
         // Only send context when agent can act.
         if !matches!(goal,
             AgentGoal::Idle | AgentGoal::Wandering |
-            AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_)
+            AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_) |
+            AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard
         ) { continue; }
 
-        // Only show bounties if at the board.
-        let at_board = inside_building.map_or(false, |ib| {
-            structures.get(ib.0).map_or(false, |(_, _, s)| s.0 == "bounty_board")
-        });
+        // Show bounties if at the board (either via InsideBuilding or InteractingWithBoard goal).
+        let at_board = matches!(goal, AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard)
+            || inside_building.map_or(false, |ib| {
+                structures.get(ib.0).map_or(false, |(_, _, s)| s.0 == "bounty_board")
+            });
         let available_bounties: Vec<String> = if at_board {
             bounty_registry.available().iter()
                 .map(|b| format!("{} ({}g) — {}", b.description, b.reward_gold,
