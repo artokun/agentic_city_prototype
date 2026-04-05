@@ -162,7 +162,9 @@ pub fn serialize_world(
     }).collect();
     let structures_vec = fbb.create_vector(&struct_offsets);
 
-    let bounty_offsets: Vec<_> = bounty_registry.bounties.iter().map(|b| {
+    let bounty_offsets: Vec<_> = bounty_registry.bounties.iter()
+        .filter(|b| b.state != BountyState::Completed)
+        .map(|b| {
         let id_str = fbb.create_string(&b.id.to_string());
         let desc_str = fbb.create_string(&b.description);
         let claimed_str = b.claimed_by.and_then(|e| agent_names.get(e).ok().map(|n| fbb.create_string(&n.0)));

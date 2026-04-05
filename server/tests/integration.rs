@@ -30,23 +30,31 @@ fn test_app() -> App {
 }
 
 #[test]
-fn bounty_injection_maintains_minimum() {
+fn bounty_injection_seeds_initial_bounties() {
     let mut app = test_app();
+    app.init_resource::<server::world::bounty_injector::InjectorState>();
     app.add_systems(Update, bounty_injection_system);
 
-    // Run 200 ticks, manually incrementing TickCount each update.
-    for _ in 0..200 {
-        app.update();
-        let mut tick = app.world_mut().resource_mut::<TickCount>();
-        tick.0 += 1;
-    }
+    // Tick 0 seeds bounties.
+    app.update();
 
     let registry = app.world().resource::<BountyRegistry>();
     let available = registry.available().len();
     assert!(
-        available >= 3,
-        "Expected at least 3 available bounties, got {available}"
+        available >= 5,
+        "Expected at least 5 initial bounties, got {available}"
     );
+
+    // Running again should NOT add more (one-shot).
+    let count_before = registry.bounties.len();
+    drop(registry);
+    {
+        let mut tick = app.world_mut().resource_mut::<TickCount>();
+        tick.0 += 1;
+    }
+    app.update();
+    let registry = app.world().resource::<BountyRegistry>();
+    assert_eq!(registry.bounties.len(), count_before, "Injector should not create more bounties after seeding");
 }
 
 #[test]

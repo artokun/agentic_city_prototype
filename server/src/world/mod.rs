@@ -26,6 +26,7 @@ impl Plugin for WorldPlugin {
             .add_systems(Update, shifts::shift_tracking_system)
             .add_systems(Update, shifts::paycheck_redemption_system)
             .add_systems(Update, transactions::transaction_system)
+            .init_resource::<bounty_injector::InjectorState>()
             .add_systems(Update, bounty_injector::bounty_injection_system)
             .add_systems(Update, hospital::pass_out_system)
             .add_systems(Update, hospital::hospital_recovery_system);
