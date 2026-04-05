@@ -1,8 +1,10 @@
 use bevy::prelude::*;
 
 use super::action_log::{ActionEvent, ActionLog};
-use super::components::{AgentAnimation, AnimState, ThoughtBubble};
+use super::ai::AgentSessions;
+use super::components::{AgentAnimation, AgentId, AnimState, ThoughtBubble};
 use super::needs::Needs;
+use super::token_tracking::ContextWindow;
 use crate::items::{DocumentInventory, Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::economy::GoldReserve;
@@ -36,16 +38,19 @@ pub fn action_timer_system(
             &mut AgentAnimation,
             &mut ThoughtBubble,
             &super::components::AgentName,
+            &AgentId,
             &mut ActionLog,
+            &mut ContextWindow,
             Option<&InsideBuilding>,
         ),
         Without<StructureId>,
     >,
+    sessions: Res<AgentSessions>,
     mut building_reserves: Query<&mut GoldReserve>,
     mut building_inventories: Query<&mut Inventory, With<StructureId>>,
     building_names: Query<&SpriteType, With<StructureId>>,
 ) {
-    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name, mut action_log, inside) in &mut agents {
+    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name, agent_id, mut action_log, mut ctx_window, inside) in &mut agents {
         // Resolve the building name for event logging.
         let building_name = inside
             .and_then(|ib| building_names.get(ib.0).ok())
@@ -118,7 +123,24 @@ pub fn action_timer_system(
                 building: building_name.clone(),
             });
 
-            thought.0 = format!("Finished {}.", timer.action_name);
+            // Sleep actions trigger context compaction.
+            let is_sleep = timer.action_name.contains("sleep");
+            if is_sleep {
+                if let Some(session) = sessions.sessions.get(&entity) {
+                    let _ = session.prompt_tx.try_send("/compact".to_string());
+                    // Reset token count — compaction keeps a summary (~10% of original).
+                    let compacted = ctx_window.tokens_used / 10;
+                    ctx_window.tokens_used = compacted;
+                    tracing::info!(
+                        "[COMPACT] {} slept → compacting context ({} → {} tokens)",
+                        name.0, ctx_window.tokens_used + compacted * 9, compacted,
+                    );
+                }
+                thought.0 = "Woke up refreshed! Context compacted, ready for more.".into();
+            } else {
+                thought.0 = format!("Finished {}.", timer.action_name);
+            }
+
             anim.0 = AnimState::Idle;
             commands.entity(entity).remove::<ActionTimer>();
         }
