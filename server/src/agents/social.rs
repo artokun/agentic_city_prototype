@@ -75,6 +75,7 @@ pub fn social_matchmaking_system(
                 && matches!(
                     goal,
                     AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WaitingAtBoard
+                        | AgentGoal::WorkingShift { .. }
                 )
         })
         .map(|(e, name, pos, goal, needs, inv, _, _)| {
