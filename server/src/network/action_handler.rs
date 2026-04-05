@@ -318,7 +318,12 @@ pub fn apply_mcp_actions_system(
             }
 
             "claim_bounty" => {
-                if !matches!(*goal, AgentGoal::InteractingWithBoard) {
+                // Allow claiming if at the board (any goal state — the board queue
+                // was too strict and agents kept getting stuck).
+                let at_board = known_locs.locations.values()
+                    .find(|l| l.name == "bounty_board")
+                    .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
+                if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard) {
                     thought.0 = "Must be at the bounty board to claim a bounty! Go there first.".into();
                 } else {
                     let keyword = mcp_action.text.as_deref()
