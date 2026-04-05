@@ -8,9 +8,12 @@ use crate::agents::needs::Needs;
 use crate::network::agent_relay::TokenUsageEvent;
 
 /// Tracks how much of the context window has been consumed.
+/// Agents hit 0 energy at context_limit tokens and must sleep (compact).
 #[derive(Component, Debug, Clone)]
 pub struct ContextWindow {
     pub tokens_used: u32,
+    /// Token budget before energy hits 0. Models have 1M context,
+    /// but we cap at 150k to save on input token costs.
     pub context_limit: u32,
 }
 
@@ -18,7 +21,7 @@ impl Default for ContextWindow {
     fn default() -> Self {
         Self {
             tokens_used: 0,
-            context_limit: 200_000,
+            context_limit: 150_000,
         }
     }
 }
@@ -52,7 +55,8 @@ pub fn token_drain_system(
             cost.total_cost_usd += event.cost_usd;
             cost.session_cost_usd += event.cost_usd;
 
-            // Energy = percentage of context window remaining.
+            // Energy = percentage of token budget remaining.
+            // At 150k limit, agents hit 0 energy and must sleep (compact).
             let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
             needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
 
@@ -72,7 +76,7 @@ mod tests {
     fn context_window_defaults() {
         let cw = ContextWindow::default();
         assert_eq!(cw.tokens_used, 0);
-        assert_eq!(cw.context_limit, 200_000);
+        assert_eq!(cw.context_limit, 150_000);
     }
 
     #[test]
@@ -83,28 +87,27 @@ mod tests {
     }
 
     #[test]
-    fn energy_from_token_usage() {
-        // Simulate 50% context usage -> energy should be 50.
+    fn energy_at_half_usage() {
         let mut needs = Needs::default();
-        let ctx = ContextWindow { tokens_used: 100_000, context_limit: 200_000 };
+        let ctx = ContextWindow { tokens_used: 75_000, context_limit: 150_000 };
         let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
         needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
         assert_eq!(needs.energy, 50.0);
     }
 
     #[test]
-    fn energy_at_full_usage() {
+    fn energy_at_limit() {
         let mut needs = Needs::default();
-        let ctx = ContextWindow { tokens_used: 200_000, context_limit: 200_000 };
+        let ctx = ContextWindow { tokens_used: 150_000, context_limit: 150_000 };
         let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
         needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
         assert_eq!(needs.energy, 0.0);
     }
 
     #[test]
-    fn energy_exceeding_limit_clamps() {
+    fn energy_over_limit_clamps() {
         let mut needs = Needs::default();
-        let ctx = ContextWindow { tokens_used: 300_000, context_limit: 200_000 };
+        let ctx = ContextWindow { tokens_used: 200_000, context_limit: 150_000 };
         let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
         needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
         assert_eq!(needs.energy, 0.0);

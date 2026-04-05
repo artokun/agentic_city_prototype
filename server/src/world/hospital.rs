@@ -6,8 +6,10 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
+use crate::agents::ai::AgentSessions;
 use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
+use crate::agents::token_tracking::ContextWindow;
 use crate::agents::needs::Needs;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
@@ -103,20 +105,30 @@ pub fn hospital_recovery_system(
     mut commands: Commands,
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
+    sessions: Res<AgentSessions>,
     mut patients: Query<(
         Entity, &AgentName, &mut Recovering, &mut Needs, &mut ThoughtBubble,
+        &mut ContextWindow,
     )>,
 ) {
-    for (entity, name, mut recovery, mut needs, mut thought) in &mut patients {
+    for (entity, name, mut recovery, mut needs, mut thought, mut ctx_window) in &mut patients {
         recovery.ticks_remaining = recovery.ticks_remaining.saturating_sub(1);
 
-        // Slowly restore stats.
-        needs.energy = (needs.energy + 0.3).min(80.0);
+        // Don't restore energy directly — it's token-driven.
+        // Energy will be restored when compaction resets tokens_used.
         needs.hunger = (needs.hunger + 0.2).min(60.0);
 
         if recovery.ticks_remaining == 0 {
+            // Compact context on hospital discharge.
+            if let Some(session) = sessions.sessions.get(&entity) {
+                let _ = session.prompt_tx.try_send("/compact".to_string());
+                let old = ctx_window.tokens_used;
+                ctx_window.tokens_used = old / 10;
+                tracing::info!("[HOSPITAL COMPACT] {} — {} → {} tokens", name.0, old, ctx_window.tokens_used);
+            }
+
             tracing::info!("{} has recovered in the hospital!", name.0);
-            thought.0 = "Waking up in the hospital... what happened?".into();
+            thought.0 = "Waking up in the hospital... context compacted. Fresh start.".into();
 
             commands.entity(entity).remove::<Recovering>();
             commands.entity(entity).remove::<Incapacitated>();
@@ -125,7 +137,7 @@ pub fn hospital_recovery_system(
                 tick: tick.0,
                 agent: name.0.clone(),
                 kind: LogKind::System,
-                text: "Recovered in the hospital. Back on your feet!".into(),
+                text: "Recovered in the hospital. Context compacted — back on your feet!".into(),
             });
         }
     }
