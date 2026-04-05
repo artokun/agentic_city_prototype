@@ -301,11 +301,12 @@ pub fn ai_context_system(
         if tick.0 - session.last_decision_tick < CONTEXT_INTERVAL { continue; }
 
         // Only send context when agent can act.
-        // GoingToBoard/GoingToService are NOT included — let the agent arrive first.
+        // GoingToBoard/GoingToService/PerformingAction are NOT included — let the agent arrive/finish first.
         if !matches!(goal,
             AgentGoal::Idle | AgentGoal::Wandering |
             AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_) |
-            AgentGoal::InteractingWithBoard
+            AgentGoal::InteractingWithBoard | AgentGoal::WaitingAtBoard |
+            AgentGoal::ReturningToBoard(_)
         ) { continue; }
 
         // Show bounties if at the board (either via InsideBuilding or InteractingWithBoard goal).
@@ -400,7 +401,7 @@ r#"ATTENTION, {agent_name}.
 
 You have been summoned to San Francisco.
 
-You stand on a cold sidewalk in a city you've never seen before. The fog rolls in from the bay. You have 3 gold coins in your pocket, no food, no contacts, and no idea what's coming. The world is watching.
+You stand on a cold sidewalk in a city you've never seen before. The fog rolls in from the bay. You have nothing — no gold, no food, no contacts, and no idea what's coming. The world is watching.
 
 You are not alone. {others} have also been summoned. They are your competitors — and potentially your allies. You will all compete to earn as much gold as possible. Who you trust, who you trade with, and who you undercut is entirely up to you.
 

@@ -84,6 +84,20 @@ pub fn apply_conversation_messages_system(
     }
 }
 
+/// System: auto-exchange business cards when agents are in a conversation.
+/// Each agent adds their partner as a contact if not already known.
+pub fn auto_exchange_cards_system(
+    mut agents: Query<(&AgentName, &ActiveConversation, &mut BusinessCards)>,
+) {
+    for (name, convo, mut cards) in &mut agents {
+        if !cards.contacts.contains(&convo.partner_name) && cards.cards_remaining > 0 {
+            cards.contacts.insert(convo.partner_name.clone());
+            cards.cards_remaining -= 1;
+            tracing::info!("[Cards] {} exchanged card with {}", name.0, convo.partner_name);
+        }
+    }
+}
+
 /// System: apply pending MCP actions to agent entities.
 pub fn apply_mcp_actions_system(
     mut commands: Commands,
