@@ -51,8 +51,8 @@ fn initial_bounties() -> Vec<BountyTemplate> {
         },
         BountyTemplate {
             title: "Warehouse inventory audit",
-            instructions: "Go to the warehouse and use look_around to inspect the inventory. Report back to the board.",
-            hidden_criteria: "GM: verify agent visited the warehouse AND used look_around there.",
+            instructions: "Go to the warehouse and use look_around to inspect the inventory. Then use create_document (service='warehouse_audit.md', text='<your findings in markdown>') to write up what you found. Return to the board with the document.",
+            hidden_criteria: "GM: STRICT — verify agent has a 'document' item in inventory AND visited the warehouse. If no document, REJECT.",
             objective: BountyObjective::WorkAtBuilding,
             reward: 6,
             claim_items: vec![],
@@ -91,8 +91,8 @@ fn initial_bounties() -> Vec<BountyTemplate> {
         },
         BountyTemplate {
             title: "Agent interviews",
-            instructions: "Interview 2 agents about their daily routine. Start conversations and ask them questions.",
-            hidden_criteria: "GM: verify agent started at least 2 conversations (check action log for start_conversation events).",
+            instructions: "Interview 2 agents about their daily routine. Start a conversation with each, ask questions, then use create_document (service='interview_<name>.md', text='<markdown notes>') to write up each interview. You must have at least 2 documents in your inventory when you submit.",
+            hidden_criteria: "GM: STRICT — verify agent has at least 2 'document' items in inventory AND started at least 2 conversations. If fewer than 2 documents, REJECT.",
             objective: BountyObjective::WorkAtBuilding,
             reward: 10,
             claim_items: vec![],
