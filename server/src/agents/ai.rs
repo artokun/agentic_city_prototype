@@ -49,15 +49,16 @@ pub fn spawn_sessions_system(
     runtime: ResMut<TokioTasksRuntime>,
     mut sessions: ResMut<AgentSessions>,
     relays: Res<AgentRelaysResource>,
-    agents: Query<(Entity, &AgentId, &AgentName, &Personality)>,
+    agents: Query<(Entity, &AgentId, &AgentName, &Personality, &super::components::ClaudeModel)>,
 ) {
-    for (entity, agent_id, name, personality) in &agents {
+    for (entity, agent_id, name, personality, claude_model) in &agents {
         if sessions.sessions.contains_key(&entity) {
             continue;
         }
 
         let agent_name = name.0.clone();
         let agent_uuid = agent_id.0.to_string();
+        let model_name = claude_model.0.clone();
         let system_prompt = super::personality::build_system_prompt(&name.0, personality);
         let relays_clone = relays.0.clone();
         let sys_prompt_clone = system_prompt.clone();
@@ -99,7 +100,7 @@ pub fn spawn_sessions_system(
                     "--output-format", "stream-json",
                     "--input-format", "stream-json",
                     "--permission-mode", "bypassPermissions",
-                    "--model", "haiku",
+                    "--model", &model_name,
                     "--append-system-prompt-file", &prompt_file,
                     "--verbose",
                 ])

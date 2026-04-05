@@ -14,6 +14,9 @@ use crate::world::shifts::PaycheckWallet;
 #[derive(Component)]
 pub struct AgentId(pub Uuid);
 
+#[derive(Component, Clone)]
+pub struct ClaudeModel(pub String);
+
 #[derive(Component)]
 pub struct AgentName(pub String);
 

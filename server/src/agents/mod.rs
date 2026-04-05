@@ -75,10 +75,11 @@ fn spawn_agents(
     all_structures: Query<(Entity, &GridPos, &Entrance, &crate::world::structures::SpriteType)>,
 ) {
     let walkable = map.walkable_positions();
-    let agents_config = [
-        ("Alice", 2.0_f32),
-        ("Bob", 1.5),
-        ("Carol", 3.0),
+    // Each agent gets a different Claude model to test speed vs intelligence.
+    let agents_config: Vec<(&str, f32, &str)> = vec![
+        ("Alice", 2.0, "haiku"),   // fastest model, fastest speed
+        ("Bob", 1.5, "sonnet"),    // balanced model, moderate speed
+        ("Carol", 3.0, "opus"),    // smartest model, fastest legs
     ];
 
     let board_info: Option<(Entity, GridPos, GridPos)> = boards
@@ -88,7 +89,7 @@ fn spawn_agents(
 
     // Spawn agents near the bounty board so they know where to start.
     let board_pos = board_info.map(|(_, _, entrance)| entrance).unwrap_or(GridPos { x: 20, y: 32 });
-    for (i, (name, speed)) in agents_config.iter().enumerate() {
+    for (i, (name, speed, model)) in agents_config.iter().enumerate() {
         let offset = (i as i32 - 1) * 2;
         let start = GridPos { x: board_pos.x + offset, y: board_pos.y - 2 };
         let mut bundle = AgentBundle::new(name, start, *speed);
@@ -122,8 +123,9 @@ fn spawn_agents(
 
         // Generate unique personality.
         let personality = personality::generate_personality(name);
-        tracing::info!("spawned {name} at ({}, {}), speed={speed}\n{}", start.x, start.y, personality.traits);
+        let claude_model = components::ClaudeModel(model.to_string());
+        tracing::info!("spawned {name} at ({}, {}), speed={speed}, model={model}\n{}", start.x, start.y, personality.traits);
 
-        commands.spawn((bundle, personality));
+        commands.spawn((bundle, personality, claude_model));
     }
 }
