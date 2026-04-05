@@ -54,7 +54,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Muffin, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 20, // 1g per 20 ticks (~2 sec)
+                    ticks_per_gold: 150, // 1g per 150 ticks (~15 sec)
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
@@ -75,7 +75,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Rations, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 20,
+                    ticks_per_gold: 150,
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
@@ -97,7 +97,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::RawMeat, 999);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 30,
+                    ticks_per_gold: 200,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,
@@ -108,7 +108,7 @@ fn spawn_structures(mut commands: Commands) {
             "hotel" => {
                 ecmds.insert(Inventory::default());
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 25,
+                    ticks_per_gold: 180,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,

@@ -33,7 +33,7 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 - Energy: {:.0}/100  Hunger: {:.0}/100  Boredom: {:.0}/100
 - Current goal: {:?}
 - Need levels: >50 is fine, 25-50 is low, <25 is urgent, <10 is CRITICAL (auto-handled)
-- DO NOT panic about needs above 25. Focus on earning gold.
+- DO NOT worry about needs above 25. Gold under 10 is low but not critical. Focus on earning gold.
 "#,
         pos.x, pos.y, needs.energy, needs.hunger, needs.boredom, goal,
     );

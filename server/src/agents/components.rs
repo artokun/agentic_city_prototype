@@ -117,7 +117,7 @@ impl AgentBundle {
             thought: ThoughtBubble(format!("{name} is looking around...")),
             inventory: {
                 let mut inv = Inventory::default();
-                inv.add(crate::items::ItemType::GoldCoin, 5); // starting gold
+                inv.add(crate::items::ItemType::GoldCoin, 3); // starting gold
                 inv
             },
             needs: Needs::default(),
