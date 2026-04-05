@@ -361,14 +361,15 @@ pub fn bounty_expiry_system(
             bounty.expired = true;
             tracing::info!(
                 "Bounty '{}' has EXPIRED — agent must return it ({}g recycling fee)",
-                bounty.description, RECYCLE_COST,
+                bounty.description, recycle_cost(),
             );
         }
     }
 }
 
 /// Recycle cost for expired bounties.
-pub const RECYCLE_COST: u32 = 1;
+/// Gold penalty for recycling expired bounties — now in config.rs.
+pub fn recycle_cost() -> u32 { crate::config::recycle_cost() }
 
 #[cfg(test)]
 mod tests {

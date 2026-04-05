@@ -55,10 +55,7 @@ pub enum NeedType {
     Boredom,
 }
 
-// Decay rates per tick (at 10 ticks/sec).
-// Energy is now driven by token usage (see token_tracking.rs), not time decay.
-const HUNGER_DECAY: f32 = 0.025;  // ~400 sec (~6.7 min) to drain
-const BOREDOM_DECAY_IDLE: f32 = 0.05; // ~200 sec (~3.3 min) when idle
+use crate::config;
 
 /// System: decay needs every tick.
 pub fn needs_decay_system(
@@ -67,16 +64,15 @@ pub fn needs_decay_system(
     for (mut needs, goal) in &mut agents {
         // Energy decay is driven by token usage (token_tracking::token_drain_system).
 
-        needs.hunger -= HUNGER_DECAY;
+        needs.hunger -= config::hunger_decay();
 
         // Boredom only decays when idle or wandering.
         match goal {
             AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WaitingAtBoard => {
-                needs.boredom -= BOREDOM_DECAY_IDLE;
+                needs.boredom -= config::boredom_decay_idle();
             }
             _ => {
-                // Working/moving/executing — slightly raise boredom satisfaction.
-                needs.boredom += 0.02;
+                needs.boredom += config::boredom_recovery_active();
             }
         }
 

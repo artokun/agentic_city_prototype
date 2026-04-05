@@ -126,17 +126,16 @@ pub fn action_timer_system(
             // Sleep actions trigger context compaction.
             let is_sleep = timer.action_name.contains("sleep");
             if is_sleep {
-                // Send /compact to try triggering real context compaction.
-                // May work as a slash command or be treated as text — either way harmless.
+                // Send /compact to trigger real context compaction.
                 if let Some(session) = sessions.sessions.get(&entity) {
                     let _ = session.prompt_tx.try_send("/compact".to_string());
                 }
-                // Reset our token counter regardless.
+                // Reset our token counter — real compaction reduces context.
                 let old = ctx_window.tokens_used;
-                ctx_window.tokens_used = old / 10;
+                ctx_window.tokens_used = 0;
                 tracing::info!(
-                    "[COMPACT] {} slept → token budget reset ({} → {} tokens)",
-                    name.0, old, ctx_window.tokens_used,
+                    "[COMPACT] {} slept → /compact sent, tokens {} → 0",
+                    name.0, old,
                 );
                 thought.0 = "Woke up refreshed! Energy restored.".into();
             } else {

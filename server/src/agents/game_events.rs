@@ -40,14 +40,7 @@ impl Default for LastEventState {
     }
 }
 
-/// Cooldown in ticks before re-sending a need alert for the same stat.
-const NEED_ALERT_COOLDOWN: u64 = 200;
-
-/// Threshold below which we alert the agent about a need.
-const NEED_ALERT_THRESHOLD: f32 = 30.0;
-
-/// Interval in ticks between periodic stat updates.
-const STAT_REFRESH_INTERVAL: u64 = 200;
+use crate::config;
 
 /// System: ensure all agents have a `LastEventState` component.
 pub fn ensure_event_state_system(
@@ -103,16 +96,16 @@ pub fn game_events_system(
         event_state.had_path = !path_is_empty;
 
         // --- Hunger alert ---
-        if needs.hunger < NEED_ALERT_THRESHOLD
-            && tick.0.saturating_sub(event_state.last_hunger_alert) >= NEED_ALERT_COOLDOWN
+        if needs.hunger < config::need_alert_threshold()
+            && tick.0.saturating_sub(event_state.last_hunger_alert) >= config::need_alert_cooldown()
         {
             messages.push("You're getting hungry!".to_string());
             event_state.last_hunger_alert = tick.0;
         }
 
         // --- Energy alert ---
-        if needs.energy < NEED_ALERT_THRESHOLD
-            && tick.0.saturating_sub(event_state.last_energy_alert) >= NEED_ALERT_COOLDOWN
+        if needs.energy < config::need_alert_threshold()
+            && tick.0.saturating_sub(event_state.last_energy_alert) >= config::need_alert_cooldown()
         {
             messages.push("You're getting tired!".to_string());
             event_state.last_energy_alert = tick.0;
@@ -128,7 +121,7 @@ pub fn game_events_system(
         }
 
         // --- Periodic stat + inventory + quest refresh ---
-        if tick.0.saturating_sub(event_state.last_stat_tick) >= STAT_REFRESH_INTERVAL {
+        if tick.0.saturating_sub(event_state.last_stat_tick) >= config::status_interval() {
             let gold = inv.count(ItemType::GoldCoin);
             let mut status = format!(
                 "=== STATUS UPDATE (tick {}) ===\nNeeds: E:{:.0} H:{:.0} B:{:.0}\nGold: {}",

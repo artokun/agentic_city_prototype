@@ -1,3 +1,4 @@
+pub mod config;
 mod agents;
 mod items;
 mod network;
@@ -14,7 +15,7 @@ fn main() {
 
     App::new()
         .add_plugins(
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(500))),
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(config::tick_ms()))),
         )
         .add_plugins(TokioTasksPlugin::default())
         .add_plugins(tick::GameTickPlugin)

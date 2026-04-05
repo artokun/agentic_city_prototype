@@ -17,7 +17,7 @@ use super::needs::{NeedType, Needs};
 use super::pathfinding;
 use crate::world::shifts::{ShiftWorker, Staffable};
 
-const CRITICAL_THRESHOLD: f32 = 10.0;
+use crate::config;
 
 fn at_pos(a: &GridPos, b: &GridPos) -> bool {
     a.x == b.x && a.y == b.y
@@ -128,7 +128,7 @@ pub fn execution_system(
             // ========== IDLE / WANDERING ==========
             // AI system handles decisions. Only intervene for critical needs.
             AgentGoal::Idle => {
-                if let Some(need) = needs.most_urgent(CRITICAL_THRESHOLD) {
+                if let Some(need) = needs.most_urgent(config::critical_threshold()) {
                     if let Some((bld, entrance, service)) = pick_service_for_need(
                         need, pos, gold, speed.0, &structure_list, &map,
                     ) {
@@ -308,9 +308,9 @@ pub fn execution_system(
                     if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
                         if bounty.expired {
                             // Expired bounties skip GM — just charge the recycling fee.
-                            inv.deduct_gold_with_debt(RECYCLE_COST);
-                            thought.0 = format!("Recycled expired bounty (-{}g)", RECYCLE_COST);
-                            tracing::info!("{} recycled expired bounty (-{}g)", name.0, RECYCLE_COST);
+                            inv.deduct_gold_with_debt(crate::world::bounty::recycle_cost());
+                            thought.0 = format!("Recycled expired bounty (-{}g)", crate::world::bounty::recycle_cost());
+                            tracing::info!("{} recycled expired bounty (-{}g)", name.0, crate::world::bounty::recycle_cost());
                             if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
                                 b.state = BountyState::Completed;
                             }

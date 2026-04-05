@@ -119,13 +119,12 @@ pub fn hospital_recovery_system(
         needs.hunger = (needs.hunger + 0.2).min(60.0);
 
         if recovery.ticks_remaining == 0 {
-            // Send /compact and reset token counter on discharge.
+            // Send /compact to trigger real context compaction.
             if let Some(session) = sessions.sessions.get(&entity) {
                 let _ = session.prompt_tx.try_send("/compact".to_string());
             }
-            let old = ctx_window.tokens_used;
-            ctx_window.tokens_used = old / 10;
-            tracing::info!("[HOSPITAL COMPACT] {} — token budget reset {} → {}", name.0, old, ctx_window.tokens_used);
+            ctx_window.tokens_used = 0;
+            tracing::info!("[HOSPITAL COMPACT] {} — /compact sent, tokens reset", name.0);
 
             tracing::info!("{} has recovered in the hospital!", name.0);
             thought.0 = "Waking up in the hospital... feeling groggy but rested.".into();

@@ -40,8 +40,7 @@ pub struct SessionState {
 #[derive(Resource, Clone)]
 pub struct AgentRelaysResource(pub AgentRelays);
 
-/// How often to send context updates (in ticks). 50 ticks = 5 seconds.
-const CONTEXT_INTERVAL: u64 = 50;
+use crate::config;
 
 /// System: spawn Claude sessions via --sdk-url for agents.
 pub fn spawn_sessions_system(
@@ -305,7 +304,7 @@ pub fn ai_context_system(
         let Some(session) = sessions.sessions.get_mut(&entity) else { continue };
 
         // Rate limit context updates.
-        if tick.0 - session.last_decision_tick < CONTEXT_INTERVAL { continue; }
+        if tick.0 - session.last_decision_tick < config::context_interval() { continue; }
 
         // Only send context when agent can act.
         // PerformingAction is NOT included — let the action timer finish first.

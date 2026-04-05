@@ -20,10 +20,7 @@ pub struct ContextWindow {
 
 impl Default for ContextWindow {
     fn default() -> Self {
-        let limit = std::env::var("CONTEXT_LIMIT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(150_000);
+        let limit = crate::config::context_limit();
         Self {
             tokens_used: 0,
             context_limit: limit,
