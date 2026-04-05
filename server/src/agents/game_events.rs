@@ -217,10 +217,9 @@ fn building_arrival_message(building_name: &str) -> String {
             Available shifts: work_shift (1g per 1000 ticks, food perk)".to_string(),
 
         "google" => "You arrived at GOOGLE.\n\
-            The internet is here.\n\
+            The internet is here. Costs 1 gold per visit.\n\
             Available services:\n\
-            - search_internet (1g, 10 ticks) — research for bounties\n\
-            - browse_for_fun (free, 10 ticks) — +20 boredom".to_string(),
+            - search_internet (1g, 10 ticks) — real web search for bounty research".to_string(),
 
         "library" => "You arrived at the LIBRARY.\n\
             Quiet place to read and relax.\n\

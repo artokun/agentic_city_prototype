@@ -118,7 +118,7 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                             },
                             "text": {
                                 "type": "string",
-                                "description": "Message text (for send_message, say). For offer_trade: comma-separated offered items (e.g. 'muffin,sandwich')"
+                                "description": "Message text (for send_message, say). For claim_bounty: bounty ID (6-char hex from the bounty list). For offer_trade: comma-separated offered items."
                             },
                             "feedback": {
                                 "type": "string",

@@ -306,13 +306,19 @@ pub fn ai_context_system(
 
         // Agents can always see bounty board status. Must be at board to claim.
         let available_bounties: Vec<String> = bounty_registry.bounties.iter()
-            .filter(|b| b.state == crate::world::bounty::BountyState::Available
-                     || b.state == crate::world::bounty::BountyState::Claimed)
+            .filter(|b| {
+                b.state == crate::world::bounty::BountyState::Available
+                || (b.state == crate::world::bounty::BountyState::Claimed && b.claimed_by == Some(entity))
+                || (b.state == crate::world::bounty::BountyState::PendingVerification && b.claimed_by == Some(entity))
+            })
             .map(|b| {
                 let is_mine = b.claimed_by == Some(entity);
-                let status = if b.state == crate::world::bounty::BountyState::Claimed {
-                    if is_mine { "(YOUR ACTIVE BOUNTY)" } else { "(taken)" }
-                } else { "(available)" };
+                let status = match b.state {
+                    crate::world::bounty::BountyState::Claimed if is_mine => "(YOUR ACTIVE BOUNTY)",
+                    crate::world::bounty::BountyState::PendingVerification if is_mine => "(PENDING GM REVIEW)",
+                    crate::world::bounty::BountyState::Claimed => "(taken)",
+                    _ => "(available)",
+                };
                 // Show instructions only for the agent's own active bounty.
                 let instructions = if is_mine {
                     // Extract agent-facing instructions (before the GM criteria).
@@ -330,7 +336,8 @@ pub fn ai_context_system(
                 } else {
                     String::new()
                 };
-                format!("{} — {}g {}{}", b.description, b.reward_gold, status, instructions)
+                let short_id = &b.id.to_string()[..6];
+                format!("[{}] {} — {}g {}{}", short_id, b.description, b.reward_gold, status, instructions)
             }).collect();
 
         let nearby: Vec<(String, GridPos)> = all_agents.iter()

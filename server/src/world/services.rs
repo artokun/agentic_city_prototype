@@ -118,14 +118,6 @@ pub fn all_services() -> Vec<BuildingService> {
             consumes_item: None,
         },
         BuildingService {
-            building_name: "google",
-            action_name: "browse_for_fun",
-            gold_cost: 0,
-            duration_ticks: 10,
-            effects: ServiceEffects { boredom: 20.0, ..Default::default() },
-            consumes_item: None,
-        },
-        BuildingService {
             building_name: "hotel",
             action_name: "relax_in_lobby",
             gold_cost: 0,

@@ -421,29 +421,31 @@ pub fn apply_mcp_actions_system(
             }
 
             "complete_bounty" => {
-                // Check goal state OR bounty registry for active bounty.
-                let bounty_id = match *goal {
-                    AgentGoal::ExecutingBounty(id) => Some(id),
-                    AgentGoal::ReturningToBoard(id) => Some(id), // already returning
-                    _ => {
-                        // Fallback: check registry for a claimed bounty by this agent.
-                        bounty_registry.bounties.iter()
-                            .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
-                            .map(|b| b.id)
-                    }
-                };
+                // Must be at the bounty board to submit completion.
+                let at_board = known_locs.locations.values()
+                    .find(|l| l.name == "bounty_board")
+                    .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
 
-                if let Some(bounty_id) = bounty_id {
-                    *goal = AgentGoal::ReturningToBoard(bounty_id);
-                    if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
-                        if let Some(p) = pathfinding::bfs(&map, *pos, board.entrance) {
-                            let tiles = p.len();
-                            commands.entity(entity).insert(Path(p));
-                            thought.0 = format!("Bounty complete! Returning to board ({} tiles).", tiles);
-                        }
-                    }
+                if !at_board {
+                    thought.0 = "You must be at the bounty board to submit a bounty for completion. Use go_to_board first.".into();
                 } else {
-                    thought.0 = "ERROR: No active bounty to complete. Claim one at the bounty board first.".into();
+                    let bounty_id = match *goal {
+                        AgentGoal::ExecutingBounty(id) => Some(id),
+                        AgentGoal::ReturningToBoard(id) => Some(id),
+                        _ => {
+                            bounty_registry.bounties.iter()
+                                .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
+                                .map(|b| b.id)
+                        }
+                    };
+
+                    if let Some(bounty_id) = bounty_id {
+                        // Submit for GM verification directly (already at board).
+                        *goal = AgentGoal::ReturningToBoard(bounty_id);
+                        thought.0 = "Bounty submitted for Game Master review! Waiting for verdict...".into();
+                    } else {
+                        thought.0 = "ERROR: No active bounty to complete. Claim one at the bounty board first.".into();
+                    }
                 }
             }
 
@@ -496,9 +498,17 @@ pub fn apply_mcp_actions_system(
                         .or(mcp_action.service.as_deref())
                         .unwrap_or("");
 
-                    // Find first available bounty matching keyword.
+                    // Find available bounty by ID prefix or keyword match.
                     let bounty_match = bounty_registry.available().iter()
-                        .find(|b| keyword.is_empty() || b.description.to_lowercase().contains(&keyword.to_lowercase()))
+                        .find(|b| {
+                            if keyword.is_empty() { return true; }
+                            // Match by short ID (first 6 chars of UUID).
+                            let short_id = &b.id.to_string()[..6];
+                            if keyword == short_id || keyword == b.id.to_string() {
+                                return true;
+                            }
+                            b.description.to_lowercase().contains(&keyword.to_lowercase())
+                        })
                         .map(|b| b.id);
 
                     if let Some(bounty_id) = bounty_match {
@@ -512,7 +522,15 @@ pub fn apply_mcp_actions_system(
                                     items: claim_items,
                                 });
                             }
-                            thought.0 = format!("Claimed: {}", desc);
+                            // Extract agent instructions from hidden_criteria.
+                            let instructions = bounty.hidden_criteria
+                                .split("\n\nGM:")
+                                .next()
+                                .unwrap_or("")
+                                .strip_prefix("Instructions for agent: ")
+                                .unwrap_or("Complete the task and return to the board.")
+                                .to_string();
+                            thought.0 = format!("Claimed: {}. INSTRUCTIONS: {}", desc, instructions);
 
                             event_log.push(LogEvent {
                                 tick: tick.0,
