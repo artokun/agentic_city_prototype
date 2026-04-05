@@ -13,15 +13,20 @@ use crate::network::agent_relay::TokenUsageEvent;
 pub struct ContextWindow {
     pub tokens_used: u32,
     /// Token budget before energy hits 0. Models have 1M context,
-    /// but we cap at 150k to save on input token costs.
+    /// but we cap lower to save on input token costs.
+    /// Set via CONTEXT_LIMIT env var (default 150000).
     pub context_limit: u32,
 }
 
 impl Default for ContextWindow {
     fn default() -> Self {
+        let limit = std::env::var("CONTEXT_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(150_000);
         Self {
             tokens_used: 0,
-            context_limit: 150_000,
+            context_limit: limit,
         }
     }
 }
