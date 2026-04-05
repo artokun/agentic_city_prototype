@@ -3,6 +3,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::items::ItemType;
+use crate::network::action_handler::{MpcAction, PendingActions};
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyStep, StepCondition};
 
 /// Commands sent from Axum REST handlers into Bevy.
@@ -50,14 +51,26 @@ pub struct CommandReceiver {
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
     mut bounty_registry: ResMut<BountyRegistry>,
+    mut pending_actions: ResMut<PendingActions>,
     tick: Res<crate::tick::TickCount>,
 ) {
     while let Ok(cmd) = receiver.rx.try_recv() {
         match cmd {
             GameCommand::AgentAction { action_json } => {
-                tracing::info!("[MCP] Agent action received: {}", &action_json[..action_json.len().min(100)]);
-                // TODO: Route to the specific agent's behavior system.
-                // For now, actions flow through the AI decision system.
+                // Parse and queue for the action handler system.
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&action_json) {
+                    pending_actions.actions.push(MpcAction {
+                        agent_name: val.get("agent_name").and_then(|a| a.as_str()).unwrap_or("").into(),
+                        agent_id: val.get("agent_id").and_then(|a| a.as_str()).unwrap_or("").into(),
+                        action: val.get("action").and_then(|a| a.as_str()).unwrap_or("").into(),
+                        building: val.get("building").and_then(|b| b.as_str()).map(|s| s.into()),
+                        service: val.get("service").and_then(|s| s.as_str()).map(|s| s.into()),
+                        agent_target: val.get("agent").and_then(|a| a.as_str()).map(|s| s.into()),
+                        text: val.get("text").and_then(|t| t.as_str()).map(|s| s.into()),
+                    });
+                    tracing::info!("[MCP] Queued action from {}",
+                        val.get("agent_name").and_then(|a| a.as_str()).unwrap_or("?"));
+                }
             }
 
             GameCommand::CreateBounty {

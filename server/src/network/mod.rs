@@ -1,3 +1,4 @@
+pub mod action_handler;
 pub mod agent_relay;
 pub mod broadcast;
 pub mod commands;
@@ -22,13 +23,15 @@ impl Plugin for NetworkPlugin {
         let relays = AgentRelays::default();
 
         app.init_resource::<BroadcastTx>()
+            .init_resource::<action_handler::PendingActions>()
             .insert_resource(CommandReceiver { rx: cmd_rx })
             .insert_resource(CommandSenderHolder(cmd_tx))
             .insert_resource(AgentRelaysResource(relays.clone()))
             .insert_resource(RelaysHolder(relays))
             .add_systems(Startup, spawn_axum)
             .add_systems(Update, broadcast::broadcast_state)
-            .add_systems(Update, commands::process_commands_system);
+            .add_systems(Update, commands::process_commands_system)
+            .add_systems(Update, action_handler::apply_mcp_actions_system);
     }
 }
 
