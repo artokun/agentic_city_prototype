@@ -52,3 +52,89 @@ pub fn broadcast_state(
     );
     let _ = broadcast_tx.sender.send(bytes);
 }
+
+/// Bevy resource holding the shared JSON world state for GM queries.
+#[derive(Resource)]
+pub struct WorldStateJsonHolder(pub std::sync::Arc<std::sync::RwLock<String>>);
+
+/// System: serialize world state as JSON for GM query endpoint.
+/// Runs every 10 ticks to avoid overhead.
+pub fn update_world_state_json(
+    tick: Res<TickCount>,
+    agents: Query<(
+        &AgentName, &GridPos, &AgentGoal, &Needs, &Inventory,
+        &crate::agents::components::BusinessCards,
+    ), bevy::prelude::With<AgentId>>,
+    structures: Query<
+        (&SpriteType, &GridPos, &Inventory),
+        (With<StructureId>, Without<AgentName>),
+    >,
+    bounty_registry: Res<BountyRegistry>,
+    event_log: Res<AgentEventLog>,
+    holder: Res<WorldStateJsonHolder>,
+) {
+    if tick.0 % 10 != 0 { return; }
+
+    let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards)| {
+        let items: std::collections::HashMap<String, u32> = inv.items.iter()
+            .map(|(k, v)| (k.to_string(), *v)).collect();
+        serde_json::json!({
+            "name": name.0,
+            "position": { "x": pos.x, "y": pos.y },
+            "goal": format!("{:?}", goal),
+            "needs": { "energy": needs.energy, "hunger": needs.hunger, "boredom": needs.boredom },
+            "inventory": items,
+            "gold": inv.count(crate::items::ItemType::GoldCoin),
+            "gold_debt": inv.gold_debt,
+            "contacts": cards.contacts.iter().collect::<Vec<_>>(),
+            "cards_remaining": cards.cards_remaining,
+        })
+    }).collect();
+
+    let structures_json: Vec<serde_json::Value> = structures.iter().map(|(sprite, pos, inv)| {
+        let items: std::collections::HashMap<String, u32> = inv.items.iter()
+            .map(|(k, v)| (k.to_string(), *v)).collect();
+        serde_json::json!({
+            "name": sprite.0,
+            "position": { "x": pos.x, "y": pos.y },
+            "inventory": items,
+        })
+    }).collect();
+
+    let bounties_json: Vec<serde_json::Value> = bounty_registry.bounties.iter().map(|b| {
+        serde_json::json!({
+            "id": b.id.to_string(),
+            "description": b.description,
+            "reward_gold": b.reward_gold,
+            "state": format!("{:?}", b.state),
+            "objective": format!("{:?}", b.objective),
+            "hidden_criteria": b.hidden_criteria,
+        })
+    }).collect();
+
+    let recent_logs: Vec<serde_json::Value> = event_log.entries.iter().rev().take(50).map(|e| {
+        serde_json::json!({
+            "tick": e.tick,
+            "agent": e.agent,
+            "kind": e.kind.as_str(),
+            "text": e.text,
+        })
+    }).collect();
+
+    let world = serde_json::json!({
+        "tick": tick.0,
+        "agents": agents_json,
+        "structures": structures_json,
+        "bounties": bounties_json,
+        "recent_logs": recent_logs,
+    });
+
+    let json_str = serde_json::to_string_pretty(&world).unwrap_or_default();
+
+    // Write to shared state.
+    {
+        let state = holder.0.clone();
+        let mut guard = state.write().unwrap();
+        *guard = json_str;
+    }
+}

@@ -66,6 +66,8 @@ impl BoardQueue {
 pub enum BountyState {
     Available,
     Claimed,
+    /// Awaiting game master verification before payout.
+    PendingVerification,
     Completed,
 }
 
@@ -183,6 +185,9 @@ pub struct Bounty {
     pub expired: bool,
     /// Optional multi-step verification (for contract-style bounties).
     pub steps: Vec<BountyStep>,
+    /// Hidden acceptance criteria — only the game master can see this.
+    /// Agents never see this field. The GM uses it to verify completion.
+    pub hidden_criteria: String,
 }
 
 impl Bounty {
@@ -207,6 +212,7 @@ impl Bounty {
             ttl_ticks: 0,
             expired: false,
             steps: vec![],
+            hidden_criteria: String::new(),
         }
     }
 
@@ -233,6 +239,7 @@ impl Bounty {
             ttl_ticks,
             expired: false,
             steps,
+            hidden_criteria: String::new(),
         }
     }
 

@@ -22,6 +22,8 @@ pub struct AppState {
     pub command_tx: mpsc::Sender<GameCommand>,
     pub stripe_secret: Option<String>,
     pub agent_relays: AgentRelays,
+    /// Shared JSON snapshot of world state for GM queries.
+    pub world_state_json: Arc<std::sync::RwLock<String>>,
 }
 
 pub async fn start_server(state: AppState) {
@@ -33,6 +35,8 @@ pub async fn start_server(state: AppState) {
         .route("/api/contracts", post(create_contract))
         .route("/api/stripe/test", get(stripe_test))
         .route("/api/action", post(handle_game_action))
+        .route("/api/gm/query", get(gm_query))
+        .route("/api/gm/verdict", post(gm_verdict))
         .route("/agent/{id}/ws", get({
             let relays = state.agent_relays.clone();
             move |ws, path| agent_relay::agent_ws_handler(ws, path, axum::extract::State(relays))
@@ -462,5 +466,44 @@ async fn handle_game_action(
     Json(serde_json::json!({
         "result": result_text,
         "success": true,
+    }))
+}
+
+// --- Game Master endpoints ---
+
+async fn gm_query(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let _query = params.get("q").map(|s| s.as_str()).unwrap_or("full");
+    let world_json = state.world_state_json.read().unwrap_or_else(|e| e.into_inner());
+    Json(serde_json::from_str::<serde_json::Value>(&world_json).unwrap_or(serde_json::json!({"error": "no state yet"})))
+}
+
+#[derive(Deserialize)]
+struct GmVerdictRequest {
+    bounty_id: String,
+    approved: bool,
+    reason: String,
+}
+
+async fn gm_verdict(
+    State(state): State<AppState>,
+    Json(req): Json<GmVerdictRequest>,
+) -> impl IntoResponse {
+    tracing::info!("[GM VERDICT] bounty={} approved={} reason={}", req.bounty_id, req.approved, req.reason);
+
+    let cmd = GameCommand::GmVerdict {
+        bounty_id: req.bounty_id.clone(),
+        approved: req.approved,
+        reason: req.reason.clone(),
+    };
+
+    let _ = state.command_tx.send(cmd).await;
+
+    Json(serde_json::json!({
+        "result": if req.approved { "Bounty approved" } else { "Bounty rejected" },
+        "bounty_id": req.bounty_id,
+        "approved": req.approved,
     }))
 }

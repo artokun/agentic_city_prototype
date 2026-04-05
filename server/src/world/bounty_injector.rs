@@ -5,129 +5,170 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
-use crate::items::{Inventory, ItemType};
+use crate::items::ItemType;
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
 
 /// How often to check and inject bounties (in ticks).
-const INJECTION_INTERVAL: u64 = 200; // every 20 seconds
+const INJECTION_INTERVAL: u64 = 200;
 
 /// Minimum available bounties to maintain on the board.
 const MIN_AVAILABLE_BOUNTIES: usize = 3;
 
+struct BountyTemplate {
+    title: &'static str,
+    instructions: &'static str,
+    hidden_criteria: &'static str,
+    objective: BountyObjective,
+    reward: u32,
+    claim_items: Vec<(ItemType, u32)>,
+}
+
 /// Pool of bounty templates to randomly inject.
-fn bounty_templates() -> Vec<(&'static str, BountyObjective, u32, Vec<(ItemType, u32)>)> {
+fn bounty_templates() -> Vec<BountyTemplate> {
     vec![
         // --- Free bounties first (no gold required) ---
-        (
-            "Research project at Google",
-            BountyObjective::WorkAtBuilding,
-            8,
-            vec![],
-        ),
-        (
-            "Hide a gold egg: you receive a gold_egg on claim. Go to any building and use deposit_item with service='gold_egg' to hide it there. Then return to the board to collect your reward.",
-            BountyObjective::HideItem(ItemType::GoldEgg),
-            2,
-            vec![(ItemType::GoldEgg, 1)],
-        ),
-        (
-            "Inventory audit at the warehouse",
-            BountyObjective::WorkAtBuilding,
-            6,
-            vec![],
-        ),
-        (
-            "Deep clean the hotel",
-            BountyObjective::WorkAtBuilding,
-            5,
-            vec![],
-        ),
-        (
-            "Visit every building in the city and report back",
-            BountyObjective::WorkAtBuilding,
-            15,
-            vec![],
-        ),
-        (
-            "Exchange business cards with another agent — start a conversation and cards are exchanged automatically",
-            BountyObjective::WorkAtBuilding,
-            3,
-            vec![],
-        ),
-        (
-            "Write a report on the history of Egyptian cats using Google",
-            BountyObjective::WorkAtBuilding,
-            10,
-            vec![],
-        ),
-        (
-            "Interview 2 agents about their daily routine and write a summary",
-            BountyObjective::WorkAtBuilding,
-            10,
-            vec![],
-        ),
-        (
-            "Find the best coffee in town by visiting cafe and market",
-            BountyObjective::WorkAtBuilding,
-            7,
-            vec![],
-        ),
-        (
-            "Ask every agent their favorite color and write it down",
-            BountyObjective::WorkAtBuilding,
-            12,
-            vec![],
-        ),
-        (
-            "Deliver a handwritten note to every agent in the city",
-            BountyObjective::WorkAtBuilding,
-            12,
-            vec![],
-        ),
-        (
-            "Hand out coffee coupons to all agents you can find",
-            BountyObjective::WorkAtBuilding,
-            8,
-            vec![],
-        ),
+        BountyTemplate {
+            title: "Research project at Google",
+            instructions: "Go to Google and use search_internet or browse_for_fun to do research. Then return to the board.",
+            hidden_criteria: "GM: verify agent visited Google (check action log for google visit or service use at google).",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 8,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Hide the golden egg",
+            instructions: "You receive a gold_egg item on claim. Go to any building and use deposit_item with service='gold_egg' to hide it. Return to the board to collect reward.",
+            hidden_criteria: "GM: verify gold_egg exists in ANY structure's inventory (not in the agent's inventory).",
+            objective: BountyObjective::HideItem(ItemType::GoldEgg),
+            reward: 2,
+            claim_items: vec![(ItemType::GoldEgg, 1)],
+        },
+        BountyTemplate {
+            title: "Warehouse inventory audit",
+            instructions: "Go to the warehouse and look around. Report back to the board.",
+            hidden_criteria: "GM: verify agent visited the warehouse (check action log for warehouse visit).",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 6,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Deep clean the hotel",
+            instructions: "Go to the hotel and complete a cleaning job. Return to the board.",
+            hidden_criteria: "GM: verify agent visited the hotel.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 5,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "City tour: visit every building",
+            instructions: "Visit all buildings in the city (bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital). Return to the board when done.",
+            hidden_criteria: "GM: verify agent visited at least 6 different buildings. Check action log for building arrivals.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 15,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Exchange business cards",
+            instructions: "Start a conversation with another agent. Cards are exchanged automatically when you chat face-to-face.",
+            hidden_criteria: "GM: verify agent has at least 1 contact in their business_cards. Check if cards_remaining < 5.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 3,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Egyptian cats research paper",
+            instructions: "Go to Google and research the history of Egyptian cats. Use search_internet to gather data.",
+            hidden_criteria: "GM: verify agent visited Google and used search_internet or browse_for_fun service.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 10,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Agent interviews",
+            instructions: "Interview 2 agents about their daily routine. Start conversations and ask them questions.",
+            hidden_criteria: "GM: verify agent started at least 2 conversations (check action log for start_conversation events).",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 10,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Best coffee in town",
+            instructions: "Visit the cafe and market to find the best coffee. Compare what's available.",
+            hidden_criteria: "GM: verify agent visited both cafe and market.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 7,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Color survey",
+            instructions: "Ask every agent their favorite color. Start conversations and collect answers.",
+            hidden_criteria: "GM: verify agent started at least 2 conversations.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 12,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Deliver notes to all agents",
+            instructions: "Find and deliver a handwritten note to every agent in the city. Use send_message or start_conversation.",
+            hidden_criteria: "GM: verify agent sent messages to at least 2 other agents.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 12,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Coffee coupon distribution",
+            instructions: "Hand out coffee coupons to all agents. Find them and start conversations.",
+            hidden_criteria: "GM: verify agent started at least 1 conversation.",
+            objective: BountyObjective::WorkAtBuilding,
+            reward: 8,
+            claim_items: vec![],
+        },
         // --- Bounties that may require gold or searching ---
-        (
-            "Find the hidden gold egg: search structures by visiting them and checking their inventory. The egg was hidden by another agent.",
-            BountyObjective::FindItem(ItemType::GoldEgg),
-            5,
-            vec![],
-        ),
-        (
-            "Deliver coffee beans to the cafe",
-            BountyObjective::RestockDelivery {
+        BountyTemplate {
+            title: "Find the hidden golden egg",
+            instructions: "Another agent hid a gold_egg in a structure. Visit buildings and check their inventory to find it.",
+            hidden_criteria: "GM: verify agent has gold_egg in their inventory, OR verify gold_egg was removed from a structure's inventory by this agent.",
+            objective: BountyObjective::FindItem(ItemType::GoldEgg),
+            reward: 5,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Deliver coffee beans to cafe",
+            instructions: "Buy coffee beans from the warehouse and deliver them to the cafe.",
+            hidden_criteria: "GM: verify cafe received coffee_beans delivery (check cafe inventory for coffee_beans increase).",
+            objective: BountyObjective::RestockDelivery {
                 item: ItemType::CoffeeBeans,
                 quantity: 10,
                 destination: "cafe".into(),
             },
-            5,
-            vec![],
-        ),
-        (
-            "Deliver flour to the market",
-            BountyObjective::RestockDelivery {
+            reward: 5,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Deliver flour to market",
+            instructions: "Buy flour from the warehouse and deliver it to the market.",
+            hidden_criteria: "GM: verify market received flour delivery.",
+            objective: BountyObjective::RestockDelivery {
                 item: ItemType::Flour,
                 quantity: 5,
                 destination: "market".into(),
             },
-            4,
-            vec![],
-        ),
-        (
-            "Deliver raw meat to the market",
-            BountyObjective::RestockDelivery {
+            reward: 4,
+            claim_items: vec![],
+        },
+        BountyTemplate {
+            title: "Deliver raw meat to market",
+            instructions: "Buy raw meat from the warehouse and deliver it to the market.",
+            hidden_criteria: "GM: verify market received raw_meat delivery.",
+            objective: BountyObjective::RestockDelivery {
                 item: ItemType::RawMeat,
                 quantity: 5,
                 destination: "market".into(),
             },
-            4,
-            vec![],
-        ),
+            reward: 4,
+            claim_items: vec![],
+        },
     ]
 }
 
@@ -149,13 +190,12 @@ pub fn bounty_injection_system(
     let needed = MIN_AVAILABLE_BOUNTIES - available_count;
 
     for i in 0..needed {
-        // Rotate through templates based on tick to get variety.
         let idx = ((tick.0 / INJECTION_INTERVAL) as usize + i) % templates.len();
-        let (desc, objective, reward, claim_items) = &templates[idx];
+        let tmpl = &templates[idx];
 
         // Skip if a similar bounty already exists.
         let already_exists = bounty_registry.bounties.iter().any(|b| {
-            b.description == *desc
+            b.description == tmpl.title
                 && (b.state == BountyState::Available || b.state == BountyState::Claimed)
         });
 
@@ -163,15 +203,19 @@ pub fn bounty_injection_system(
             continue;
         }
 
-        let bounty = Bounty::simple(
+        let mut bounty = Bounty::simple(
             Uuid::new_v4(),
-            desc.to_string(),
-            objective.clone(),
-            *reward,
-            claim_items.clone(),
+            tmpl.title.to_string(),
+            tmpl.objective.clone(),
+            tmpl.reward,
+            tmpl.claim_items.clone(),
+        );
+        bounty.hidden_criteria = format!(
+            "Instructions for agent: {}\n\n{}",
+            tmpl.instructions, tmpl.hidden_criteria
         );
 
-        tracing::info!("[INJECTOR] New bounty: {} ({}g)", desc, reward);
+        tracing::info!("[INJECTOR] New bounty: {} ({}g)", tmpl.title, tmpl.reward);
         bounty_registry.bounties.push(bounty);
     }
 }

@@ -114,6 +114,80 @@ pub fn give_claim_items_system(
     }
 }
 
+/// System: process GM verdicts — pay out approved bounties, reject others.
+pub fn process_gm_verdicts_system(
+    mut verdicts: ResMut<super::commands::PendingVerdicts>,
+    mut bounty_registry: ResMut<crate::world::bounty::BountyRegistry>,
+    mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut ThoughtBubble)>,
+    mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
+    tick: Res<crate::tick::TickCount>,
+    sessions: Res<crate::agents::ai::AgentSessions>,
+) {
+    for (bounty_id, approved, reason) in verdicts.verdicts.drain(..) {
+        let bounty = bounty_registry.bounties.iter().find(|b| b.id == bounty_id).cloned();
+        let Some(bounty) = bounty else {
+            tracing::warn!("[GM] Bounty {} not found", bounty_id);
+            continue;
+        };
+        let Some(agent_entity) = bounty.claimed_by else {
+            tracing::warn!("[GM] Bounty {} has no claimant", bounty_id);
+            continue;
+        };
+
+        if approved {
+            // Pay out.
+            if let Ok((_, name, mut inv, mut thought)) = agents.get_mut(agent_entity) {
+                inv.add(crate::items::ItemType::GoldCoin, bounty.reward_gold);
+                thought.0 = format!("GM approved! Collected {} gold!", bounty.reward_gold);
+                tracing::info!("[GM APPROVED] {} +{} gold for '{}'", name.0, bounty.reward_gold, bounty.description);
+
+                event_log.push(crate::agents::event_log::LogEvent {
+                    tick: tick.0,
+                    agent: name.0.clone(),
+                    kind: crate::agents::event_log::LogKind::System,
+                    text: format!("Game Master APPROVED bounty '{}' — +{}g. Reason: {}", bounty.description, bounty.reward_gold, reason),
+                });
+
+                // Notify the agent.
+                if let Some(session) = sessions.sessions.get(&agent_entity) {
+                    let _ = session.prompt_tx.try_send(
+                        format!("BOUNTY APPROVED by the Game Master! You earned {} gold for '{}'. Reason: {}", bounty.reward_gold, bounty.description, reason),
+                    );
+                }
+            }
+            // Mark completed.
+            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                b.state = crate::world::bounty::BountyState::Completed;
+            }
+        } else {
+            // Rejected — bounty goes back to available.
+            if let Ok((_, name, _, mut thought)) = agents.get_mut(agent_entity) {
+                thought.0 = format!("GM rejected bounty: {}", reason);
+                tracing::info!("[GM REJECTED] {} bounty '{}': {}", name.0, bounty.description, reason);
+
+                event_log.push(crate::agents::event_log::LogEvent {
+                    tick: tick.0,
+                    agent: name.0.clone(),
+                    kind: crate::agents::event_log::LogKind::System,
+                    text: format!("Game Master REJECTED bounty '{}'. Reason: {}", bounty.description, reason),
+                });
+
+                if let Some(session) = sessions.sessions.get(&agent_entity) {
+                    let _ = session.prompt_tx.try_send(
+                        format!("BOUNTY REJECTED by the Game Master. Your submission for '{}' was not approved. Reason: {}. The bounty is back on the board.", bounty.description, reason),
+                    );
+                }
+            }
+            // Return bounty to available.
+            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                b.state = crate::world::bounty::BountyState::Available;
+                b.claimed_by = None;
+                b.picked_up_tick = None;
+            }
+        }
+    }
+}
+
 /// System: process pending item deposits (agent → structure inventory transfer).
 pub fn process_deposits_system(
     mut commands: Commands,

@@ -26,6 +26,11 @@ pub enum GameCommand {
         ttl_ticks: u32,
         steps: Vec<ContractStep>,
     },
+    GmVerdict {
+        bounty_id: String,
+        approved: bool,
+        reason: String,
+    },
 }
 
 /// Step definition from the API.
@@ -47,11 +52,18 @@ pub struct CommandReceiver {
     pub rx: mpsc::Receiver<GameCommand>,
 }
 
+/// Resource: pending GM verdicts that need inventory access to process payouts.
+#[derive(Resource, Default)]
+pub struct PendingVerdicts {
+    pub verdicts: Vec<(Uuid, bool, String)>, // (bounty_id, approved, reason)
+}
+
 /// System: drain commands from the REST API and apply them to the world.
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
     mut bounty_registry: ResMut<BountyRegistry>,
     mut pending_actions: ResMut<PendingActions>,
+    mut pending_verdicts: ResMut<PendingVerdicts>,
     tick: Res<crate::tick::TickCount>,
 ) {
     while let Ok(cmd) = receiver.rx.try_recv() {
@@ -162,6 +174,15 @@ pub fn process_commands_system(
                 );
 
                 bounty_registry.bounties.push(bounty);
+            }
+
+            GameCommand::GmVerdict { bounty_id, approved, reason } => {
+                if let Ok(uuid) = Uuid::parse_str(&bounty_id) {
+                    tracing::info!("[GM] Verdict for {}: approved={} reason={}", bounty_id, approved, reason);
+                    pending_verdicts.verdicts.push((uuid, approved, reason));
+                } else {
+                    tracing::warn!("[GM] Invalid bounty ID: {}", bounty_id);
+                }
             }
         }
     }

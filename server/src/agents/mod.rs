@@ -12,6 +12,7 @@ pub mod game_events;
 pub mod mailbox;
 pub mod movement;
 pub mod needs;
+pub mod gm;
 pub mod pathfinding;
 pub mod perception;
 pub mod personality;
@@ -65,6 +66,7 @@ impl Plugin for AgentPlugin {
                         game_events::ensure_event_state_system,
                         game_events::game_events_system,
                         trading::trade_system,
+                        gm::spawn_gm_system,
                     ).chain(),
                 )
                     .chain(),

@@ -283,34 +283,28 @@ pub fn execution_system(
                 tracing::debug!("[RETURN] {} goal=ReturningToBoard pos=({},{}) board=({},{}) has_path={} at_board={}",
                     name.0, pos.x, pos.y, board_entrance.x, board_entrance.y, has_path, at_pos(pos, &board_entrance));
                 if !has_path && at_pos(pos, &board_entrance) {
-                    // No queue — pay out immediately.
-                    tracing::info!("[PAYOUT] {} returning bounty {}", name.0, bounty_id);
+                    tracing::info!("[SUBMIT] {} submitting bounty {} for GM verification", name.0, bounty_id);
                     action_log.log(tick.0, ActionEvent::BountyReturned { bounty_id });
+
                     if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
                         if bounty.expired {
+                            // Expired bounties skip GM — just charge the recycling fee.
                             inv.deduct_gold_with_debt(RECYCLE_COST);
                             thought.0 = format!("Recycled expired bounty (-{}g)", RECYCLE_COST);
-                            tracing::info!(
-                                "{} recycled expired bounty '{}' (-{}g, balance: {})",
-                                name.0, bounty.description, RECYCLE_COST, inv.gold_balance(),
-                            );
-                        } else {
-                            let can_claim = match bounty.objective {
-                                BountyObjective::FindItem(item) => inv.has(item, 1),
-                                _ => true,
-                            };
-                            if can_claim {
-                                if let BountyObjective::FindItem(item) = bounty.objective {
-                                    inv.remove(item, 1);
-                                }
-                                inv.add(ItemType::GoldCoin, bounty.reward_gold);
-                                thought.0 = format!("Collected {} gold!", bounty.reward_gold);
-                                tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
+                            tracing::info!("{} recycled expired bounty (-{}g)", name.0, RECYCLE_COST);
+                            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                                b.state = BountyState::Completed;
                             }
-                        }
-                        // Mark bounty as completed to prevent double-payout.
-                        if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
-                            b.state = BountyState::Completed;
+                        } else {
+                            // Submit for GM verification.
+                            thought.0 = "Bounty submitted for Game Master review. Waiting for verdict...".into();
+                            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                                b.state = BountyState::PendingVerification;
+                            }
+                            // Spawn GM agent (via marker component).
+                            commands.entity(agent_entity).insert(
+                                crate::agents::gm::PendingGmReview { bounty_id },
+                            );
                         }
                     }
                     anim.0 = AnimState::Idle;

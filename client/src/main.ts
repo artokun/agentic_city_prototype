@@ -87,14 +87,27 @@ function render(s: WorldSnapshot) {
   }
   agentsTable.innerHTML = ah;
 
-  // Active chats
+  // Active chats (deduplicate: only show from first agent alphabetically in each pair)
+  const seenConvos = new Set<string>();
   let chatHtml = "";
   for (let i = 0; i < s.agentsLength(); i++) {
     const a = s.agents(i)!;
     if (a.activeChatLength() > 0) {
+      // Build a key from all speakers to deduplicate
+      const speakers = new Set<string>();
+      for (let j = 0; j < a.activeChatLength(); j++) {
+        speakers.add(a.activeChat(j)!.speaker() ?? "?");
+      }
+      speakers.add(a.name() ?? "?");
+      const key = [...speakers].sort().join("+");
+      if (seenConvos.has(key)) continue;
+      seenConvos.add(key);
+
+      chatHtml += `<div class="chat-header" style="color:#888;margin-top:4px"><em>${a.name()}'s conversation:</em></div>`;
       for (let j = 0; j < a.activeChatLength(); j++) {
         const msg = a.activeChat(j)!;
-        chatHtml += `<div class="chat-msg"><strong>${msg.speaker()}</strong>: ${msg.text()}</div>`;
+        const speaker = msg.speaker() ?? "?";
+        chatHtml += `<div class="chat-msg"><strong style="color:${agentColor(speaker)}">${speaker}</strong>: ${msg.text()}</div>`;
       }
     }
   }
@@ -111,14 +124,18 @@ function render(s: WorldSnapshot) {
   }
   relsTable.innerHTML = rh || '<tr><td colspan="4" class="muted">No relationships yet</td></tr>';
 
-  // Bounties
+  // Bounties (hide completed)
   let bh = "";
   for (let i = 0; i < s.bountiesLength(); i++) {
     const b = s.bounties(i)!;
     const state = b.state();
-    bh += `<tr><td>${b.description()}</td><td>${b.rewardGold()}g</td><td class="${BOUNTY_CLASSES[state] ?? ""}">${BOUNTY_STATES[state] ?? "?"}</td><td>${b.claimedBy() || "-"}</td></tr>`;
+    if (state === BountyStatus.Completed) continue;
+    const desc = b.description() ?? "";
+    // Short title: first sentence or first 50 chars
+    const shortDesc = desc.includes(".") ? desc.split(".")[0] : desc.substring(0, 50);
+    bh += `<tr title="${desc.replace(/"/g, '&quot;')}" style="cursor:pointer" onclick="alert('${desc.replace(/'/g, "\\'")}')"><td>${shortDesc}</td><td>${b.rewardGold()}g</td><td class="${BOUNTY_CLASSES[state] ?? ""}">${BOUNTY_STATES[state] ?? "?"}</td><td>${b.claimedBy() || "-"}</td></tr>`;
   }
-  bountiesTable.innerHTML = bh;
+  bountiesTable.innerHTML = bh || '<tr><td colspan="4" class="muted">No active bounties</td></tr>';
 
   // Structures
   let sh = "";

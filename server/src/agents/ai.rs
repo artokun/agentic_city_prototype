@@ -309,10 +309,28 @@ pub fn ai_context_system(
             .filter(|b| b.state == crate::world::bounty::BountyState::Available
                      || b.state == crate::world::bounty::BountyState::Claimed)
             .map(|b| {
+                let is_mine = b.claimed_by == Some(entity);
                 let status = if b.state == crate::world::bounty::BountyState::Claimed {
-                    if b.claimed_by == Some(entity) { "(YOUR ACTIVE BOUNTY)" } else { "(taken)" }
+                    if is_mine { "(YOUR ACTIVE BOUNTY)" } else { "(taken)" }
                 } else { "(available)" };
-                format!("{} — {}g {}", b.description, b.reward_gold, status)
+                // Show instructions only for the agent's own active bounty.
+                let instructions = if is_mine {
+                    // Extract agent-facing instructions (before the GM criteria).
+                    let agent_instructions = b.hidden_criteria
+                        .split("\n\nGM:")
+                        .next()
+                        .unwrap_or("")
+                        .strip_prefix("Instructions for agent: ")
+                        .unwrap_or("");
+                    if agent_instructions.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n  HOW TO COMPLETE: {}", agent_instructions)
+                    }
+                } else {
+                    String::new()
+                };
+                format!("{} — {}g {}{}", b.description, b.reward_gold, status, instructions)
             }).collect();
 
         let nearby: Vec<(String, GridPos)> = all_agents.iter()
