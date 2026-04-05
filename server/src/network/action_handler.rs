@@ -102,12 +102,23 @@ pub fn give_claim_items_system(
     mut commands: Commands,
     pending: Query<(Entity, &AgentName, &PendingClaimItems)>,
     mut inventories: Query<&mut Inventory, With<AgentName>>,
+    sessions: Res<crate::agents::ai::AgentSessions>,
 ) {
     for (entity, name, claim) in &pending {
         if let Ok(mut inv) = inventories.get_mut(entity) {
+            let mut received: Vec<String> = Vec::new();
             for (item, count) in &claim.items {
                 inv.add(*item, *count);
+                received.push(format!("{} x{}", item, count));
                 tracing::info!("[ClaimItems] {} received {} x{}", name.0, item, count);
+            }
+            // Notify the agent they received items.
+            if !received.is_empty() {
+                if let Some(session) = sessions.sessions.get(&entity) {
+                    let _ = session.prompt_tx.try_send(
+                        format!("You received items for this bounty: {}. These are now in your inventory. Use them to complete the bounty.", received.join(", ")),
+                    );
+                }
             }
         }
         commands.entity(entity).remove::<PendingClaimItems>();
