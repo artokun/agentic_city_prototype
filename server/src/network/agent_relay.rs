@@ -134,13 +134,15 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
                                     }
                                 }
 
-                                // Extract text from assistant/result messages.
-                                "assistant" | "result" => {
+                                // Extract text from result messages only (skip assistant to avoid duplicates).
+                                "result" => {
                                     if let Some(text) = claude::extract_result_text(&val) {
                                         tracing::info!("[relay:{}] response: {}...", agent_id, &text[..text.len().min(80)]);
                                         let _ = response_tx.send(text).await;
                                     }
                                 }
+                                // Skip assistant messages — the result message has the final text.
+                                "assistant" => {}
 
                                 // Skip system/hook messages silently.
                                 "system" => {}

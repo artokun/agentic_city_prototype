@@ -119,7 +119,11 @@ pub fn shift_processing_system(
     }
 
     // Start new processing tasks for idle workers.
+    // Only process at retail locations (cafe, market) — NOT the warehouse.
     for (entity, name, shift) in &workers_without_task {
+        if shift.building_name == "warehouse" || shift.building_name == "hotel" {
+            continue; // Warehouse is wholesale only, hotel doesn't process food.
+        }
         let Ok(mut inv) = building_invs.get_mut(shift.building) else { continue };
 
         // Find first raw material in the building's inventory.

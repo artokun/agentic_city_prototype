@@ -359,17 +359,16 @@ That's my plan."#;
     }
 
     #[test]
-    fn garbage_input_returns_do_nothing() {
-        let (action, thought) = parse_action("this is not json at all!!!");
-        assert!(matches!(action, AgentAction::DoNothing));
-        assert_eq!(thought, "couldn't parse response");
+    fn garbage_input_falls_back_to_wander() {
+        // Prose fallback: unrecognized text defaults to Wander
+        let (action, _) = parse_action("this is not json at all!!!");
+        assert!(matches!(action, AgentAction::Wander));
     }
 
     #[test]
-    fn empty_input_returns_do_nothing() {
-        let (action, thought) = parse_action("");
-        assert!(matches!(action, AgentAction::DoNothing));
-        assert_eq!(thought, "couldn't parse response");
+    fn empty_input_falls_back_to_wander() {
+        let (action, _) = parse_action("");
+        assert!(matches!(action, AgentAction::Wander));
     }
 
     #[test]
