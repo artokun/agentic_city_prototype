@@ -264,7 +264,7 @@ pub fn execution_system(
                 let bounty = bounty_registry.get(bounty_id).cloned();
                 let Some(bounty) = bounty else { *goal = AgentGoal::Idle; continue };
 
-                // If the bounty has expired, stop executing and return it.
+                // If the bounty has expired, force return.
                 if bounty.expired {
                     thought.0 = "Bounty expired! Must return it...".into();
                     tracing::info!("{} bounty expired, returning to board", name.0);
@@ -275,182 +275,15 @@ pub fn execution_system(
                     continue;
                 }
 
-                match bounty.objective {
-                    BountyObjective::HideItem(item) => {
-                        if !has_path {
-                            if inv.has(item, 1) {
-                                let candidates: Vec<_> = structure_list.iter()
-                                    .filter(|(_, _, s)| s != "bounty_board").collect();
-                                if let Some((se, entrance, sname)) = candidates.first() {
-                                    if at_pos(pos, entrance) {
-                                        commands.entity(agent_entity).insert(InsideBuilding(*se));
-                                        action_log.log(tick.0, ActionEvent::EnteredBuilding { building: sname.clone() });
-                                        if inv.remove(item, 1) {
-                                            if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(*se) {
-                                                sinv.add(item, 1);
-                                                thought.0 = format!("Hid {} in {}!", item, sname);
-                                                tracing::info!("{} hid {} in {}", name.0, item, sname);
-                                                bounty_registry.mark_completed(bounty_id);
-                                                commands.entity(agent_entity).remove::<InsideBuilding>();
-                                                *goal = AgentGoal::ReturningToBoard(bounty_id);
-                                                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
-                                                    commands.entity(agent_entity).insert(Path(p));
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        thought.0 = format!("→ {} to hide {}...", sname, item);
-                                        if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
-                                            commands.entity(agent_entity).insert(Path(p));
-                                        }
-                                    }
-                                }
-                            } else { *goal = AgentGoal::Idle; }
-                        }
-                    }
-                    BountyObjective::FindItem(item) => {
-                        if !has_path {
-                            if inv.has(item, 1) {
-                                thought.0 = format!("Found {}! Returning...", item);
-                                commands.entity(agent_entity).remove::<InsideBuilding>();
-                                bounty_registry.mark_completed(bounty_id);
-                                *goal = AgentGoal::ReturningToBoard(bounty_id);
-                                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
-                                    commands.entity(agent_entity).insert(Path(p));
-                                }
-                                continue;
-                            }
-                            let mut found_at = None;
-                            for (se, entrance, sname) in &structure_list {
-                                if sname == "bounty_board" { continue; }
-                                if let Ok((_, _, _, sinv, _)) = structures.get(*se) {
-                                    if sinv.has(item, 1) {
-                                        found_at = Some((*se, *entrance, sname.clone()));
-                                        break;
-                                    }
-                                }
-                            }
-                            if let Some((se, entrance, sname)) = found_at {
-                                if at_pos(pos, &entrance) {
-                                    commands.entity(agent_entity).insert(InsideBuilding(se));
-                                    action_log.log(tick.0, ActionEvent::EnteredBuilding { building: sname.clone() });
-                                    if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(se) {
-                                        if sinv.remove(item, 1) {
-                                            inv.add(item, 1);
-                                            thought.0 = format!("Found {} in {}!", item, sname);
-                                            tracing::info!("{} found {} in {}", name.0, item, sname);
-                                        }
-                                    }
-                                } else {
-                                    thought.0 = format!("Searching {}...", sname);
-                                    if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
-                                        commands.entity(agent_entity).insert(Path(p));
-                                    }
-                                }
-                            } else {
-                                let candidates: Vec<_> = structure_list.iter()
-                                    .filter(|(_, _, s)| s != "bounty_board").collect();
-                                let idx = (agent_entity.to_bits() as usize + tick.0 as usize) % candidates.len().max(1);
-                                if let Some((_, entrance, sname)) = candidates.get(idx) {
-                                    thought.0 = format!("Searching {}...", sname);
-                                    if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
-                                        commands.entity(agent_entity).insert(Path(p));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    BountyObjective::RestockDelivery { item, quantity, ref destination } => {
-                        if !has_path {
-                            if !inv.has(item, quantity) {
-                                let warehouse = structure_list.iter().find(|(_, _, s)| s == "warehouse");
-                                if let Some((_we, w_entrance, _)) = warehouse {
-                                    if at_pos(pos, w_entrance) {
-                                        let (gold_per, units_per) = item.wholesale_price().unwrap_or((1, 1));
-                                        let batches = (quantity + units_per - 1) / units_per;
-                                        let cost = batches * gold_per;
-                                        if inv.has(ItemType::GoldCoin, cost) {
-                                            inv.remove(ItemType::GoldCoin, cost);
-                                            inv.add(item, quantity);
-                                            thought.0 = format!("Bought {} {} for {}g", quantity, item, cost);
-                                            tracing::info!("{} bought {} {} for {}g", name.0, quantity, item, cost);
-                                        } else {
-                                            thought.0 = format!("Can't afford ({}g needed)", cost);
-                                            *goal = AgentGoal::Idle;
-                                            continue;
-                                        }
-                                    } else {
-                                        thought.0 = format!("→ warehouse to buy {} {}...", quantity, item);
-                                        if let Some(p) = pathfinding::bfs(&map, *pos, *w_entrance) {
-                                            commands.entity(agent_entity).insert(Path(p));
-                                        }
-                                        continue;
-                                    }
-                                }
-                            }
-                            if inv.has(item, quantity) {
-                                let dest = structure_list.iter().find(|(_, _, s)| s == destination);
-                                if let Some((de, d_entrance, dname)) = dest {
-                                    if at_pos(pos, d_entrance) {
-                                        if inv.remove(item, quantity) {
-                                            if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(*de) {
-                                                sinv.add(item, quantity);
-                                            }
-                                            thought.0 = format!("Delivered {} {} to {}!", quantity, item, dname);
-                                            tracing::info!("{} delivered {} {} to {}", name.0, quantity, item, dname);
-                                            bounty_registry.mark_completed(bounty_id);
-                                            *goal = AgentGoal::ReturningToBoard(bounty_id);
-                                            if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
-                                                commands.entity(agent_entity).insert(Path(p));
-                                            }
-                                        }
-                                    } else {
-                                        thought.0 = format!("Delivering to {}...", dname);
-                                        if let Some(p) = pathfinding::bfs(&map, *pos, *d_entrance) {
-                                            commands.entity(agent_entity).insert(Path(p));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    BountyObjective::WorkAtBuilding => {
-                        if !has_path {
-                            let target = structure_list.iter().find(|(_, _, sname)| {
-                                bounty.description.contains(sname.as_str())
-                            });
-                            if let Some((se, entrance, sname)) = target {
-                                if at_pos(pos, entrance) {
-                                    commands.entity(agent_entity).insert(InsideBuilding(*se));
-                                    action_log.log(tick.0, ActionEvent::EnteredBuilding { building: sname.clone() });
-                                    commands.entity(agent_entity).insert(ActionTimer {
-                                        action_name: format!("working: {}", bounty.description),
-                                        remaining_ticks: 40,
-                                        effects: services::ServiceEffects { boredom: 15.0, ..Default::default() },
-                                        gold_cost: 0,
-                                        paid: true,
-                                        consumes_item: None,
-                                    });
-                                    thought.0 = format!("Working: {}...", bounty.description);
-                                    tracing::info!("{} working: {}", name.0, bounty.description);
-                                    bounty_registry.mark_completed(bounty_id);
-                                    *goal = AgentGoal::ReturningToBoard(bounty_id);
-                                } else {
-                                    thought.0 = format!("→ {} for work...", sname);
-                                    if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
-                                        commands.entity(agent_entity).insert(Path(p));
-                                    }
-                                }
-                            } else {
-                                bounty_registry.mark_completed(bounty_id);
-                                *goal = AgentGoal::ReturningToBoard(bounty_id);
-                                if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
-                                    commands.entity(agent_entity).insert(Path(p));
-                                }
-                            }
-                        }
-                    }
-                }
+                // ALL bounty execution is driven by Claude AI.
+                // The execution system does NOT decide where to go or what to do.
+                // It only handles the expired-bounty safety net above.
+                // The AI system will see ExecutingBounty in the agent's goal,
+                // include the bounty details in the context, and Claude decides
+                // the next action (go_to_service, look_around, etc.)
+                //
+                // When Claude decides the bounty is complete, it should choose
+                // "go_to_board" which transitions to ReturningToBoard.
             }
 
             AgentGoal::ReturningToBoard(bounty_id) => {

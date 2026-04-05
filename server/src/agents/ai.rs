@@ -248,7 +248,8 @@ pub fn ai_decision_system(
 
         // Rate limit.
         if tick.0 - session.last_decision_tick < DECISION_INTERVAL { continue; }
-        if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WorkingShift { .. }) { continue; }
+        // Allow decisions when idle, wandering, working a shift, OR executing a bounty.
+        if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_)) { continue; }
 
         // Build context and send.
         let available_bounties: Vec<String> = bounty_registry
@@ -280,11 +281,24 @@ pub fn ai_decision_system(
         if shift_worker.is_some() {
             location_tools.push("leave_shift");
         }
+        // Add complete_bounty tool if executing a bounty.
+        if matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+            location_tools.push("complete_bounty");
+        }
         let location_tool_refs: Vec<&str> = location_tools.iter().copied().collect();
+
+        // Get active bounty description if executing one.
+        let active_bounty_desc = match &*goal {
+            AgentGoal::ExecutingBounty(bid) => {
+                bounty_registry.get(*bid).map(|b| b.description.clone())
+            }
+            _ => None,
+        };
 
         let context = super::ai_decision::build_context(
             &name.0, pos, needs, inv, &goal, known_locs, rels,
             speed.0, &available_bounties, &nearby, &location_tool_refs,
+            active_bounty_desc.as_deref(),
         );
 
         if let Err(e) = session.prompt_tx.try_send(context) {
@@ -340,6 +354,17 @@ fn apply_action(
             });
         }
         AgentAction::WorkShift { .. } | AgentAction::LeaveShift => {}
+        AgentAction::CompleteBounty => {
+            // Agent believes bounty is done — return to board.
+            if let AgentGoal::ExecutingBounty(bounty_id) = **goal {
+                **goal = AgentGoal::ReturningToBoard(bounty_id);
+                if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
+                    if let Some(p) = super::pathfinding::bfs(map, *pos, board.entrance) {
+                        commands.entity(entity).insert(super::components::Path(p));
+                    }
+                }
+            }
+        }
         AgentAction::DoNothing => {}
     }
 }

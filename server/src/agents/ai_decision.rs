@@ -19,6 +19,7 @@ pub fn build_context(
     available_bounties: &[String],
     nearby_agents: &[(String, GridPos)],
     location_tools: &[&str],
+    active_bounty: Option<&str>,
 ) -> String {
     let gold = inv.count(ItemType::GoldCoin);
 
@@ -59,6 +60,15 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
             ctx += &format!("- {} at ({},{}) entrance ({},{}) — {} tiles, {:.1}s travel\n",
                 loc.name, loc.pos.x, loc.pos.y, loc.entrance.x, loc.entrance.y, dist, travel_secs);
         }
+    }
+
+    // Active bounty (if executing one)
+    if let Some(bounty_desc) = active_bounty {
+        ctx += "\n## YOUR ACTIVE BOUNTY\n";
+        ctx += &format!("You are currently working on: {}\n", bounty_desc);
+        ctx += "You must figure out HOW to complete this bounty. Go to buildings, search, interact.\n";
+        ctx += "When done, use 'go_to_board' to return and collect your reward.\n";
+        ctx += "Use 'complete_bounty' when you believe the objective is fulfilled.\n";
     }
 
     // Available bounties
@@ -134,6 +144,7 @@ pub enum AgentAction {
     WorkShift { building: String },
     LeaveShift,
     SendMessage { recipient: String, text: String },
+    CompleteBounty,
     DoNothing,
 }
 
@@ -169,6 +180,7 @@ pub fn parse_action(response: &str) -> (AgentAction, String) {
                     AgentAction::WorkShift { building }
                 }
                 "leave_shift" => AgentAction::LeaveShift,
+                "complete_bounty" => AgentAction::CompleteBounty,
                 _ => AgentAction::DoNothing,
             };
 
