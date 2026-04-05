@@ -262,30 +262,6 @@ pub fn process_deposits_system(
     mut incapacitated_agents: Query<(Entity, &AgentName, &mut ThoughtBubble), With<crate::world::hospital::Incapacitated>>,
 ) {
     for (entity, name, deposit) in &deposits {
-        // Special case: deposit all documents (bounty submission).
-        if deposit.item_name == "all_documents" {
-            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
-                let doc_count = agent_inv.count(crate::items::ItemType::Document);
-                if doc_count > 0 {
-                    agent_inv.remove(crate::items::ItemType::Document, doc_count);
-                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
-                        bld_inv.add(crate::items::ItemType::Document, doc_count);
-                    }
-                    tracing::info!("[Deposit] {} deposited {} documents at building", name.0, doc_count);
-                }
-            }
-            // Also clear the DocumentInventory content.
-            if let Ok(mut docs) = agent_docs.get_mut(entity) {
-                let titles: Vec<String> = docs.documents.keys().cloned().collect();
-                for title in &titles {
-                    tracing::info!("[Deposit] {} submitted document '{}'", name.0, title);
-                }
-                docs.documents.clear();
-            }
-            commands.entity(entity).remove::<PendingDeposit>();
-            continue;
-        }
-
         // Special case: depositing a body at the hospital.
         if deposit.item_name.starts_with("body:") {
             let victim_name = &deposit.item_name[5..];
@@ -310,6 +286,27 @@ pub fn process_deposits_system(
                 // Not the hospital — just drop the body on this tile.
                 tracing::info!("[Deposit] {} dropped {} here (not the hospital)", name.0, deposit.item_name);
             }
+        } else if deposit.item_name.starts_with("doc:") || deposit.item_name.ends_with(".md") {
+            // Named document deposit.
+            let doc_title = deposit.item_name.strip_prefix("doc:").unwrap_or(&deposit.item_name);
+            let mut found = false;
+            if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                if let Some(content) = docs.documents.remove(doc_title) {
+                    found = true;
+                    // Remove the Document item count too.
+                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                        agent_inv.remove(crate::items::ItemType::Document, 1);
+                    }
+                    // Add to building inventory.
+                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
+                        bld_inv.add(crate::items::ItemType::Document, 1);
+                    }
+                    tracing::info!("[Deposit] {} deposited document '{}' ({} chars)", name.0, doc_title, content.len());
+                }
+            }
+            if !found {
+                tracing::info!("[Deposit] {} doesn't have document '{}' — available docs listed in inventory", name.0, doc_title);
+            }
         } else {
             // Regular item deposit.
             let item_type = parse_item_name(&deposit.item_name);
@@ -331,7 +328,7 @@ pub fn process_deposits_system(
                     tracing::warn!("[Deposit] Failed: {} tried to deposit {} but doesn't have it", name.0, deposit.item_name);
                 }
             } else {
-                tracing::warn!("[Deposit] Unknown item type: {}", deposit.item_name);
+                tracing::warn!("[Deposit] Unknown item '{}'. Check your inventory for valid item names.", deposit.item_name);
             }
         }
 

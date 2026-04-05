@@ -305,17 +305,10 @@ pub fn execution_system(
                                 b.state = BountyState::Completed;
                             }
                         } else {
-                            // Mark agent for document deposit — a separate system will
-                            // transfer documents from agent to bounty board.
-                            commands.entity(agent_entity).insert(
-                                crate::network::action_handler::PendingDeposit {
-                                    item_name: "all_documents".into(),
-                                    building_entity: board_entity,
-                                },
-                            );
-
                             // Submit for GM verification.
-                            thought.0 = "Bounty submitted for Game Master review. Documents deposited. Waiting for verdict...".into();
+                            // Agents must deposit their proof items BEFORE submitting.
+                            // The GM verifies what's in the board's inventory.
+                            thought.0 = "Bounty submitted for Game Master review. Waiting for verdict...".into();
                             if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
                                 b.state = BountyState::PendingVerification;
                             }
