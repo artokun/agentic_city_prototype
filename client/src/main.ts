@@ -128,6 +128,15 @@ function render(s: WorldSnapshot) {
 
     const actionHtml = action ? `<span style="color:#ff9800">${action} (${actionTicks}t)</span>` : "";
 
+    // Token tracking stats
+    const stats = a.stats();
+    const tokensUsed = stats ? stats.tokensUsed() : 0;
+    const contextLimit = stats ? stats.contextLimit() : 200000;
+    const totalCost = stats ? stats.totalCostUsd() : 0;
+    const tokenPct = contextLimit > 0 ? Math.round((tokensUsed / contextLimit) * 100) : 0;
+    const costStr = totalCost >= 0.01 ? `$${totalCost.toFixed(2)}` : `$${totalCost.toFixed(4)}`;
+    const tokenColor = tokenPct < 50 ? "#4caf50" : tokenPct < 75 ? "#ff9800" : "#f44336";
+
     cardsHtml += `
       <div class="agent-card">
         <div class="card-header">
@@ -138,6 +147,10 @@ function render(s: WorldSnapshot) {
           <span>(${pos?.x()}, ${pos?.y()})</span>
           <span class="${ANIM_CLASSES[anim] ?? ""}">${ANIM_NAMES[anim] ?? "?"}</span>
           ${actionHtml}
+        </div>
+        <div class="card-meta">
+          <span style="color:${tokenColor}">${(tokensUsed / 1000).toFixed(1)}k/${(contextLimit / 1000).toFixed(0)}k tokens (${tokenPct}%)</span>
+          <span class="muted">${costStr}</span>
         </div>
         <div class="card-meta"><span class="muted">${goal}</span></div>
         ${needsHtml}

@@ -4,6 +4,7 @@
 
 export { AgentNeeds } from './world/agent-needs.js';
 export { AgentSnapshot } from './world/agent-snapshot.js';
+export { AgentStats } from './world/agent-stats.js';
 export { AnimState } from './world/anim-state.js';
 export { BoardQueueSnapshot } from './world/board-queue-snapshot.js';
 export { BountySnapshot } from './world/bounty-snapshot.js';

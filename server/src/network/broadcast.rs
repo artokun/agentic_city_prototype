@@ -10,6 +10,7 @@ use crate::agents::needs::Needs;
 use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
+use crate::agents::token_tracking::{AgentCost, ContextWindow};
 use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::*;
@@ -38,7 +39,7 @@ pub fn broadcast_state(
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
         Option<&ActionTimer>, Option<&ActiveConversation>,
     )>,
-    agent_extras: Query<(Option<&ConversationLog>, Option<&BusinessCards>)>,
+    agent_extras: Query<(Option<&ConversationLog>, Option<&BusinessCards>, Option<&ContextWindow>, Option<&AgentCost>)>,
     structures: Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,
@@ -65,6 +66,7 @@ pub fn update_world_state_json(
     agents: Query<(
         &AgentName, &GridPos, &AgentGoal, &Needs, &Inventory,
         &crate::agents::components::BusinessCards,
+        &ContextWindow, &AgentCost,
     ), bevy::prelude::With<AgentId>>,
     structures: Query<
         (&SpriteType, &GridPos, &Inventory),
@@ -76,7 +78,7 @@ pub fn update_world_state_json(
 ) {
     if tick.0 % 10 != 0 { return; }
 
-    let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards)| {
+    let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards, ctx_window, agent_cost)| {
         let items: std::collections::HashMap<String, u32> = inv.items.iter()
             .map(|(k, v)| (k.to_string(), *v)).collect();
         // Get documents from DocumentInventory if available.
@@ -92,6 +94,9 @@ pub fn update_world_state_json(
             "gold_debt": inv.gold_debt,
             "contacts": cards.contacts.keys().collect::<Vec<_>>(),
             "cards_remaining": cards.cards_remaining,
+            "tokens_used": ctx_window.tokens_used,
+            "context_limit": ctx_window.context_limit,
+            "total_cost_usd": agent_cost.total_cost_usd,
         })
     }).collect();
 

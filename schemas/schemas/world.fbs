@@ -43,6 +43,13 @@ table TrackedEntitySnapshot {
   in_range: bool;
 }
 
+table AgentStats {
+  tokens_used: uint;
+  context_limit: uint;
+  total_cost_usd: double;
+  session_cost_usd: double;
+}
+
 table AgentSnapshot {
   id: string;
   name: string;
@@ -60,6 +67,7 @@ table AgentSnapshot {
   visible_entities: [VisibleEntitySnapshot];
   tracked_entities: [TrackedEntitySnapshot];
   known_location_count: uint;
+  stats: AgentStats;
 }
 
 table StructureSnapshot {

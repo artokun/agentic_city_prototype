@@ -78,9 +78,10 @@ fn needs_decay_over_time() {
     }
 
     let needs = app.world().entity(agent).get::<Needs>().unwrap();
-    assert!(
-        needs.energy < defaults.energy,
-        "Energy should have decayed: {} >= {}",
+    // Energy is now token-driven (not time-based), so it should NOT decay.
+    assert_eq!(
+        needs.energy, defaults.energy,
+        "Energy should NOT decay over time (token-driven now): {} != {}",
         needs.energy,
         defaults.energy
     );

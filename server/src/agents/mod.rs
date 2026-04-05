@@ -19,6 +19,7 @@ pub mod personality;
 pub mod social;
 pub mod summarizer;
 pub mod thinking_log;
+pub mod token_tracking;
 pub mod trading;
 
 use bevy::prelude::*;
@@ -36,6 +37,7 @@ impl Plugin for AgentPlugin {
         app.init_resource::<ai::AgentSessions>()
             .init_resource::<event_log::AgentEventLog>()
             .init_resource::<thinking_log::ThinkingLogCursor>()
+            .init_resource::<token_tracking::TokenEventQueue>()
             .add_systems(Startup, spawn_agents.after(init_map))
             .add_systems(
                 Update,
@@ -56,6 +58,7 @@ impl Plugin for AgentPlugin {
                         ai::spawn_sessions_system,
                         // ai_chat::ai_chat_system, // DISABLED: chatting via MCP tool only
                         ai::ai_thought_drain_system,
+                        token_tracking::token_drain_system,
                     ai::ai_context_system,
                         summarizer::summarize_thoughts_system,
                         behavior::execution_system,

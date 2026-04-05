@@ -9,6 +9,7 @@ use crate::agents::needs::Needs;
 use crate::agents::event_log::AgentEventLog;
 use crate::agents::perception::{KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
+use crate::agents::token_tracking::{AgentCost, ContextWindow};
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::bounty::*;
@@ -24,7 +25,7 @@ pub fn serialize_world(
         &Inventory, &AgentGoal, &Needs, &Relationships, &Vision, &Tracking, &KnownLocations,
         Option<&ActionTimer>, Option<&ActiveConversation>,
     )>,
-    agent_extras: &Query<(Option<&ConversationLog>, Option<&BusinessCards>)>,
+    agent_extras: &Query<(Option<&ConversationLog>, Option<&BusinessCards>, Option<&ContextWindow>, Option<&AgentCost>)>,
     structures: &Query<
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,
@@ -39,7 +40,7 @@ pub fn serialize_world(
     let agent_offsets: Vec<_> = agents
         .iter()
         .map(|(entity, id, name, pos, anim, thought, inv, goal, needs, rels, vision, tracking, known_locs, action, active_convo)| {
-            let (convo_log, cards) = agent_extras.get(entity).unwrap_or((None, None));
+            let (convo_log, cards, ctx_window, agent_cost) = agent_extras.get(entity).unwrap_or((None, None, None, None));
             let id_str = fbb.create_string(&id.0.to_string());
             let name_str = fbb.create_string(&name.0);
             let thought_str = fbb.create_string(&thought.0);
@@ -127,6 +128,18 @@ pub fn serialize_world(
             let gold = inv.count(crate::items::ItemType::GoldCoin);
             let fb_needs = fb::AgentNeeds::new(needs.energy, needs.hunger, needs.boredom);
 
+            // Agent stats (token tracking).
+            let stats = if let (Some(cw), Some(ac)) = (ctx_window, agent_cost) {
+                Some(fb::AgentStats::create(&mut fbb, &fb::AgentStatsArgs {
+                    tokens_used: cw.tokens_used,
+                    context_limit: cw.context_limit,
+                    total_cost_usd: ac.total_cost_usd,
+                    session_cost_usd: ac.session_cost_usd,
+                }))
+            } else {
+                None
+            };
+
             fb::AgentSnapshot::create(&mut fbb, &fb::AgentSnapshotArgs {
                 id: Some(id_str),
                 name: Some(name_str),
@@ -144,6 +157,7 @@ pub fn serialize_world(
                 visible_entities: Some(vis_vec),
                 tracked_entities: Some(track_vec),
                 known_location_count: known_locs.locations.len() as u32,
+                stats,
             })
         })
         .collect();

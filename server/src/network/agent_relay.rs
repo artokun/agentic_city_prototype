@@ -11,6 +11,14 @@ use tokio::sync::{mpsc, Mutex, Notify};
 
 use crate::agents::claude;
 
+/// Token usage data extracted from Claude result messages.
+#[derive(Debug, Clone)]
+pub struct TokenUsageEvent {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cost_usd: f64,
+}
+
 /// Shared state for all agent relays.
 #[derive(Clone, Default)]
 pub struct AgentRelays {
@@ -22,6 +30,8 @@ struct RelayState {
     prompt_rx: Option<mpsc::Receiver<String>>,
     /// Claude → Game: extracted text responses.
     response_tx: mpsc::Sender<String>,
+    /// Claude → Game: token usage events.
+    token_tx: mpsc::Sender<TokenUsageEvent>,
     /// Notify when Claude connects.
     connected: Arc<Notify>,
 }
@@ -30,6 +40,7 @@ struct RelayState {
 pub struct RelayHandle {
     pub prompt_tx: mpsc::Sender<String>,
     pub response_rx: mpsc::Receiver<String>,
+    pub token_rx: mpsc::Receiver<TokenUsageEvent>,
     pub connected: Arc<Notify>,
 }
 
@@ -37,15 +48,17 @@ impl AgentRelays {
     pub async fn register(&self, agent_id: &str) -> RelayHandle {
         let (prompt_tx, prompt_rx) = mpsc::channel::<String>(32);
         let (response_tx, response_rx) = mpsc::channel::<String>(64);
+        let (token_tx, token_rx) = mpsc::channel::<TokenUsageEvent>(64);
         let connected = Arc::new(Notify::new());
 
         self.inner.lock().await.insert(agent_id.to_string(), RelayState {
             prompt_rx: Some(prompt_rx),
             response_tx,
+            token_tx,
             connected: connected.clone(),
         });
 
-        RelayHandle { prompt_tx, response_rx, connected }
+        RelayHandle { prompt_tx, response_rx, token_rx, connected }
     }
 }
 
@@ -61,14 +74,14 @@ pub async fn agent_ws_handler(
 
 async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentRelays) {
     // Take channels from the relay state.
-    let (mut prompt_rx, response_tx, connected) = {
+    let (mut prompt_rx, response_tx, token_tx, connected) = {
         let mut map = relays.inner.lock().await;
         let Some(state) = map.get_mut(&agent_id) else {
             tracing::warn!("[relay:{}] No relay registered", agent_id);
             return;
         };
         let rx = state.prompt_rx.take();
-        (rx, state.response_tx.clone(), state.connected.clone())
+        (rx, state.response_tx.clone(), state.token_tx.clone(), state.connected.clone())
     };
 
     let Some(mut prompt_rx) = prompt_rx else {
@@ -178,6 +191,31 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
                                         let preview: String = text.chars().take(80).collect();
                                         tracing::info!("[relay:{}] response: {}...", agent_id, preview);
                                         let _ = response_tx.send(text).await;
+                                    }
+
+                                    // Extract token usage from result message.
+                                    let input_tokens = val.get("usage")
+                                        .and_then(|u| u.get("input_tokens"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as u32;
+                                    let output_tokens = val.get("usage")
+                                        .and_then(|u| u.get("output_tokens"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as u32;
+                                    let cost_usd = val.get("total_cost_usd")
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.0);
+
+                                    if input_tokens > 0 || output_tokens > 0 {
+                                        tracing::info!(
+                                            "[relay:{}] tokens: in={}, out={}, cost=${:.4}",
+                                            agent_id, input_tokens, output_tokens, cost_usd
+                                        );
+                                        let _ = token_tx.send(TokenUsageEvent {
+                                            input_tokens,
+                                            output_tokens,
+                                            cost_usd,
+                                        }).await;
                                     }
                                 }
                                 // Capture assistant thinking as dialogue.

@@ -5,6 +5,7 @@
 import * as flatbuffers from 'flatbuffers';
 
 import { AgentNeeds } from '../world/agent-needs.js';
+import { AgentStats } from '../world/agent-stats.js';
 import { AnimState } from '../world/anim-state.js';
 import { ChatMessageSnapshot } from '../world/chat-message-snapshot.js';
 import { InventorySlot } from '../world/inventory-slot.js';
@@ -147,8 +148,13 @@ knownLocationCount():number {
   return offset ? this.bb!.readUint32(this.bb_pos + offset) : 0;
 }
 
+stats(obj?:AgentStats):AgentStats|null {
+  const offset = this.bb!.__offset(this.bb_pos, 36);
+  return offset ? (obj || new AgentStats()).__init(this.bb!.__indirect(this.bb_pos + offset), this.bb!) : null;
+}
+
 static startAgentSnapshot(builder:flatbuffers.Builder) {
-  builder.startObject(16);
+  builder.startObject(17);
 }
 
 static addId(builder:flatbuffers.Builder, idOffset:flatbuffers.Offset) {
@@ -273,6 +279,10 @@ static startTrackedEntitiesVector(builder:flatbuffers.Builder, numElems:number) 
 
 static addKnownLocationCount(builder:flatbuffers.Builder, knownLocationCount:number) {
   builder.addFieldInt32(15, knownLocationCount, 0);
+}
+
+static addStats(builder:flatbuffers.Builder, statsOffset:flatbuffers.Offset) {
+  builder.addFieldOffset(16, statsOffset, 0);
 }
 
 static endAgentSnapshot(builder:flatbuffers.Builder):flatbuffers.Offset {

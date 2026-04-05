@@ -11,6 +11,7 @@ use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
 use crate::agents::perception::KnownLocations;
 use crate::agents::social::Relationships;
+use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::BountyRegistry;
@@ -202,6 +203,7 @@ pub fn spawn_sessions_system(
 
             let ptx = handle.prompt_tx;
             let rrx = Arc::new(Mutex::new(handle.response_rx));
+            let token_rx = Arc::new(Mutex::new(handle.token_rx));
 
             // Send the intro message — Dungeon Crawler Carl style.
             let intro = build_intro_message(&agent_name);
@@ -209,6 +211,8 @@ pub fn spawn_sessions_system(
 
             let ptx_clone = ptx.clone();
             let rrx_clone = rrx.clone();
+            let token_rx_clone = token_rx.clone();
+            let agent_uuid_for_main = agent_uuid.clone();
 
             ctx.run_on_main_thread(move |main_ctx| {
                 let world = main_ctx.world;
@@ -218,6 +222,9 @@ pub fn spawn_sessions_system(
                     s.response_rx = rrx_clone;
                     tracing::info!("Session channels updated for entity {:?}", entity_copy);
                 }
+                // Store token_rx in the TokenEventQueue keyed by agent UUID.
+                let mut token_queue = world.resource_mut::<TokenEventQueue>();
+                token_queue.receivers.insert(agent_uuid_for_main, token_rx_clone);
             }).await;
 
             let _ = child.wait().await;

@@ -8,6 +8,7 @@ use crate::agents::needs::Needs;
 use crate::agents::perception::{InspectionLog, KnownLocations, Tracking, Vision};
 use crate::agents::social::Relationships;
 use crate::agents::thinking_log::ThinkingLog;
+use crate::agents::token_tracking::{AgentCost, ContextWindow};
 use crate::items::{CarrySlots, DocumentInventory, Inventory};
 use crate::world::map::GridPos;
 use crate::world::shifts::PaycheckWallet;
@@ -124,6 +125,8 @@ pub struct AgentBundle {
     pub thinking_log: ThinkingLog,
     pub carry_slots: CarrySlots,
     pub business_cards: BusinessCards,
+    pub context_window: ContextWindow,
+    pub agent_cost: AgentCost,
 }
 
 impl AgentBundle {
@@ -151,6 +154,8 @@ impl AgentBundle {
             thinking_log: ThinkingLog::default(),
             carry_slots: CarrySlots::default(),
             business_cards: BusinessCards::default(),
+            context_window: ContextWindow::default(),
+            agent_cost: AgentCost::default(),
         }
     }
 }

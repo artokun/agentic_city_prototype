@@ -56,8 +56,7 @@ pub enum NeedType {
 }
 
 // Decay rates per tick (at 10 ticks/sec).
-// Tuned so agents can work for ~5 min before needing to address needs.
-const ENERGY_DECAY: f32 = 0.03;   // ~333 sec (~5.5 min) to drain fully
+// Energy is now driven by token usage (see token_tracking.rs), not time decay.
 const HUNGER_DECAY: f32 = 0.025;  // ~400 sec (~6.7 min) to drain
 const BOREDOM_DECAY_IDLE: f32 = 0.05; // ~200 sec (~3.3 min) when idle
 
@@ -66,7 +65,7 @@ pub fn needs_decay_system(
     mut agents: Query<(&mut Needs, &AgentGoal), Without<crate::world::hospital::Incapacitated>>,
 ) {
     for (mut needs, goal) in &mut agents {
-        needs.energy -= ENERGY_DECAY;
+        // Energy decay is driven by token usage (token_tracking::token_drain_system).
 
         needs.hunger -= HUNGER_DECAY;
 
