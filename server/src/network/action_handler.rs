@@ -166,11 +166,12 @@ pub fn process_gm_verdicts_system(
                 thought.0 = format!("GM approved! Collected {} gold!", bounty.reward_gold);
                 tracing::info!("[GM APPROVED] {} +{} gold for '{}'", name.0, bounty.reward_gold, bounty.description);
 
+                // System commentary in the activity log (visible to viewers).
                 event_log.push(crate::agents::event_log::LogEvent {
                     tick: tick.0,
-                    agent: name.0.clone(),
-                    kind: crate::agents::event_log::LogKind::System,
-                    text: format!("Game Master APPROVED bounty '{}' — +{}g. Reason: {}", bounty.description, bounty.reward_gold, reason),
+                    agent: "SYSTEM".into(),
+                    kind: crate::agents::event_log::LogKind::Speech,
+                    text: format!("[to {}] {}", name.0, reason),
                 });
 
                 // Notify the agent.
@@ -190,11 +191,12 @@ pub fn process_gm_verdicts_system(
                 thought.0 = format!("GM rejected bounty: {}", reason);
                 tracing::info!("[GM REJECTED] {} bounty '{}': {}", name.0, bounty.description, reason);
 
+                // System commentary in the activity log (visible to viewers).
                 event_log.push(crate::agents::event_log::LogEvent {
                     tick: tick.0,
-                    agent: name.0.clone(),
-                    kind: crate::agents::event_log::LogKind::System,
-                    text: format!("Game Master REJECTED bounty '{}'. Reason: {}", bounty.description, reason),
+                    agent: "SYSTEM".into(),
+                    kind: crate::agents::event_log::LogKind::Speech,
+                    text: format!("[to {}] {}", name.0, reason),
                 });
 
                 if let Some(session) = sessions.sessions.get(&agent_entity) {

@@ -264,6 +264,7 @@ const AGENT_COLORS: Record<string, string> = {
   "Alice": "#ff6b6b",
   "Bob": "#4ecdc4",
   "Carol": "#ffe66d",
+  "SYSTEM": "#635bff",
 };
 function agentColor(name: string): string {
   return AGENT_COLORS[name] || "#888";

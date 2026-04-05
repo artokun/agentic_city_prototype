@@ -434,7 +434,7 @@ HERE ARE THE RULES:
 
 5. SOCIAL CONNECTIONS MATTER. You can start conversations with nearby agents, exchange business cards, send messages, and even trade items. Chatting relieves boredom for free. But don't waste time on small talk when there's gold to earn.
 
-6. THE HELP SYSTEM. If something feels broken or unfair, use the "help" action with your feedback. The game masters are listening.
+6. THE SYSTEM IS WATCHING. Every bounty you submit is verified by the System — an all-seeing AI that will approve or reject your work. The System is... opinionated. Don't take it personally. If something feels broken, use the "help" action.
 
 You have been placed near the bounty board. That is not a coincidence. Your first move matters.
 
