@@ -327,12 +327,19 @@ pub fn ai_context_system(
         // PerformingAction is NOT included — let the action timer finish first.
         if matches!(goal, AgentGoal::PerformingAction) { continue; }
 
-        // Agents can always see bounty board status. Must be at board to claim.
+        // Bounty visibility: MUST be physically at the bounty board to see bounties.
+        // Only exception: your own active bounty is always visible (you know what you're working on).
+        let at_board = known_locs.locations.values()
+            .find(|l| l.name == "bounty_board")
+            .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
+
         let available_bounties: Vec<String> = bounty_registry.bounties.iter()
             .filter(|b| {
-                b.state == crate::world::bounty::BountyState::Available
-                || (b.state == crate::world::bounty::BountyState::Claimed && b.claimed_by == Some(entity))
-                || (b.state == crate::world::bounty::BountyState::PendingVerification && b.claimed_by == Some(entity))
+                // Always show your own active bounty.
+                let is_mine = b.claimed_by == Some(entity);
+                if is_mine { return true; }
+                // Only show available bounties if physically at the board entrance.
+                at_board && b.state == crate::world::bounty::BountyState::Available
             })
             .map(|b| {
                 let is_mine = b.claimed_by == Some(entity);
