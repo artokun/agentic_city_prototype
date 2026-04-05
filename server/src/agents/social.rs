@@ -112,6 +112,7 @@ pub fn social_matchmaking_system(
                         gold_cost: 0,
                         paid: true,
                         consumes_item: None,
+                        produces_item: None,
                     },
                 ));
 
@@ -124,6 +125,7 @@ pub fn social_matchmaking_system(
                         gold_cost: 0,
                         paid: true,
                         consumes_item: None,
+                        produces_item: None,
                     },
                 ));
 

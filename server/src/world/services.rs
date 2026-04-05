@@ -12,6 +12,8 @@ pub struct BuildingService {
     pub effects: ServiceEffects,
     /// Item consumed from the building's inventory per use.
     pub consumes_item: Option<ItemType>,
+    /// Item produced and given to the agent after using this service.
+    pub produces_item: Option<ItemType>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -32,6 +34,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 10,
             effects: ServiceEffects { hunger: 40.0, ..Default::default() },
             consumes_item: Some(ItemType::Muffin),
+            produces_item: None,
         },
         BuildingService {
             building_name: "restaurant",
@@ -40,6 +43,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 15,
             effects: ServiceEffects { hunger: 60.0, boredom: 10.0, ..Default::default() },
             consumes_item: Some(ItemType::Sandwich),
+            produces_item: None,
         },
         BuildingService {
             building_name: "apartments",
@@ -48,6 +52,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 30,
             effects: ServiceEffects { hunger: 60.0, ..Default::default() },
             consumes_item: Some(ItemType::Rations),
+            produces_item: None,
         },
         BuildingService {
             building_name: "diner",
@@ -56,6 +61,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 12,
             effects: ServiceEffects { hunger: 45.0, ..Default::default() },
             consumes_item: Some(ItemType::Soup),
+            produces_item: None,
         },
         // --- Sleep ---
         BuildingService {
@@ -65,6 +71,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 30,
             effects: ServiceEffects { energy: 50.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         BuildingService {
             building_name: "apartments",
@@ -73,6 +80,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 50,
             effects: ServiceEffects { energy: 80.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         // --- Energy boost ---
         BuildingService {
@@ -82,6 +90,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 5,
             effects: ServiceEffects { energy: 20.0, ..Default::default() },
             consumes_item: Some(ItemType::Coffee),
+            produces_item: None,
         },
         // --- Boredom ---
         BuildingService {
@@ -91,6 +100,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 20,
             effects: ServiceEffects { boredom: 30.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         BuildingService {
             building_name: "theater",
@@ -99,6 +109,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 25,
             effects: ServiceEffects { boredom: 50.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         BuildingService {
             building_name: "gym",
@@ -107,6 +118,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 20,
             effects: ServiceEffects { boredom: 25.0, energy: -10.0, hunger: -10.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         // --- Boredom recovery ---
         BuildingService {
@@ -116,6 +128,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 15,
             effects: ServiceEffects { boredom: 25.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         BuildingService {
             building_name: "hotel",
@@ -124,6 +137,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 10,
             effects: ServiceEffects { boredom: 15.0, energy: 5.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         BuildingService {
             building_name: "market",
@@ -132,6 +146,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 10,
             effects: ServiceEffects { boredom: 15.0, ..Default::default() },
             consumes_item: None,
+            produces_item: None,
         },
         // --- Information ---
         BuildingService {
@@ -141,6 +156,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 10,
             effects: ServiceEffects::default(),
             consumes_item: None,
+            produces_item: Some(ItemType::Document),
         },
         // --- Bounty board ---
         BuildingService {
@@ -150,6 +166,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 5,
             effects: ServiceEffects::default(),
             consumes_item: None,
+            produces_item: None,
         },
         BuildingService {
             building_name: "bounty_board",
@@ -158,6 +175,7 @@ pub fn all_services() -> Vec<BuildingService> {
             duration_ticks: 5,
             effects: ServiceEffects::default(),
             consumes_item: None,
+            produces_item: None,
         },
     ]
 }

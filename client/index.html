@@ -20,25 +20,15 @@
     th { text-align: left; color: #555; padding: 2px 4px; border-bottom: 1px solid #1a1a1a; }
     td { padding: 2px 4px; border-bottom: 1px solid #111; vertical-align: top; }
     .tick { color: #635bff; font-weight: bold; }
-    .thought { color: #a0a0a0; font-style: italic; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .gold { color: #ffd700; font-weight: bold; }
     .inv { color: #8bc34a; font-size: 10px; }
     .muted { color: #444; }
-    .anim-idle { color: #555; }
-    .anim-walking { color: #4caf50; }
-    .anim-working { color: #ff9800; }
     .bounty-available { color: #4caf50; }
     .bounty-claimed { color: #ff9800; }
     .bounty-completed { color: #2196f3; }
     .bounty-submitted { color: #00bcd4; }
-    .action { color: #ff9800; font-size: 10px; }
     #queue-info { font-size: 10px; color: #aaa; padding: 2px 0; }
     #queue-info strong { color: #635bff; }
-    .needs-row { display: flex; gap: 3px; align-items: center; }
-    .nl { font-size: 9px; color: #555; width: 8px; }
-    .nb { width: 36px; height: 6px; background: #1a1a1a; border-radius: 2px; overflow: hidden; display: inline-block; }
-    .nf { height: 100%; display: block; border-radius: 2px; }
-    .nv { font-size: 9px; color: #444; width: 18px; text-align: right; }
     .chat-msg { padding: 2px 0; border-bottom: 1px solid #111; }
     .chat-msg strong { color: #635bff; }
     .log-entry { padding: 1px 0; }
@@ -50,6 +40,35 @@
     .log-speech::after { content: '"'; color: #555; }
     .log-system { color: #555; }
     .log-decision { color: #635bff; font-weight: bold; }
+
+    /* Agent cards */
+    .agent-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .agent-card { background: #141414; border: 1px solid #222; border-radius: 5px; padding: 10px; }
+    .agent-card .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #222; }
+    .agent-card .card-name { font-size: 14px; font-weight: bold; }
+    .agent-card .card-gold { color: #ffd700; font-weight: bold; font-size: 13px; }
+    .agent-card .card-meta { display: flex; gap: 8px; color: #666; font-size: 10px; margin-bottom: 6px; }
+    .agent-card .card-meta .anim-idle { color: #555; }
+    .agent-card .card-meta .anim-walking { color: #4caf50; }
+    .agent-card .card-meta .anim-working { color: #ff9800; }
+    .agent-card .needs-row { display: flex; gap: 3px; align-items: center; margin-bottom: 4px; }
+    .nl { font-size: 9px; color: #555; width: 10px; }
+    .nb { width: 50px; height: 6px; background: #1a1a1a; border-radius: 2px; overflow: hidden; display: inline-block; }
+    .nf { height: 100%; display: block; border-radius: 2px; }
+    .nv { font-size: 9px; color: #444; width: 20px; text-align: right; }
+    .agent-card .card-section { margin-top: 6px; padding-top: 4px; border-top: 1px solid #1a1a1a; }
+    .agent-card .card-section-title { font-size: 9px; color: #635bff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+    .agent-card .card-inventory { color: #8bc34a; font-size: 10px; }
+    .agent-card .card-inventory .item { display: inline-block; background: #1a2a1a; border: 1px solid #2a3a2a; border-radius: 3px; padding: 1px 5px; margin: 1px; }
+    .agent-card .card-inventory .item-card { background: #1a1a2a; border-color: #2a2a3a; color: #8888cc; }
+    .agent-card .card-inventory .item-doc { background: #2a2a1a; border-color: #3a3a2a; color: #cccc88; }
+    .agent-card .card-inventory .item-egg { background: #2a1a1a; border-color: #3a2a2a; color: #ffcc44; }
+    .agent-card .card-thoughts { max-height: 80px; overflow-y: auto; font-size: 10px; }
+    .agent-card .card-thoughts .thought-entry { color: #888; font-style: italic; padding: 1px 0; border-bottom: 1px solid #111; }
+    .agent-card .card-actions { max-height: 60px; overflow-y: auto; font-size: 10px; }
+    .agent-card .card-actions .action-entry { padding: 1px 0; border-bottom: 1px solid #111; }
+    .agent-card .card-actions .action-entry .act-tick { color: #333; font-size: 9px; margin-right: 3px; }
+    .agent-card .card-actions .action-entry .act-text { color: #635bff; }
   </style>
 </head>
 <body>
@@ -59,14 +78,11 @@
     | Tick: <span id="tick-count" class="tick">-</span>
     | <span id="msg-rate">0 msg/s</span>
   </div>
-  <div class="grid">
-    <div class="panel full">
-      <h2>Agents</h2>
-      <table>
-        <thead><tr><th>Name</th><th>Pos</th><th>Anim</th><th>Gold</th><th>Items</th><th>Needs</th><th>Perception</th><th>Action</th><th>Thought</th></tr></thead>
-        <tbody id="agents-table"></tbody>
-      </table>
-    </div>
+
+  <!-- Agent cards -->
+  <div class="agent-cards" id="agent-cards"></div>
+
+  <div class="grid" style="margin-top:8px">
     <div class="panel">
       <h2>Conversations</h2>
       <div id="chat-log"><span class="muted">No active conversations</span></div>

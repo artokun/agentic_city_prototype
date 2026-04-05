@@ -19,6 +19,8 @@ pub struct ActionTimer {
     pub paid: bool,
     /// Item consumed from the building's inventory when the agent pays.
     pub consumes_item: Option<ItemType>,
+    /// Item produced and given to the agent when the action finishes.
+    pub produces_item: Option<ItemType>,
 }
 
 /// System: tick action timers. When done, apply effects and remove.
@@ -95,6 +97,12 @@ pub fn action_timer_system(
             needs.hunger += timer.effects.hunger;
             needs.boredom += timer.effects.boredom;
             needs.clamp();
+
+            // Give produced item if any.
+            if let Some(item) = timer.produces_item {
+                inv.add(item, 1);
+                tracing::info!("{} received {} from '{}'", name.0, item, timer.action_name);
+            }
 
             tracing::info!(
                 "{} finished '{}' (E:{:.0} H:{:.0} B:{:.0})",

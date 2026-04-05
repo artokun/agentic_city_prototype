@@ -203,6 +203,7 @@ pub fn execution_system(
                                     gold_cost: svc.gold_cost,
                                     paid: false,
                                     consumes_item: svc.consumes_item,
+                                    produces_item: svc.produces_item,
                                 });
                                 *goal = AgentGoal::PerformingAction;
                             } else {

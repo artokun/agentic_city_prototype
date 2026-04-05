@@ -11,12 +11,17 @@ const $ = (s: string) => document.getElementById(s)!;
 const connStatus = $("conn-status");
 const tickCount = $("tick-count");
 const msgRate = $("msg-rate");
-const agentsTable = $("agents-table");
+const agentCardsEl = $("agent-cards");
 const bountiesTable = $("bounties-table");
 const structuresTable = $("structures-table");
 const queueInfo = $("queue-info");
 const chatLog = $("chat-log");
 const relsTable = $("rels-table");
+
+// Per-agent history (persisted across renders).
+const agentThoughts: Record<string, string[]> = {};
+const agentActions: Record<string, { tick: number; text: string }[]> = {};
+const MAX_HISTORY = 10;
 
 let messageCount = 0;
 setInterval(() => { msgRate.textContent = `${messageCount} msg/s`; messageCount = 0; }, 1000);
@@ -41,18 +46,45 @@ function needBar(val: number, label: string): string {
   return `<span class="nl">${label}</span><span class="nb"><span class="nf" style="width:${pct}%;background:${color}"></span></span><span class="nv">${pct}</span>`;
 }
 
-function inv(getter: (i: number) => any, len: number): string {
-  if (len === 0) return "-";
-  const p: string[] = [];
-  for (let i = 0; i < len; i++) { const s = getter(i); if (s) p.push(`${s.itemType()} x${s.count()}`); }
-  return p.join(", ") || "-";
+function itemClass(name: string): string {
+  if (name.includes("card") || name.includes("Card")) return "item-card";
+  if (name.includes("document") || name.includes("Document") || name.includes(".md")) return "item-doc";
+  if (name.includes("egg") || name.includes("Egg")) return "item-egg";
+  return "";
 }
 
 function render(s: WorldSnapshot) {
   tickCount.textContent = s.tick().toString();
+  const tick = Number(s.tick());
 
-  // Agents
-  let ah = "";
+  // Collect per-agent logs from the event log.
+  for (let i = 0; i < s.eventLogLength(); i++) {
+    const entry = s.eventLog(i)!;
+    const agent = entry.agent() ?? "?";
+    const kind = entry.kind() ?? "";
+    const text = entry.text() ?? "";
+    const entryTick = Number(entry.tick());
+
+    if (kind === "thought" && text) {
+      if (!agentThoughts[agent]) agentThoughts[agent] = [];
+      const arr = agentThoughts[agent];
+      if (arr.length === 0 || arr[arr.length - 1] !== text) {
+        arr.push(text);
+        if (arr.length > MAX_HISTORY) arr.shift();
+      }
+    }
+    if ((kind === "action" || kind === "decision") && text) {
+      if (!agentActions[agent]) agentActions[agent] = [];
+      const arr = agentActions[agent];
+      if (arr.length === 0 || arr[arr.length - 1].text !== text) {
+        arr.push({ tick: entryTick, text });
+        if (arr.length > MAX_HISTORY) arr.shift();
+      }
+    }
+  }
+
+  // Agent cards
+  let cardsHtml = "";
   for (let i = 0; i < s.agentsLength(); i++) {
     const a = s.agents(i)!;
     const pos = a.pos();
@@ -60,40 +92,77 @@ function render(s: WorldSnapshot) {
     const needs = a.needs();
     const action = a.currentAction();
     const actionTicks = a.actionTicksLeft();
+    const agentName = a.name() ?? "?";
+    const color = agentColor(agentName);
+    const goal = a.goal() ?? "?";
 
     const needsHtml = needs
       ? `<div class="needs-row">${needBar(needs.energy(), "E")}${needBar(needs.hunger(), "H")}${needBar(needs.boredom(), "B")}</div>`
-      : "-";
+      : "";
 
-    const actionHtml = action ? `<span class="action">${action} (${actionTicks}t)</span>` : "";
+    // Inventory items
+    let invHtml = "";
+    for (let j = 0; j < a.inventoryLength(); j++) {
+      const slot = a.inventory(j);
+      if (slot) {
+        const name = slot.itemType() ?? "?";
+        const cls = itemClass(name);
+        invHtml += `<span class="item ${cls}">${name} x${slot.count()}</span>`;
+      }
+    }
 
-    const visCount = a.visibleEntitiesLength();
-    const trackCount = a.trackedEntitiesLength();
-    const knownLocs = a.knownLocationCount();
-    const perceptionHtml = `<span class="muted">${knownLocs} locs | ${visCount} vis | ${trackCount} trk</span>`;
+    // Thoughts (most recent first)
+    const thoughts = agentThoughts[agentName] || [];
+    let thoughtsHtml = "";
+    for (let t = thoughts.length - 1; t >= Math.max(0, thoughts.length - 5); t--) {
+      const text = thoughts[t].length > 120 ? thoughts[t].substring(0, 120) + "..." : thoughts[t];
+      thoughtsHtml += `<div class="thought-entry">${text}</div>`;
+    }
 
-    const agentName = a.name() ?? "?";
-    ah += `<tr>
-      <td style="color:${agentColor(agentName)};font-weight:bold;">${agentName}</td>
-      <td>(${pos?.x()}, ${pos?.y()})</td>
-      <td class="${ANIM_CLASSES[anim] ?? ""}">${ANIM_NAMES[anim] ?? "?"}</td>
-      <td class="gold">${a.gold()}</td>
-      <td class="inv">${inv((j) => a.inventory(j), a.inventoryLength())}</td>
-      <td>${needsHtml}</td>
-      <td>${perceptionHtml}</td>
-      <td>${actionHtml}</td>
-      <td class="thought">${a.thought()}</td>
-    </tr>`;
+    // Actions (most recent first)
+    const actions = agentActions[agentName] || [];
+    let actionsHtml = "";
+    for (let t = actions.length - 1; t >= Math.max(0, actions.length - 5); t--) {
+      actionsHtml += `<div class="action-entry"><span class="act-tick">${actions[t].tick}</span><span class="act-text">${actions[t].text}</span></div>`;
+    }
+
+    const actionHtml = action ? `<span style="color:#ff9800">${action} (${actionTicks}t)</span>` : "";
+
+    cardsHtml += `
+      <div class="agent-card">
+        <div class="card-header">
+          <span class="card-name" style="color:${color}">${agentName}</span>
+          <span class="card-gold">${a.gold()}g</span>
+        </div>
+        <div class="card-meta">
+          <span>(${pos?.x()}, ${pos?.y()})</span>
+          <span class="${ANIM_CLASSES[anim] ?? ""}">${ANIM_NAMES[anim] ?? "?"}</span>
+          ${actionHtml}
+        </div>
+        <div class="card-meta"><span class="muted">${goal}</span></div>
+        ${needsHtml}
+        <div class="card-section">
+          <div class="card-section-title">Inventory</div>
+          <div class="card-inventory">${invHtml || '<span class="muted">empty</span>'}</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Latest Thoughts</div>
+          <div class="card-thoughts">${thoughtsHtml || '<span class="muted">no thoughts yet</span>'}</div>
+        </div>
+        <div class="card-section">
+          <div class="card-section-title">Recent Actions</div>
+          <div class="card-actions">${actionsHtml || '<span class="muted">no actions yet</span>'}</div>
+        </div>
+      </div>`;
   }
-  agentsTable.innerHTML = ah;
+  agentCardsEl.innerHTML = cardsHtml;
 
-  // Active chats (deduplicate: only show from first agent alphabetically in each pair)
+  // Active chats (deduplicate)
   const seenConvos = new Set<string>();
   let chatHtml = "";
   for (let i = 0; i < s.agentsLength(); i++) {
     const a = s.agents(i)!;
     if (a.activeChatLength() > 0) {
-      // Build a key from all speakers to deduplicate
       const speakers = new Set<string>();
       for (let j = 0; j < a.activeChatLength(); j++) {
         speakers.add(a.activeChat(j)!.speaker() ?? "?");
@@ -131,9 +200,7 @@ function render(s: WorldSnapshot) {
     const state = b.state();
     if (state === BountyStatus.Completed) continue;
     const desc = b.description() ?? "";
-    // Short title: first sentence or first 50 chars
-    const shortDesc = desc.includes(".") ? desc.split(".")[0] : desc.substring(0, 50);
-    bh += `<tr title="${desc.replace(/"/g, '&quot;')}" style="cursor:pointer" onclick="alert('${desc.replace(/'/g, "\\'")}')"><td>${shortDesc}</td><td>${b.rewardGold()}g</td><td class="${BOUNTY_CLASSES[state] ?? ""}">${BOUNTY_STATES[state] ?? "?"}</td><td>${b.claimedBy() || "-"}</td></tr>`;
+    bh += `<tr title="${desc.replace(/"/g, '&quot;')}"><td>${desc}</td><td>${b.rewardGold()}g</td><td class="${BOUNTY_CLASSES[state] ?? ""}">${BOUNTY_STATES[state] ?? "?"}</td><td>${b.claimedBy() || "-"}</td></tr>`;
   }
   bountiesTable.innerHTML = bh || '<tr><td colspan="4" class="muted">No active bounties</td></tr>';
 
@@ -142,13 +209,16 @@ function render(s: WorldSnapshot) {
   for (let i = 0; i < s.structuresLength(); i++) {
     const st = s.structures(i)!;
     const pos = st.pos();
-    const items = inv((j) => st.inventory(j), st.inventoryLength());
-    sh += `<tr><td>${st.spriteType()}</td><td>(${pos?.x()}, ${pos?.y()})</td><td>${items}</td></tr>`;
+    let items = "";
+    for (let j = 0; j < st.inventoryLength(); j++) {
+      const slot = st.inventory(j);
+      if (slot) items += (items ? ", " : "") + `${slot.itemType()} x${slot.count()}`;
+    }
+    sh += `<tr><td>${st.spriteType()}</td><td>(${pos?.x()}, ${pos?.y()})</td><td>${items || "-"}</td></tr>`;
   }
   structuresTable.innerHTML = sh;
 
-  // Board queue
-  // Activity log.
+  // Activity log
   const logEl = document.getElementById("activity-log")!;
   const logPanel = document.getElementById("log-panel")!;
   let logHtml = "";
@@ -158,7 +228,7 @@ function render(s: WorldSnapshot) {
     const color = agentColor(agent);
     const kind = entry.kind() ?? "";
     const text = entry.text() ?? "";
-    const tick = entry.tick();
+    const entryTick = entry.tick();
 
     let styled = "";
     switch (kind) {
@@ -175,12 +245,10 @@ function render(s: WorldSnapshot) {
       default:
         styled = `<span class="log-system">${text}</span>`;
     }
-
-    logHtml += `<div class="log-entry"><span class="log-tick">${tick}</span><span style="color:${color};font-weight:bold;">${agent}</span> ${styled}</div>`;
+    logHtml += `<div class="log-entry"><span class="log-tick">${entryTick}</span><span style="color:${color};font-weight:bold;">${agent}</span> ${styled}</div>`;
   }
   if (logHtml) {
     logEl.innerHTML = logHtml;
-    // Auto-scroll to bottom.
     logPanel.scrollTop = logPanel.scrollHeight;
   }
 
@@ -192,7 +260,6 @@ function render(s: WorldSnapshot) {
   }
 }
 
-// Agent color assignments (deterministic).
 const AGENT_COLORS: Record<string, string> = {
   "Alice": "#ff6b6b",
   "Bob": "#4ecdc4",
@@ -216,10 +283,8 @@ form?.addEventListener("submit", async (e) => {
   const reward = parseInt(data.get("reward") as string);
   const ttl = parseInt(data.get("ttl") as string);
 
-  // Auto-generate steps based on description keywords
   const steps: any[] = [];
   const descLower = description.toLowerCase();
-
   if (descLower.includes("google") || descLower.includes("search")) {
     steps.push({ description: "Spend 1g at Google", type: "spend_gold", building: "google", amount: 1 });
     steps.push({ description: "Perform web search", type: "web_search", min_count: 1 });
