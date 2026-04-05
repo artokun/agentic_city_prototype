@@ -12,6 +12,7 @@ pub enum ItemType {
     Sandwich,
     Soup,
     Paycheck,
+    Document,
     // Raw materials
     CoffeeBeans,
     Flour,
@@ -82,6 +83,7 @@ impl fmt::Display for ItemType {
             ItemType::Sandwich => write!(f, "sandwich"),
             ItemType::Soup => write!(f, "soup"),
             ItemType::Paycheck => write!(f, "paycheck"),
+            ItemType::Document => write!(f, "document"),
             ItemType::CoffeeBeans => write!(f, "coffee_beans"),
             ItemType::Flour => write!(f, "flour"),
             ItemType::RawMeat => write!(f, "raw_meat"),
@@ -92,10 +94,25 @@ impl fmt::Display for ItemType {
 #[derive(Component, Default, Debug, Clone)]
 pub struct Inventory {
     pub items: HashMap<ItemType, u32>,
+    /// Gold debt — only GoldCoin can go negative via bounty recycling.
+    pub gold_debt: u32,
 }
 
 impl Inventory {
     pub fn add(&mut self, item: ItemType, count: u32) {
+        if item == ItemType::GoldCoin && self.gold_debt > 0 {
+            // Pay off debt first.
+            if count >= self.gold_debt {
+                let remainder = count - self.gold_debt;
+                self.gold_debt = 0;
+                if remainder > 0 {
+                    *self.items.entry(item).or_insert(0) += remainder;
+                }
+            } else {
+                self.gold_debt -= count;
+            }
+            return;
+        }
         *self.items.entry(item).or_insert(0) += count;
     }
 
@@ -121,11 +138,47 @@ impl Inventory {
         false
     }
 
+    /// Deduct gold, allowing debt if the agent doesn't have enough.
+    /// Returns the actual amount deducted from on-hand gold (may be less than cost).
+    pub fn deduct_gold_with_debt(&mut self, cost: u32) {
+        let on_hand = self.count(ItemType::GoldCoin);
+        if on_hand >= cost {
+            self.remove(ItemType::GoldCoin, cost);
+        } else {
+            // Remove what we have, put the rest into debt.
+            if on_hand > 0 {
+                self.items.remove(&ItemType::GoldCoin);
+            }
+            self.gold_debt += cost - on_hand;
+        }
+    }
+
+    /// Net gold balance (negative if in debt).
+    pub fn gold_balance(&self) -> i32 {
+        self.count(ItemType::GoldCoin) as i32 - self.gold_debt as i32
+    }
+
     pub fn has(&self, item: ItemType, count: u32) -> bool {
         self.items.get(&item).is_some_and(|c| *c >= count)
     }
 
     pub fn count(&self, item: ItemType) -> u32 {
         self.items.get(&item).copied().unwrap_or(0)
+    }
+}
+
+/// Holds documents an agent has produced (title → content).
+#[derive(Component, Default, Debug, Clone)]
+pub struct DocumentInventory {
+    pub documents: HashMap<String, String>,
+}
+
+impl DocumentInventory {
+    pub fn add(&mut self, title: String, content: String) {
+        self.documents.insert(title, content);
+    }
+
+    pub fn has(&self, title: &str) -> bool {
+        self.documents.contains_key(title)
     }
 }

@@ -1,11 +1,13 @@
 use bevy::prelude::*;
 
+use super::action_log::{ActionEvent, ActionLog};
 use super::components::{AgentAnimation, AnimState, ThoughtBubble};
 use super::needs::Needs;
 use crate::items::{Inventory, ItemType};
+use crate::tick::TickCount;
 use crate::world::economy::GoldReserve;
 use crate::world::services::ServiceEffects;
-use crate::world::structures::{InsideBuilding, StructureId};
+use crate::world::structures::{InsideBuilding, SpriteType, StructureId};
 
 /// While this component is present, the agent is busy and cannot act.
 #[derive(Component)]
@@ -22,6 +24,7 @@ pub struct ActionTimer {
 /// System: tick action timers. When done, apply effects and remove.
 pub fn action_timer_system(
     mut commands: Commands,
+    tick: Res<TickCount>,
     mut agents: Query<
         (
             Entity,
@@ -31,14 +34,22 @@ pub fn action_timer_system(
             &mut AgentAnimation,
             &mut ThoughtBubble,
             &super::components::AgentName,
+            &mut ActionLog,
             Option<&InsideBuilding>,
         ),
         Without<StructureId>,
     >,
     mut building_reserves: Query<&mut GoldReserve>,
     mut building_inventories: Query<&mut Inventory, With<StructureId>>,
+    building_names: Query<&SpriteType, With<StructureId>>,
 ) {
-    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name, inside) in &mut agents {
+    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name, mut action_log, inside) in &mut agents {
+        // Resolve the building name for event logging.
+        let building_name = inside
+            .and_then(|ib| building_names.get(ib.0).ok())
+            .map(|s| s.0.clone())
+            .unwrap_or_default();
+
         // Pay gold on first tick — credit the building's reserve.
         if !timer.paid && timer.gold_cost > 0 {
             if inv.has(ItemType::GoldCoin, timer.gold_cost) {
@@ -57,6 +68,11 @@ pub fn action_timer_system(
                         }
                     }
                 }
+
+                action_log.log(tick.0, ActionEvent::GoldSpent {
+                    amount: timer.gold_cost,
+                    building: building_name.clone(),
+                });
 
                 timer.paid = true;
             } else {
@@ -88,6 +104,11 @@ pub fn action_timer_system(
                 needs.hunger,
                 needs.boredom,
             );
+
+            action_log.log(tick.0, ActionEvent::ServiceUsed {
+                service: timer.action_name.clone(),
+                building: building_name.clone(),
+            });
 
             thought.0 = format!("Finished {}.", timer.action_name);
             anim.0 = AnimState::Idle;

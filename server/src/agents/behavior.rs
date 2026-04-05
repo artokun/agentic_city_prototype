@@ -10,6 +10,7 @@ use crate::world::map::{GridPos, WorldMap};
 use crate::world::services;
 use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
 
+use super::action_log::{ActionEvent, ActionLog};
 use super::actions::ActionTimer;
 use super::components::*;
 use super::needs::{NeedType, Needs};
@@ -66,6 +67,7 @@ pub fn execution_system(
         Entity, &AgentName, &GridPos, &Speed,
         &mut AgentGoal, &mut ThoughtBubble, &mut AgentAnimation, &mut Inventory,
         &Needs, Option<&Path>, Option<&ActionTimer>, Option<&InsideBuilding>,
+        &mut ActionLog,
     )>,
     mut boards: Query<(Entity, &Entrance, &mut BoardQueue), With<BountyBoard>>,
     mut structures: Query<
@@ -81,7 +83,7 @@ pub fn execution_system(
 
     for (
         agent_entity, name, pos, speed, mut goal, mut thought, mut anim, mut inv,
-        needs, path, action_timer, inside,
+        needs, path, action_timer, inside, mut action_log,
     ) in &mut agents {
         // Busy with timed action — skip.
         if action_timer.is_some() {
@@ -150,6 +152,7 @@ pub fn execution_system(
                                 100 // fallback if building has no Staffable
                             };
                             commands.entity(agent_entity).insert(InsideBuilding(building));
+                            action_log.log(tick.0, ActionEvent::EnteredBuilding { building: building_name.clone() });
                             commands.entity(agent_entity).insert(ShiftWorker {
                                 building,
                                 building_name: building_name.clone(),
@@ -162,8 +165,13 @@ pub fn execution_system(
                         } else {
                             let svc = services::all_services().into_iter().find(|s| s.action_name == service);
                             if let Some(svc) = svc {
+                                let svc_building_name = structure_list.iter()
+                                    .find(|(e, _, _)| *e == building)
+                                    .map(|(_, _, s)| s.clone())
+                                    .unwrap_or_default();
                                 thought.0 = format!("{}...", svc.action_name);
                                 commands.entity(agent_entity).insert(InsideBuilding(building));
+                                action_log.log(tick.0, ActionEvent::EnteredBuilding { building: svc_building_name });
                                 commands.entity(agent_entity).insert(ActionTimer {
                                     action_name: svc.action_name.to_string(),
                                     remaining_ticks: svc.duration_ticks,
@@ -234,6 +242,7 @@ pub fn execution_system(
                         let claim_items = bounty.claim_items.clone();
                         thought.0 = format!("Claimed: {desc}");
                         tracing::info!("{} claimed: {desc}", name.0);
+                        action_log.log(tick.0, ActionEvent::BountyPickedUp { bounty_id });
                         for (item, count) in &claim_items { inv.add(*item, *count); }
                         if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
                             queue.leave(agent_entity);
@@ -255,6 +264,17 @@ pub fn execution_system(
                 let bounty = bounty_registry.get(bounty_id).cloned();
                 let Some(bounty) = bounty else { *goal = AgentGoal::Idle; continue };
 
+                // If the bounty has expired, stop executing and return it.
+                if bounty.expired {
+                    thought.0 = "Bounty expired! Must return it...".into();
+                    tracing::info!("{} bounty expired, returning to board", name.0);
+                    *goal = AgentGoal::ReturningToBoard(bounty_id);
+                    if let Some(p) = pathfinding::bfs(&map, *pos, board_entrance) {
+                        commands.entity(agent_entity).insert(Path(p));
+                    }
+                    continue;
+                }
+
                 match bounty.objective {
                     BountyObjective::HideItem(item) => {
                         if !has_path {
@@ -264,6 +284,7 @@ pub fn execution_system(
                                 if let Some((se, entrance, sname)) = candidates.first() {
                                     if at_pos(pos, entrance) {
                                         commands.entity(agent_entity).insert(InsideBuilding(*se));
+                                        action_log.log(tick.0, ActionEvent::EnteredBuilding { building: sname.clone() });
                                         if inv.remove(item, 1) {
                                             if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(*se) {
                                                 sinv.add(item, 1);
@@ -312,6 +333,7 @@ pub fn execution_system(
                             if let Some((se, entrance, sname)) = found_at {
                                 if at_pos(pos, &entrance) {
                                     commands.entity(agent_entity).insert(InsideBuilding(se));
+                                    action_log.log(tick.0, ActionEvent::EnteredBuilding { building: sname.clone() });
                                     if let Ok((_, _, _, mut sinv, _)) = structures.get_mut(se) {
                                         if sinv.remove(item, 1) {
                                             inv.add(item, 1);
@@ -400,6 +422,7 @@ pub fn execution_system(
                             if let Some((se, entrance, sname)) = target {
                                 if at_pos(pos, entrance) {
                                     commands.entity(agent_entity).insert(InsideBuilding(*se));
+                                    action_log.log(tick.0, ActionEvent::EnteredBuilding { building: sname.clone() });
                                     commands.entity(agent_entity).insert(ActionTimer {
                                         action_name: format!("working: {}", bounty.description),
                                         remaining_ticks: 40,
@@ -434,18 +457,29 @@ pub fn execution_system(
                 if !has_path && at_pos(pos, &board_entrance) {
                     if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
                         if queue.try_interact(agent_entity) {
+                            action_log.log(tick.0, ActionEvent::BountyReturned { bounty_id });
                             if let Some(bounty) = bounty_registry.get(bounty_id).cloned() {
-                                let can_claim = match bounty.objective {
-                                    BountyObjective::FindItem(item) => inv.has(item, 1),
-                                    _ => true,
-                                };
-                                if can_claim {
-                                    if let BountyObjective::FindItem(item) = bounty.objective {
-                                        inv.remove(item, 1);
+                                if bounty.expired {
+                                    // Expired bounty — recycling fee (can cause debt).
+                                    inv.deduct_gold_with_debt(RECYCLE_COST);
+                                    thought.0 = format!("Recycled expired bounty (-{}g)", RECYCLE_COST);
+                                    tracing::info!(
+                                        "{} recycled expired bounty '{}' (-{}g, balance: {})",
+                                        name.0, bounty.description, RECYCLE_COST, inv.gold_balance(),
+                                    );
+                                } else {
+                                    let can_claim = match bounty.objective {
+                                        BountyObjective::FindItem(item) => inv.has(item, 1),
+                                        _ => true,
+                                    };
+                                    if can_claim {
+                                        if let BountyObjective::FindItem(item) = bounty.objective {
+                                            inv.remove(item, 1);
+                                        }
+                                        inv.add(ItemType::GoldCoin, bounty.reward_gold);
+                                        thought.0 = format!("Collected {} gold!", bounty.reward_gold);
+                                        tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
                                     }
-                                    inv.add(ItemType::GoldCoin, bounty.reward_gold);
-                                    thought.0 = format!("Collected {} gold!", bounty.reward_gold);
-                                    tracing::info!("{} +{} gold", name.0, bounty.reward_gold);
                                 }
                             }
                             queue.leave(agent_entity);
@@ -453,7 +487,11 @@ pub fn execution_system(
                             *goal = AgentGoal::Idle;
                         } else {
                             queue.join_queue(agent_entity);
-                            thought.0 = "Waiting to claim reward...".into();
+                            thought.0 = if bounty_registry.get(bounty_id).is_some_and(|b| b.expired) {
+                                "Waiting to recycle expired bounty...".into()
+                            } else {
+                                "Waiting to claim reward...".into()
+                            };
                         }
                     }
                 } else if !has_path {

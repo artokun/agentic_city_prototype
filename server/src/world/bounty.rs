@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use uuid::Uuid;
 
 use crate::agents::action_log::{ActionEvent, ActionLog};
-use crate::items::ItemType;
+use crate::items::{DocumentInventory, ItemType};
 use crate::tick::TickCount;
 
 /// Marker: this structure is a bounty board.
@@ -109,7 +109,14 @@ pub enum StepCondition {
 }
 
 impl BountyStep {
-    fn verify(&self, log: &ActionLog, start: u64, end: u64, bounty_id: Uuid) -> bool {
+    fn verify(
+        &self,
+        log: &ActionLog,
+        start: u64,
+        end: u64,
+        bounty_id: Uuid,
+        docs: Option<&DocumentInventory>,
+    ) -> bool {
         match &self.condition {
             StepCondition::SpendGold { building, amount } => {
                 let total: u32 = log
@@ -137,9 +144,7 @@ impl BountyStep {
             }
 
             StepCondition::ProduceDocument { title } => {
-                log.has_between(start, end, |ev| {
-                    matches!(ev, ActionEvent::DocumentProduced { title: t, bounty_id: bid } if t == title && *bid == bounty_id)
-                })
+                docs.is_some_and(|d| d.has(title))
             }
 
             StepCondition::VisitBuilding { building } => {
@@ -252,8 +257,8 @@ impl Bounty {
             .is_some_and(|pickup| current_tick >= pickup + self.ttl_ticks as u64)
     }
 
-    /// Check all steps against an agent's action log.
-    pub fn verify_steps(&self, log: &ActionLog) -> Vec<bool> {
+    /// Check all steps against an agent's action log and document inventory.
+    pub fn verify_steps(&self, log: &ActionLog, docs: Option<&DocumentInventory>) -> Vec<bool> {
         if self.steps.is_empty() {
             return vec![];
         }
@@ -266,15 +271,15 @@ impl Bounty {
 
         self.steps
             .iter()
-            .map(|step| step.verify(log, start, end, self.id))
+            .map(|step| step.verify(log, start, end, self.id, docs))
             .collect()
     }
 
-    pub fn all_steps_complete(&self, log: &ActionLog) -> bool {
+    pub fn all_steps_complete(&self, log: &ActionLog, docs: Option<&DocumentInventory>) -> bool {
         if self.steps.is_empty() {
             return true;
         }
-        self.verify_steps(log).iter().all(|v| *v)
+        self.verify_steps(log, docs).iter().all(|v| *v)
     }
 }
 
@@ -336,7 +341,7 @@ pub fn advance_board_queue(mut boards: Query<&mut BoardQueue>) {
     }
 }
 
-/// System: check for expired bounties.
+/// System: check for expired bounties and force agents to return them.
 pub fn bounty_expiry_system(
     tick: Res<TickCount>,
     mut registry: ResMut<BountyRegistry>,
@@ -347,7 +352,10 @@ pub fn bounty_expiry_system(
             && bounty.is_expired(tick.0)
         {
             bounty.expired = true;
-            tracing::info!("Bounty '{}' has EXPIRED", bounty.description);
+            tracing::info!(
+                "Bounty '{}' has EXPIRED — agent must return it ({}g recycling fee)",
+                bounty.description, RECYCLE_COST,
+            );
         }
     }
 }
