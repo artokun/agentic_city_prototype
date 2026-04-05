@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::items::ItemType;
 use crate::tick::TickCount;
-use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
 
 /// Whether initial bounties have been seeded.
 #[derive(Resource)]
@@ -113,7 +113,7 @@ fn initial_bounties() -> Vec<BountyTemplate> {
 /// (scenario bounties are seeded by `scenario::seed_scenario_bounties_system`).
 pub fn bounty_injection_system(
     tick: Res<TickCount>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards: Query<&mut BountyTokenStore, With<BountyBoard>>,
     mut state: ResMut<InjectorState>,
     scenario_config: Option<Res<crate::scenario::ScenarioBountyConfig>>,
 ) {
@@ -123,6 +123,8 @@ pub fn bounty_injection_system(
     // Wait for tick 0 to seed.
     if tick.0 > 10 { state.seeded = true; return; }
     if tick.0 != 0 { return; }
+
+    let Some(mut store) = boards.iter_mut().next() else { return; };
 
     let templates = initial_bounties();
     for tmpl in &templates {
@@ -137,7 +139,7 @@ pub fn bounty_injection_system(
             "Instructions for agent: {}\n\nGM: {}",
             tmpl.instructions, tmpl.hidden_criteria
         );
-        bounty_registry.bounties.push(bounty);
+        store.tokens.insert(bounty.id, bounty);
     }
 
     tracing::info!("[INJECTOR] Seeded {} initial bounties", templates.len());

@@ -14,7 +14,7 @@ use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
 use crate::tick::TickCount;
-use crate::world::bounty::BountyRegistry;
+use crate::world::bounty::{BountyBoard, BountyTokenStore};
 use crate::world::map::{GridPos, WorldMap};
 use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
 use crate::world::shifts::ShiftWorker;
@@ -293,7 +293,7 @@ pub fn ai_thought_drain_system(
 /// This system only provides situational awareness.
 pub fn ai_context_system(
     tick: Res<TickCount>,
-    bounty_registry: Res<BountyRegistry>,
+    boards_ai: Query<&BountyTokenStore, With<BountyBoard>>,
     mut sessions: ResMut<AgentSessions>,
     agents: Query<(
         Entity, &AgentName, &GridPos, &Speed,
@@ -305,6 +305,7 @@ pub fn ai_context_system(
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
 ) {
+    let Some(bounty_registry) = boards_ai.iter().next() else { return; };
     for (
         entity, name, pos, speed, goal, needs, inv, known_locs, rels,
         action_timer, path, inside_building, shift_worker,
@@ -333,7 +334,7 @@ pub fn ai_context_system(
             .find(|l| l.name == "bounty_board")
             .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
 
-        let available_bounties: Vec<String> = bounty_registry.bounties.iter()
+        let available_bounties: Vec<String> = bounty_registry.tokens.values()
             .filter(|b| {
                 // Always show your own active bounty.
                 let is_mine = b.claimed_by == Some(entity);

@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
-use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
 use crate::world::structures::SpriteType;
 
 /// Gold reserve a building has earned from customers.
@@ -34,12 +34,14 @@ pub struct Warehouse;
 pub fn auto_restock_system(
     tick: Res<TickCount>,
     mut retailers: Query<(Entity, &SpriteType, &Inventory, &RetailConfig, &mut GoldReserve)>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards_restock: Query<&mut BountyTokenStore, With<BountyBoard>>,
 ) {
     // Only check every 50 ticks (5 seconds).
     if tick.0 % 50 != 0 {
         return;
     }
+
+    let Some(mut bounty_registry) = boards_restock.iter_mut().next() else { return; };
 
     for (_entity, sprite, inv, config, mut gold_reserve) in &mut retailers {
         for stock in &config.stock {
@@ -50,7 +52,7 @@ pub fn auto_restock_system(
             }
 
             // Check if there's already a pending restock bounty for this item at this building.
-            let already_pending = bounty_registry.bounties.iter().any(|b| {
+            let already_pending = bounty_registry.tokens.values().any(|b| {
                 (b.state == BountyState::Available || b.state == BountyState::Claimed)
                     && b.description.contains(&sprite.0)
                     && b.description.contains(&stock.item.to_string())
@@ -100,7 +102,7 @@ pub fn auto_restock_system(
                 sprite.0, stock.reorder_qty, stock.item, reward, gold_reserve.0,
             );
 
-            bounty_registry.bounties.push(bounty);
+            bounty_registry.tokens.insert(bounty.id, bounty);
         }
     }
 }

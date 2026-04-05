@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use uuid::Uuid;
 
 use crate::tick::TickCount;
-use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
 use crate::world::structures::{Entrance, SpriteType, StructureId};
 
 /// A building that can offer jobs.
@@ -26,15 +26,16 @@ pub struct JobTemplate {
 pub fn job_posting_system(
     tick: Res<TickCount>,
     mut employers: Query<(&SpriteType, &Entrance, &mut Employer)>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards_jobs: Query<&mut BountyTokenStore, With<BountyBoard>>,
 ) {
+    let Some(mut bounty_registry) = boards_jobs.iter_mut().next() else { return; };
     for (sprite, entrance, mut employer) in &mut employers {
         if tick.0 - employer.last_posted_tick < employer.post_interval as u64 {
             continue;
         }
 
         // Check if there's already an available job bounty from this building.
-        let has_open = bounty_registry.bounties.iter().any(|b| {
+        let has_open = bounty_registry.tokens.values().any(|b| {
             b.state == BountyState::Available
                 && b.description.contains(&sprite.0)
         });
@@ -54,7 +55,7 @@ pub fn job_posting_system(
             );
 
             tracing::info!("Job posted: {} ({} gold)", bounty.description, bounty.reward_gold);
-            bounty_registry.bounties.push(bounty);
+            bounty_registry.tokens.insert(bounty.id, bounty);
             employer.last_posted_tick = tick.0;
         }
     }

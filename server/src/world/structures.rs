@@ -146,8 +146,6 @@ fn spawn_structures(mut commands: Commands) {
         BountyBoard,
         BoardQueue::default(),
         Inventory::default(),
+        BountyTokenStore::default(),
     ));
-
-    // Bounty registry starts empty — bounty_injector populates it.
-    commands.insert_resource(BountyRegistry::default());
 }

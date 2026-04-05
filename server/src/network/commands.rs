@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::items::{DocumentInventory, Inventory, ItemType};
 use crate::network::action_handler::{MpcAction, PendingActions};
-use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyStep, StepCondition};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyStep, BountyTokenStore, StepCondition};
 
 /// Commands sent from Axum REST handlers into Bevy.
 #[derive(Debug)]
@@ -72,12 +72,13 @@ pub struct PendingDocuments {
 /// System: drain commands from the REST API and apply them to the world.
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards: Query<&mut BountyTokenStore, With<BountyBoard>>,
     mut pending_actions: ResMut<PendingActions>,
     mut pending_verdicts: ResMut<PendingVerdicts>,
     mut pending_docs: ResMut<PendingDocuments>,
     tick: Res<crate::tick::TickCount>,
 ) {
+    let Some(mut bounty_registry) = boards.iter_mut().next() else { return; };
     while let Ok(cmd) = receiver.rx.try_recv() {
         match cmd {
             GameCommand::AgentAction { action_json } => {
@@ -130,7 +131,7 @@ pub fn process_commands_system(
                     reward_gold,
                 );
 
-                bounty_registry.bounties.push(bounty);
+                bounty_registry.tokens.insert(bounty.id, bounty);
             }
 
             GameCommand::CreateContract {
@@ -185,7 +186,7 @@ pub fn process_commands_system(
                     title, reward_gold, ttl_ticks,
                 );
 
-                bounty_registry.bounties.push(bounty);
+                bounty_registry.tokens.insert(bounty.id, bounty);
             }
 
             GameCommand::DeliverDocument { agent_name, title, content } => {

@@ -9,7 +9,7 @@ use crate::agents::components::*;
 use crate::agents::needs::Needs;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
-use crate::world::bounty::BountyRegistry;
+use crate::world::bounty::{BountyBoard, BountyTokenStore};
 use crate::world::map::GridPos;
 use crate::world::structures::{Entrance, SpriteType, StructureId};
 
@@ -56,7 +56,7 @@ pub fn ensure_event_state_system(
 pub fn game_events_system(
     tick: Res<TickCount>,
     sessions: Res<AgentSessions>,
-    bounty_registry: Res<BountyRegistry>,
+    boards_events: Query<&BountyTokenStore, With<BountyBoard>>,
     mut agents: Query<(
         Entity,
         &AgentName,
@@ -70,8 +70,9 @@ pub fn game_events_system(
     )>,
     structures: Query<(&Entrance, &SpriteType), With<StructureId>>,
 ) {
+    let Some(bounty_registry) = boards_events.iter().next() else { return; };
     // Pre-compute: detect new bounties (global, not per-agent).
-    let current_bounty_count = bounty_registry.bounties.len();
+    let current_bounty_count = bounty_registry.tokens.len();
 
     for (entity, name, pos, needs, inv, goal, cards, path, mut event_state) in &mut agents {
         let Some(session) = sessions.sessions.get(&entity) else {
@@ -113,10 +114,8 @@ pub fn game_events_system(
 
         // --- New bounty detection ---
         if current_bounty_count > event_state.last_bounty_count {
-            // Send descriptions of all new bounties.
-            for bounty in bounty_registry.bounties.iter().skip(event_state.last_bounty_count) {
-                messages.push(format!("New bounty posted: {}", bounty.description));
-            }
+            let new_count = current_bounty_count - event_state.last_bounty_count;
+            messages.push(format!("{} new bounty(s) posted! Check the bounty board.", new_count));
             event_state.last_bounty_count = current_bounty_count;
         }
 

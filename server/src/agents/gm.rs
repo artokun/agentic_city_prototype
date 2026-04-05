@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use uuid::Uuid;
 
-use crate::world::bounty::BountyRegistry;
+use crate::world::bounty::{BountyBoard, BountyTokenStore};
 
 /// Marker component: this agent has a bounty pending GM review.
 #[derive(Component)]
@@ -25,9 +25,10 @@ pub struct PendingResearch {
 pub fn spawn_gm_system(
     mut commands: Commands,
     runtime: ResMut<TokioTasksRuntime>,
-    bounty_registry: Res<BountyRegistry>,
+    boards_gm: Query<&BountyTokenStore, With<BountyBoard>>,
     pending: Query<(Entity, &super::components::AgentName, &PendingGmReview)>,
 ) {
+    let Some(bounty_registry) = boards_gm.iter().next() else { return; };
     for (entity, agent_name, review) in &pending {
         let bounty = bounty_registry.get(review.bounty_id).cloned();
         let Some(bounty) = bounty else {

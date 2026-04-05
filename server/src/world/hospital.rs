@@ -15,7 +15,7 @@ use crate::config;
 use crate::items::{Inventory, ItemType};
 use crate::world::map::TileInventory;
 use crate::tick::TickCount;
-use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
 use crate::world::map::GridPos;
 
 // Hospital constants now in config.rs.
@@ -39,13 +39,14 @@ pub fn pass_out_system(
     mut commands: Commands,
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards_hospital: Query<&mut BountyTokenStore, With<BountyBoard>>,
     mut tile_inventory: ResMut<TileInventory>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos, &mut Needs, &mut Inventory,
         &mut AgentGoal, &mut ThoughtBubble,
     ), Without<Incapacitated>>,
 ) {
+    let Some(mut bounty_registry) = boards_hospital.iter_mut().next() else { return; };
     for (entity, name, pos, mut needs, mut inv, mut goal, mut thought) in &mut agents {
         let passed_out = needs.energy <= 0.0 || needs.hunger <= 0.0;
         if !passed_out {
@@ -72,7 +73,7 @@ pub fn pass_out_system(
             config::rescue_reward(),
             vec![],
         );
-        bounty_registry.bounties.push(bounty);
+        bounty_registry.tokens.insert(bounty.id, bounty);
 
         // Freeze the agent — they lay where they fell as a tile item.
         // Another agent must pick them up and carry them to the hospital.

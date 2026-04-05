@@ -5,7 +5,7 @@ use server::agents::components::AgentGoal;
 use server::agents::event_log::AgentEventLog;
 use server::agents::needs::Needs;
 use server::tick::TickCount;
-use server::world::bounty::{BoardQueue, BountyRegistry};
+use server::world::bounty::{BoardQueue, BountyBoard, BountyTokenStore};
 use server::world::bounty_injector::bounty_injection_system;
 use server::world::map::{GridPos, TileType, WorldMap};
 
@@ -23,7 +23,8 @@ fn test_app() -> App {
     }
     app.insert_resource(WorldMap { tiles });
     app.insert_resource(TickCount(0));
-    app.insert_resource(BountyRegistry::default());
+    // Spawn a bounty board entity with BountyTokenStore component.
+    app.world_mut().spawn((BountyBoard, BountyTokenStore::default()));
     app.init_resource::<AgentEventLog>();
 
     app
@@ -38,23 +39,31 @@ fn bounty_injection_seeds_initial_bounties() {
     // Tick 0 seeds bounties.
     app.update();
 
-    let registry = app.world().resource::<BountyRegistry>();
-    let available = registry.available().len();
-    assert!(
-        available >= 5,
-        "Expected at least 5 initial bounties, got {available}"
-    );
+    // Find the board entity's BountyTokenStore component.
+    let available = {
+        let mut q = app.world_mut().query::<&BountyTokenStore>();
+        let store = q.iter(app.world()).next().expect("Board entity should exist");
+        let avail = store.available().len();
+        assert!(
+            avail >= 5,
+            "Expected at least 5 initial bounties, got {avail}"
+        );
+        store.tokens.len()
+    };
 
     // Running again should NOT add more (one-shot).
-    let count_before = registry.bounties.len();
-    drop(registry);
+    let count_before = available;
     {
         let mut tick = app.world_mut().resource_mut::<TickCount>();
         tick.0 += 1;
     }
     app.update();
-    let registry = app.world().resource::<BountyRegistry>();
-    assert_eq!(registry.bounties.len(), count_before, "Injector should not create more bounties after seeding");
+    let count_after = {
+        let mut q = app.world_mut().query::<&BountyTokenStore>();
+        let store = q.iter(app.world()).next().expect("Board entity should exist");
+        store.tokens.len()
+    };
+    assert_eq!(count_after, count_before, "Injector should not create more bounties after seeding");
 }
 
 #[test]

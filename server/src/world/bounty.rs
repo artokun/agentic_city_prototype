@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use uuid::Uuid;
 
@@ -166,7 +167,7 @@ impl BountyStep {
 
 /// A bounty — a physical item agents carry. Max 1 active bounty per agent.
 #[derive(Debug, Clone)]
-pub struct Bounty {
+pub struct BountyTokenData {
     pub id: Uuid,
     pub description: String,
     pub objective: BountyObjective,
@@ -190,7 +191,10 @@ pub struct Bounty {
     pub hidden_criteria: String,
 }
 
-impl Bounty {
+/// Type alias — keeps downstream code compiling during phased migration.
+pub type Bounty = BountyTokenData;
+
+impl BountyTokenData {
     /// Create a simple bounty (no TTL, no steps).
     pub fn simple(
         id: Uuid,
@@ -290,53 +294,62 @@ impl Bounty {
     }
 }
 
-/// Central registry of all bounties.
-#[derive(Resource, Default)]
-pub struct BountyRegistry {
-    pub bounties: Vec<Bounty>,
+/// Central store of all bounty tokens — lives as a component on the bounty board entity.
+#[derive(Component, Default)]
+pub struct BountyTokenStore {
+    pub tokens: HashMap<Uuid, BountyTokenData>,
 }
 
-impl BountyRegistry {
-    pub fn available(&self) -> Vec<&Bounty> {
-        self.bounties
-            .iter()
+/// Backward-compat: other files import `BountyRegistry`. Remove in Phase 2.
+pub type BountyRegistry = BountyTokenStore;
+
+impl BountyTokenStore {
+    /// Convenience accessor: iterate tokens as a flat slice-like view.
+    /// Many callers used `.bounties` directly; this bridges the gap.
+    pub fn bounties_iter(&self) -> impl Iterator<Item = &BountyTokenData> {
+        self.tokens.values()
+    }
+
+    pub fn available(&self) -> Vec<&BountyTokenData> {
+        self.tokens
+            .values()
             .filter(|b| b.state == BountyState::Available && !b.expired)
             .collect()
     }
 
-    pub fn claim(&mut self, bounty_id: Uuid, agent: Entity, tick: u64) -> Option<&Bounty> {
+    pub fn claim(&mut self, bounty_id: Uuid, agent: Entity, tick: u64) -> Option<&BountyTokenData> {
         // Enforce max 1 active bounty per agent.
-        let already_has = self.bounties.iter().any(|b| {
+        let already_has = self.tokens.values().any(|b| {
             b.claimed_by == Some(agent) && b.state == BountyState::Claimed
         });
         if already_has {
             return None;
         }
 
-        let bounty = self.bounties.iter_mut().find(|b| b.id == bounty_id)?;
+        let bounty = self.tokens.get_mut(&bounty_id)?;
         if bounty.state != BountyState::Available || bounty.expired {
             return None;
         }
         bounty.state = BountyState::Claimed;
         bounty.claimed_by = Some(agent);
         bounty.picked_up_tick = Some(tick);
-        // Return immutable ref by re-finding
-        self.bounties.iter().find(|b| b.id == bounty_id)
+        // Return immutable ref by direct lookup
+        self.tokens.get(&bounty_id)
     }
 
     pub fn mark_completed(&mut self, bounty_id: Uuid) {
-        if let Some(b) = self.bounties.iter_mut().find(|b| b.id == bounty_id) {
+        if let Some(b) = self.tokens.get_mut(&bounty_id) {
             b.state = BountyState::Completed;
         }
     }
 
-    pub fn get(&self, bounty_id: Uuid) -> Option<&Bounty> {
-        self.bounties.iter().find(|b| b.id == bounty_id)
+    pub fn get(&self, bounty_id: Uuid) -> Option<&BountyTokenData> {
+        self.tokens.get(&bounty_id)
     }
 
-    pub fn agent_bounty(&self, agent: Entity) -> Option<&Bounty> {
-        self.bounties
-            .iter()
+    pub fn agent_bounty(&self, agent: Entity) -> Option<&BountyTokenData> {
+        self.tokens
+            .values()
             .find(|b| b.claimed_by == Some(agent) && b.state == BountyState::Claimed)
     }
 }
@@ -351,9 +364,10 @@ pub fn advance_board_queue(mut boards: Query<&mut BoardQueue>) {
 /// System: check for expired bounties and force agents to return them.
 pub fn bounty_expiry_system(
     tick: Res<TickCount>,
-    mut registry: ResMut<BountyRegistry>,
+    mut boards: Query<&mut BountyTokenStore, With<BountyBoard>>,
 ) {
-    for bounty in &mut registry.bounties {
+    let Some(mut store) = boards.iter_mut().next() else { return; };
+    for bounty in store.tokens.values_mut() {
         if bounty.state == BountyState::Claimed
             && !bounty.expired
             && bounty.is_expired(tick.0)
@@ -509,13 +523,18 @@ mod tests {
         assert_eq!(b.ticks_remaining(50), None);
     }
 
-    // ---- BountyRegistry claim ----
+    // ---- BountyTokenStore claim ----
+
+    /// Helper: insert a bounty into the store.
+    fn insert(store: &mut BountyTokenStore, b: BountyTokenData) {
+        store.tokens.insert(b.id, b);
+    }
 
     #[test]
     fn claim_sets_state_and_agent() {
         let id = Uuid::new_v4();
-        let mut reg = BountyRegistry::default();
-        reg.bounties.push(Bounty::simple(
+        let mut reg = BountyTokenStore::default();
+        insert(&mut reg, Bounty::simple(
             id,
             "test".into(),
             BountyObjective::WorkAtBuilding,
@@ -535,15 +554,15 @@ mod tests {
     fn max_one_bounty_per_agent() {
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
-        let mut reg = BountyRegistry::default();
-        reg.bounties.push(Bounty::simple(
+        let mut reg = BountyTokenStore::default();
+        insert(&mut reg, Bounty::simple(
             id1,
             "first".into(),
             BountyObjective::WorkAtBuilding,
             10,
             vec![],
         ));
-        reg.bounties.push(Bounty::simple(
+        insert(&mut reg, Bounty::simple(
             id2,
             "second".into(),
             BountyObjective::WorkAtBuilding,
@@ -558,7 +577,7 @@ mod tests {
     #[test]
     fn claim_unavailable_bounty_fails() {
         let id = Uuid::new_v4();
-        let mut reg = BountyRegistry::default();
+        let mut reg = BountyTokenStore::default();
         let mut b = Bounty::simple(
             id,
             "taken".into(),
@@ -568,7 +587,7 @@ mod tests {
         );
         b.state = BountyState::Claimed;
         b.claimed_by = Some(entity(1));
-        reg.bounties.push(b);
+        insert(&mut reg, b);
 
         let agent2 = entity(2);
         assert!(reg.claim(id, agent2, 0).is_none());
@@ -577,7 +596,7 @@ mod tests {
     #[test]
     fn claim_expired_bounty_fails() {
         let id = Uuid::new_v4();
-        let mut reg = BountyRegistry::default();
+        let mut reg = BountyTokenStore::default();
         let mut b = Bounty::simple(
             id,
             "expired".into(),
@@ -586,7 +605,7 @@ mod tests {
             vec![],
         );
         b.expired = true;
-        reg.bounties.push(b);
+        insert(&mut reg, b);
         assert!(reg.claim(id, entity(1), 0).is_none());
     }
 
@@ -676,9 +695,9 @@ mod tests {
 
     #[test]
     fn bounty_claim_sets_state_and_agent() {
-        let mut reg = BountyRegistry::default();
+        let mut reg = BountyTokenStore::default();
         let id = Uuid::new_v4();
-        reg.bounties.push(Bounty::simple(
+        insert(&mut reg, Bounty::simple(
             id, "test".into(), BountyObjective::WorkAtBuilding, 5, vec![],
         ));
         let agent = entity(1);
@@ -691,9 +710,9 @@ mod tests {
 
     #[test]
     fn bounty_double_claim_fails() {
-        let mut reg = BountyRegistry::default();
+        let mut reg = BountyTokenStore::default();
         let id = Uuid::new_v4();
-        reg.bounties.push(Bounty::simple(
+        insert(&mut reg, Bounty::simple(
             id, "test".into(), BountyObjective::WorkAtBuilding, 5, vec![],
         ));
         let a = entity(1);
@@ -704,13 +723,13 @@ mod tests {
 
     #[test]
     fn bounty_available_excludes_claimed() {
-        let mut reg = BountyRegistry::default();
+        let mut reg = BountyTokenStore::default();
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
-        reg.bounties.push(Bounty::simple(
+        insert(&mut reg, Bounty::simple(
             id1, "claimed".into(), BountyObjective::WorkAtBuilding, 5, vec![],
         ));
-        reg.bounties.push(Bounty::simple(
+        insert(&mut reg, Bounty::simple(
             id2, "available".into(), BountyObjective::WorkAtBuilding, 5, vec![],
         ));
         reg.claim(id1, entity(1), 100);

@@ -16,7 +16,7 @@ use crate::agents::perception::{KnownLocations, WantsToLook};
 use crate::agents::trading::{self, TradeProposal};
 use crate::items::Inventory;
 use crate::tick::TickCount;
-use crate::world::bounty::BountyRegistry;
+use crate::world::bounty::{BountyBoard, BountyTokenStore};
 use crate::world::map::{GridPos, WorldMap};
 use crate::world::shifts::ShiftWorker;
 use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
@@ -142,14 +142,15 @@ pub fn give_claim_items_system(
 /// System: process GM verdicts — pay out approved bounties, reject others.
 pub fn process_gm_verdicts_system(
     mut verdicts: ResMut<super::commands::PendingVerdicts>,
-    mut bounty_registry: ResMut<crate::world::bounty::BountyRegistry>,
+    mut boards_verdict: Query<&mut BountyTokenStore, With<BountyBoard>>,
     mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut ThoughtBubble)>,
     mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
     tick: Res<crate::tick::TickCount>,
     sessions: Res<crate::agents::ai::AgentSessions>,
 ) {
+    let Some(mut bounty_registry) = boards_verdict.iter_mut().next() else { return; };
     for (bounty_id, approved, reason) in verdicts.verdicts.drain(..) {
-        let bounty = bounty_registry.bounties.iter().find(|b| b.id == bounty_id).cloned();
+        let bounty = bounty_registry.tokens.get(&bounty_id).cloned();
         let Some(bounty) = bounty else {
             tracing::warn!("[GM] Bounty {} not found", bounty_id);
             continue;
@@ -182,7 +183,7 @@ pub fn process_gm_verdicts_system(
                 }
             }
             // Mark completed.
-            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+            if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
                 b.state = crate::world::bounty::BountyState::Completed;
             }
         } else {
@@ -206,7 +207,7 @@ pub fn process_gm_verdicts_system(
                 }
             }
             // Return bounty to available.
-            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+            if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
                 b.state = crate::world::bounty::BountyState::Available;
                 b.claimed_by = None;
                 b.picked_up_tick = None;
@@ -471,7 +472,7 @@ pub fn apply_mcp_actions_system(
     map: Res<WorldMap>,
     mut event_log: ResMut<AgentEventLog>,
     mut suggestion_box: ResMut<SuggestionBox>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards_mcp: Query<&mut BountyTokenStore, With<BountyBoard>>,
     sessions: Res<AgentSessions>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos,
@@ -484,6 +485,8 @@ pub fn apply_mcp_actions_system(
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
     mut trade_proposals: Query<(Entity, &mut TradeProposal)>,
 ) {
+    let Some(mut bounty_registry) = boards_mcp.iter_mut().next() else { return; };
+
     let structure_list: Vec<(Entity, GridPos, String)> = structures
         .iter().map(|(e, ent, sprite)| (e, ent.0, sprite.0.clone())).collect();
 
@@ -645,7 +648,7 @@ pub fn apply_mcp_actions_system(
                         AgentGoal::ExecutingBounty(id) => Some(id),
                         AgentGoal::ReturningToBoard(id) => Some(id),
                         _ => {
-                            bounty_registry.bounties.iter()
+                            bounty_registry.tokens.values()
                                 .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
                                 .map(|b| b.id)
                         }
@@ -710,7 +713,7 @@ pub fn apply_mcp_actions_system(
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
                 if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard) {
                     thought.0 = "Must be at the bounty board to claim a bounty! Go there first.".into();
-                } else if bounty_registry.bounties.iter().any(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed) {
+                } else if bounty_registry.tokens.values().any(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed) {
                     thought.0 = "ERROR: You already have an active bounty. Complete or cancel it before claiming another. You can only hold one bounty token at a time.".into();
                 } else {
                     let keyword = mcp_action.text.as_deref()
@@ -1186,7 +1189,7 @@ pub fn apply_mcp_actions_system(
                     // Show bounty token details via session message.
                     if let Some(session) = sessions.sessions.get(&entity) {
                         // Look up the agent's active bounty from the registry.
-                        let active = bounty_registry.bounties.iter()
+                        let active = bounty_registry.tokens.values()
                             .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed);
                         if let Some(bounty) = active {
                             let instructions = bounty.hidden_criteria
@@ -1228,13 +1231,13 @@ pub fn apply_mcp_actions_system(
                 if !at_board {
                     thought.0 = "Must be at the bounty board to cancel a bounty.".into();
                 } else {
-                    let active = bounty_registry.bounties.iter()
+                    let active = bounty_registry.tokens.values()
                         .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
                         .map(|b| b.id);
 
                     if let Some(bounty_id) = active {
                         // Return bounty to available.
-                        if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                        if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
                             b.state = crate::world::bounty::BountyState::Available;
                             b.claimed_by = None;
                             b.picked_up_tick = None;

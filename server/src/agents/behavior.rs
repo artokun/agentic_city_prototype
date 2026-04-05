@@ -62,7 +62,7 @@ pub fn execution_system(
     mut commands: Commands,
     map: Res<WorldMap>,
     tick: Res<TickCount>,
-    mut bounty_registry: ResMut<BountyRegistry>,
+    mut boards_exec: Query<&mut BountyTokenStore, With<BountyBoard>>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos, &Speed,
         &mut AgentGoal, &mut ThoughtBubble, &mut AgentAnimation, &mut Inventory,
@@ -75,6 +75,7 @@ pub fn execution_system(
         (With<StructureId>, Without<AgentName>),
     >,
 ) {
+    let Some(mut bounty_registry) = boards_exec.iter_mut().next() else { return; };
     let board_info: Vec<(Entity, GridPos)> = boards.iter().map(|(e, ent, _)| (e, ent.0)).collect();
     let Some((board_entity, board_entrance)) = board_info.first().copied() else { return };
 
@@ -100,7 +101,7 @@ pub fn execution_system(
             }
 
             // Check if agent has an active bounty — restore ExecutingBounty.
-            let active_bounty = bounty_registry.bounties.iter()
+            let active_bounty = bounty_registry.tokens.values()
                 .find(|b| b.claimed_by == Some(agent_entity) && b.state == crate::world::bounty::BountyState::Claimed)
                 .map(|b| b.id);
 
@@ -301,7 +302,7 @@ pub fn execution_system(
                             inv.deduct_gold_with_debt(crate::world::bounty::recycle_cost());
                             thought.0 = format!("Recycled expired bounty (-{}g)", crate::world::bounty::recycle_cost());
                             tracing::info!("{} recycled expired bounty (-{}g)", name.0, crate::world::bounty::recycle_cost());
-                            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                            if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
                                 b.state = BountyState::Completed;
                             }
                         } else {
@@ -309,7 +310,7 @@ pub fn execution_system(
                             // Agents must deposit their proof items BEFORE submitting.
                             // The GM verifies what's in the board's inventory.
                             thought.0 = "Bounty submitted for Game Master review. Waiting for verdict...".into();
-                            if let Some(b) = bounty_registry.bounties.iter_mut().find(|b| b.id == bounty_id) {
+                            if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
                                 b.state = BountyState::PendingVerification;
                             }
                             // Spawn GM agent (via marker component).

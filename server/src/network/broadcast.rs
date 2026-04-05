@@ -44,13 +44,14 @@ pub fn broadcast_state(
         (&StructureId, &GridPos, &SpriteType, Option<&Interactable>, &Inventory, &Entrance),
         Without<AgentName>,
     >,
-    bounty_registry: Res<BountyRegistry>,
+    boards: Query<&BountyTokenStore, With<BountyBoard>>,
     board_queues: Query<&BoardQueue, With<BountyBoard>>,
     agent_names: Query<&AgentName>,
     event_log: Res<AgentEventLog>,
 ) {
+    let Some(store) = boards.iter().next() else { return; };
     let bytes = serializer::serialize_world(
-        &tick, &agents, &agent_extras, &structures, &bounty_registry, &board_queues, &agent_names, &event_log,
+        &tick, &agents, &agent_extras, &structures, store, &board_queues, &agent_names, &event_log,
     );
     let _ = broadcast_tx.sender.send(bytes);
 }
@@ -72,11 +73,12 @@ pub fn update_world_state_json(
         (&SpriteType, &GridPos, &Inventory),
         (With<StructureId>, Without<AgentName>),
     >,
-    bounty_registry: Res<BountyRegistry>,
+    boards_json: Query<&BountyTokenStore, With<BountyBoard>>,
     event_log: Res<AgentEventLog>,
     holder: Res<WorldStateJsonHolder>,
 ) {
     if tick.0 % 10 != 0 { return; }
+    let Some(bounty_registry) = boards_json.iter().next() else { return; };
 
     let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards, ctx_window, agent_cost)| {
         let items: std::collections::HashMap<String, u32> = inv.items.iter()
@@ -110,7 +112,7 @@ pub fn update_world_state_json(
         })
     }).collect();
 
-    let bounties_json: Vec<serde_json::Value> = bounty_registry.bounties.iter().map(|b| {
+    let bounties_json: Vec<serde_json::Value> = bounty_registry.tokens.values().map(|b| {
         serde_json::json!({
             "id": b.id.to_string(),
             "description": b.description,
