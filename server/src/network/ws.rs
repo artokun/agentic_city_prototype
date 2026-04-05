@@ -344,6 +344,7 @@ async fn handle_game_action(
     let valid_actions = [
         "go_to_board", "go_to_service", "look_around", "wander",
         "work_shift", "leave_shift", "complete_bounty", "chat_with", "send_message",
+        "claim_bounty", "leave_board", "help",
     ];
 
     if !valid_actions.contains(&req.action.as_str()) {
