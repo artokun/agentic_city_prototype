@@ -83,9 +83,13 @@ function render(s: WorldSnapshot) {
     }
   }
 
-  // Agent cards
+  // Agent cards (sorted by name for stable ordering)
+  const agentIndices: number[] = [];
+  for (let i = 0; i < s.agentsLength(); i++) agentIndices.push(i);
+  agentIndices.sort((a, b) => (s.agents(a)!.name() ?? "").localeCompare(s.agents(b)!.name() ?? ""));
+
   let cardsHtml = "";
-  for (let i = 0; i < s.agentsLength(); i++) {
+  for (const i of agentIndices) {
     const a = s.agents(i)!;
     const pos = a.pos();
     const anim = a.animation();

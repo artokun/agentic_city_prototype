@@ -114,8 +114,10 @@ impl ScenarioBuilder {
         let handle = std::thread::Builder::new()
             .name(format!("scenario-{}", port))
             .spawn(move || {
+                // Initialize tracing so we can see logs during tests.
+                let _ = tracing_subscriber::fmt::try_init();
+
                 // Set DOCUMENTS_DIR for this test instance.
-                // Note: env vars are process-global, but each test uses a unique dir name.
                 std::env::set_var("DOCUMENTS_DIR", &documents_dir_clone);
 
                 use bevy::app::ScheduleRunnerPlugin;
