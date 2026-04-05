@@ -148,23 +148,6 @@ fn spawn_structures(mut commands: Commands) {
         Inventory::default(),
     ));
 
-    // Seed bounties.
-    commands.insert_resource(BountyRegistry {
-        bounties: vec![
-            Bounty::simple(
-                Uuid::new_v4(),
-                "Hide a gold egg inside a structure".into(),
-                BountyObjective::HideItem(ItemType::GoldEgg),
-                10,
-                vec![(ItemType::GoldEgg, 1)],
-            ),
-            Bounty::simple(
-                Uuid::new_v4(),
-                "Find the hidden gold egg".into(),
-                BountyObjective::FindItem(ItemType::GoldEgg),
-                10,
-                vec![],
-            ),
-        ],
-    });
+    // Bounty registry starts empty — bounty_injector populates it.
+    commands.insert_resource(BountyRegistry::default());
 }
