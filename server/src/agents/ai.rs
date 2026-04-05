@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
-use crate::agents::ai_decision::{self, AgentAction};
 use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
@@ -21,7 +20,6 @@ use crate::world::shifts::ShiftWorker;
 use crate::network::agent_relay::AgentRelays;
 
 use super::actions::ActionTimer;
-use super::pathfinding;
 use super::personality::Personality;
 
 /// Bevy resource: tracks sessions per agent.
@@ -34,7 +32,6 @@ pub struct SessionState {
     pub prompt_tx: mpsc::Sender<String>,
     pub response_rx: Arc<Mutex<mpsc::Receiver<String>>>,
     pub last_decision_tick: u64,
-    pub pending: bool,
     pub system_prompt: String,
 }
 
@@ -42,14 +39,15 @@ pub struct SessionState {
 #[derive(Resource, Clone)]
 pub struct AgentRelaysResource(pub AgentRelays);
 
-const DECISION_INTERVAL: u64 = 50;
+/// How often to send context updates (in ticks). 50 ticks = 5 seconds.
+const CONTEXT_INTERVAL: u64 = 50;
 
 /// System: spawn Claude sessions via --sdk-url for agents.
 pub fn spawn_sessions_system(
     runtime: ResMut<TokioTasksRuntime>,
     mut sessions: ResMut<AgentSessions>,
     relays: Res<AgentRelaysResource>,
-    agents: Query<(Entity, &AgentId, &AgentName, &Personality, &super::components::ClaudeModel)>,
+    agents: Query<(Entity, &AgentId, &AgentName, &Personality, &ClaudeModel)>,
 ) {
     for (entity, agent_id, name, personality, claude_model) in &agents {
         if sessions.sessions.contains_key(&entity) {
@@ -65,36 +63,27 @@ pub fn spawn_sessions_system(
 
         tracing::info!("Spawning Claude --sdk-url session for {} ({})", agent_name, agent_uuid);
 
-        // Create placeholder — will be replaced when relay is ready.
         let (placeholder_tx, _) = mpsc::channel(1);
         let (_, placeholder_rx) = mpsc::channel(1);
         sessions.sessions.insert(entity, SessionState {
             prompt_tx: placeholder_tx,
             response_rx: Arc::new(Mutex::new(placeholder_rx)),
             last_decision_tick: 0,
-            pending: false,
             system_prompt: system_prompt.clone(),
         });
 
         let entity_copy = entity;
 
         runtime.spawn_background_task(move |mut ctx| async move {
-            // Register the relay endpoint.
             let handle = relays_clone.register(&agent_uuid).await;
 
-            // Write system prompt to temp file.
             let prompt_file = format!("/tmp/agent-{}.md", agent_uuid);
             if let Err(e) = tokio::fs::write(&prompt_file, &sys_prompt_clone).await {
                 tracing::error!("Failed to write prompt file: {}", e);
                 return;
             }
 
-            // Spawn Claude CLI with --sdk-url.
-            let sdk_url = format!("ws://127.0.0.1:8080/agent/{}/ws", agent_uuid);
-            let mut env: HashMap<String, String> = std::env::vars().collect();
-            env.remove("ANTHROPIC_API_KEY");
-
-            // Write per-agent MCP config with identity baked in.
+            // Per-agent MCP config with identity baked in.
             let mcp_binary = std::env::current_dir()
                 .map(|d| d.join("target/debug/mcp-game").to_string_lossy().to_string())
                 .unwrap_or_else(|_| "target/debug/mcp-game".into());
@@ -112,7 +101,10 @@ pub fn spawn_sessions_system(
                 }
             });
             let _ = std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&mcp_config_content).unwrap());
-            let mcp_config = mcp_config_path.clone();
+
+            let sdk_url = format!("ws://127.0.0.1:8080/agent/{}/ws", agent_uuid);
+            let mut env: HashMap<String, String> = std::env::vars().collect();
+            env.remove("ANTHROPIC_API_KEY");
 
             let child = tokio::process::Command::new("claude")
                 .args([
@@ -122,7 +114,7 @@ pub fn spawn_sessions_system(
                     "--permission-mode", "bypassPermissions",
                     "--model", &model_name,
                     "--append-system-prompt-file", &prompt_file,
-                    "--mcp-config", &mcp_config,
+                    "--mcp-config", &mcp_config_path,
                     "--verbose",
                 ])
                 .stdin(Stdio::null())
@@ -140,9 +132,8 @@ pub fn spawn_sessions_system(
                 }
             };
 
-            tracing::info!("Claude spawned for {} → {}", agent_name, sdk_url);
+            tracing::info!("Claude spawned for {} → {} (model: {})", agent_name, sdk_url, model_name);
 
-            // Log stderr.
             let name_err = agent_name.clone();
             if let Some(stderr) = child.stderr.take() {
                 tokio::spawn(async move {
@@ -156,7 +147,6 @@ pub fn spawn_sessions_system(
                 });
             }
 
-            // Wait for Claude to connect to the WebSocket relay.
             tracing::info!("Waiting for Claude to connect for {}...", agent_name);
             let connected = handle.connected.clone();
             tokio::select! {
@@ -169,7 +159,6 @@ pub fn spawn_sessions_system(
                 }
             }
 
-            // Update the session handle on the main thread.
             let ptx = handle.prompt_tx;
             let rrx = Arc::new(Mutex::new(handle.response_rx));
             let ptx_clone = ptx.clone();
@@ -185,92 +174,50 @@ pub fn spawn_sessions_system(
                 }
             }).await;
 
-            // Keep the task alive while Claude is running.
             let _ = child.wait().await;
             tracing::info!("Claude process exited for {}", agent_name);
             let _ = tokio::fs::remove_file(&prompt_file).await;
+            let _ = tokio::fs::remove_file(&mcp_config_path).await;
         });
     }
 }
 
-/// System: send decision prompts and apply responses.
-pub fn ai_decision_system(
-    mut commands: Commands,
+/// System: send context updates to Claude sessions.
+/// Claude acts via the MCP game_action tool — we do NOT parse responses.
+/// This system only provides situational awareness.
+pub fn ai_context_system(
     tick: Res<TickCount>,
-    map: Res<WorldMap>,
     bounty_registry: Res<BountyRegistry>,
     mut sessions: ResMut<AgentSessions>,
-    mut event_log: ResMut<AgentEventLog>,
-    mut agents: Query<(
+    agents: Query<(
         Entity, &AgentName, &GridPos, &Speed,
-        &mut AgentGoal, &mut ThoughtBubble,
-        &Needs, &Inventory, &KnownLocations, &Relationships,
+        &AgentGoal, &Needs, &Inventory, &KnownLocations, &Relationships,
         Option<&ActionTimer>, Option<&Path>,
         Option<&InsideBuilding>, Option<&ShiftWorker>,
     )>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
 ) {
-    let structure_list: Vec<(Entity, GridPos, String)> = structures
-        .iter().map(|(e, ent, sprite)| (e, ent.0, sprite.0.clone())).collect();
-
     for (
-        entity, name, pos, speed, mut goal, mut thought,
-        needs, inv, known_locs, rels,
-        action_timer, path,
-        inside_building, shift_worker,
-    ) in &mut agents {
+        entity, name, pos, speed, goal, needs, inv, known_locs, rels,
+        action_timer, path, inside_building, shift_worker,
+    ) in &agents {
         if action_timer.is_some() { continue; }
         let has_path = path.is_some_and(|p| !p.0.is_empty());
         if has_path { continue; }
 
         let Some(session) = sessions.sessions.get_mut(&entity) else { continue };
 
-        // Check for pending response.
-        if session.pending {
-            let maybe_response = {
-                let mut rx = session.response_rx.lock().unwrap();
-                rx.try_recv().ok()
-            };
+        // Rate limit context updates.
+        if tick.0 - session.last_decision_tick < CONTEXT_INTERVAL { continue; }
 
-            if let Some(response_text) = maybe_response {
-                session.pending = false;
-                let (action, thought_text) = ai_decision::parse_action(&response_text);
-                thought.0 = thought_text.clone();
-                tracing::info!("[AI:{}] {} → {:?}", name.0, thought_text, action);
+        // Only send context when agent can act.
+        if !matches!(goal,
+            AgentGoal::Idle | AgentGoal::Wandering |
+            AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_)
+        ) { continue; }
 
-                event_log.push(LogEvent {
-                    tick: tick.0, agent: name.0.clone(),
-                    kind: LogKind::Decision,
-                    text: format!("{} → {:?}", thought_text, action),
-                });
-
-                match &action {
-                    AgentAction::WorkShift { building } => {
-                        if let Some((bld_entity, entrance, _)) = structure_list.iter().find(|(_, _, s)| s == building) {
-                            *goal = AgentGoal::GoingToService {
-                                building: *bld_entity, service: "work_shift".into(),
-                            };
-                            if let Some(p) = pathfinding::bfs(&map, *pos, *entrance) {
-                                commands.entity(entity).insert(Path(p));
-                            }
-                        }
-                    }
-                    AgentAction::LeaveShift => { *goal = AgentGoal::Idle; }
-                    _ => {
-                        apply_action(&mut commands, entity, &action, &mut goal, pos, &map, &structure_list, known_locs);
-                    }
-                }
-            }
-            continue;
-        }
-
-        // Rate limit.
-        if tick.0 - session.last_decision_tick < DECISION_INTERVAL { continue; }
-        // Allow decisions when idle, wandering, working a shift, OR executing a bounty.
-        if !matches!(*goal, AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WorkingShift { .. } | AgentGoal::ExecutingBounty(_)) { continue; }
-
-        // Only show bounties if agent is at the bounty board.
+        // Only show bounties if at the board.
         let at_board = inside_building.map_or(false, |ib| {
             structures.get(ib.0).map_or(false, |(_, _, s)| s.0 == "bounty_board")
         });
@@ -278,15 +225,18 @@ pub fn ai_decision_system(
             bounty_registry.available().iter()
                 .map(|b| format!("{} ({}g) — {}", b.description, b.reward_gold,
                     match &b.objective {
-                        crate::world::bounty::BountyObjective::HideItem(item) => format!("You'll receive a {} to hide in any structure.", item),
-                        crate::world::bounty::BountyObjective::FindItem(item) => format!("Search structures to find a hidden {}.", item),
+                        crate::world::bounty::BountyObjective::HideItem(item) =>
+                            format!("You'll receive a {} to hide in any structure.", item),
+                        crate::world::bounty::BountyObjective::FindItem(item) =>
+                            format!("Search structures to find a hidden {}.", item),
                         crate::world::bounty::BountyObjective::RestockDelivery { item, quantity, destination } =>
                             format!("Buy {} {} from warehouse and deliver to {}.", quantity, item, destination),
-                        crate::world::bounty::BountyObjective::WorkAtBuilding => "Go to the specified building and complete the task.".into(),
+                        crate::world::bounty::BountyObjective::WorkAtBuilding =>
+                            "Go to the specified building and complete the task.".into(),
                     }
                 )).collect()
         } else {
-            vec![] // Can't see bounties unless at the board
+            vec![]
         };
 
         let nearby: Vec<(String, GridPos)> = all_agents.iter()
@@ -294,8 +244,8 @@ pub fn ai_decision_system(
             .filter(|(_, p)| (p.x - pos.x).abs() + (p.y - pos.y).abs() <= 10)
             .map(|(n, p)| (n.0.clone(), *p)).collect();
 
-        // Determine location-specific tools based on building type and shift status.
-        let mut location_tools: Vec<&str> = vec!["look_around", "wander", "go_to_board", "go_to_service", "chat_with", "work_shift"];
+        // Location-specific tools.
+        let mut location_tools: Vec<&str> = vec!["look_around", "wander", "go_to_board", "go_to_service", "work_shift"];
         if let Some(inside) = inside_building {
             if let Ok((_, _, sprite)) = structures.get(inside.0) {
                 let on_shift = shift_worker.is_some();
@@ -314,14 +264,12 @@ pub fn ai_decision_system(
         if shift_worker.is_some() {
             location_tools.push("leave_shift");
         }
-        // Add complete_bounty tool if executing a bounty.
-        if matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+        if matches!(goal, AgentGoal::ExecutingBounty(_)) {
             location_tools.push("complete_bounty");
         }
-        let location_tool_refs: Vec<&str> = location_tools.iter().copied().collect();
 
-        // Get active bounty description if executing one.
-        let active_bounty_desc = match &*goal {
+        // Get active bounty description.
+        let active_bounty_desc = match goal {
             AgentGoal::ExecutingBounty(bid) => {
                 bounty_registry.get(*bid).map(|b| b.description.clone())
             }
@@ -329,75 +277,17 @@ pub fn ai_decision_system(
         };
 
         let context = super::ai_decision::build_context(
-            &name.0, pos, needs, inv, &goal, known_locs, rels,
-            speed.0, &available_bounties, &nearby, &location_tool_refs,
+            &name.0, pos, needs, inv, goal, known_locs, rels,
+            speed.0, &available_bounties, &nearby, &location_tools,
             active_bounty_desc.as_deref(),
         );
 
+        // Send context as a user message. Claude will think and call game_action tool.
         if let Err(e) = session.prompt_tx.try_send(context) {
-            tracing::debug!("[AI:{}] prompt send failed: {}", name.0, e);
+            tracing::debug!("[AI:{}] context send failed: {}", name.0, e);
             continue;
         }
 
-        session.pending = true;
         session.last_decision_tick = tick.0;
-    }
-}
-
-fn apply_action(
-    commands: &mut Commands, entity: Entity, action: &AgentAction,
-    goal: &mut Mut<AgentGoal>, pos: &GridPos, map: &WorldMap,
-    structures: &[(Entity, GridPos, String)], known_locs: &KnownLocations,
-) {
-    match action {
-        AgentAction::GoToBoard => {
-            **goal = AgentGoal::GoingToBoard;
-            if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
-                if let Some(p) = pathfinding::bfs(map, *pos, board.entrance) {
-                    commands.entity(entity).insert(Path(p));
-                }
-            }
-        }
-        AgentAction::GoToService { building, service } => {
-            if let Some((bld_entity, entrance, _)) = structures.iter().find(|(_, _, s)| s == building) {
-                **goal = AgentGoal::GoingToService { building: *bld_entity, service: service.clone() };
-                if let Some(p) = pathfinding::bfs(map, *pos, *entrance) {
-                    commands.entity(entity).insert(Path(p));
-                }
-            }
-        }
-        AgentAction::LookAround => {
-            commands.entity(entity).insert(super::perception::WantsToLook);
-        }
-        AgentAction::Wander => {
-            let walkable = map.walkable_positions();
-            let idx = (entity.to_bits() as usize + 7) % walkable.len();
-            if let Some(p) = pathfinding::bfs(map, *pos, walkable[idx]) {
-                if !p.is_empty() {
-                    commands.entity(entity).insert(Path(p));
-                    **goal = AgentGoal::Wandering;
-                }
-            }
-        }
-        AgentAction::ChatWith { .. } => { **goal = AgentGoal::Wandering; }
-        AgentAction::SendMessage { recipient, text } => {
-            commands.entity(entity).insert(super::mailbox::WantsToSendMessage {
-                recipient_name: recipient.clone(),
-                text: text.clone(),
-            });
-        }
-        AgentAction::WorkShift { .. } | AgentAction::LeaveShift => {}
-        AgentAction::CompleteBounty => {
-            // Agent believes bounty is done — return to board.
-            if let AgentGoal::ExecutingBounty(bounty_id) = **goal {
-                **goal = AgentGoal::ReturningToBoard(bounty_id);
-                if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
-                    if let Some(p) = super::pathfinding::bfs(map, *pos, board.entrance) {
-                        commands.entity(entity).insert(super::components::Path(p));
-                    }
-                }
-            }
-        }
-        AgentAction::DoNothing => {}
     }
 }

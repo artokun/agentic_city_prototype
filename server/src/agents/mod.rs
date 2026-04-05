@@ -46,13 +46,13 @@ impl Plugin for AgentPlugin {
                         perception::start_tracking_system,
                         perception::inspect_system,
                         perception::passive_discovery_system,
-                        social::social_matchmaking_system,
+                        // social::social_matchmaking_system, // DISABLED: chatting via MCP tool only
                         social::social_memory_system,
                     ).chain(),
                     (
                         ai::spawn_sessions_system,
-                        ai_chat::ai_chat_system,
-                        ai::ai_decision_system,
+                        // ai_chat::ai_chat_system, // DISABLED: chatting via MCP tool only
+                        ai::ai_context_system,
                         summarizer::summarize_thoughts_system,
                         behavior::execution_system,
                         mailbox::process_outgoing_mail_system,
