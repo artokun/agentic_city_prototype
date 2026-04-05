@@ -14,7 +14,7 @@ fn main() {
 
     App::new()
         .add_plugins(
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(100))),
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(500))),
         )
         .add_plugins(TokioTasksPlugin::default())
         .add_plugins(tick::GameTickPlugin)

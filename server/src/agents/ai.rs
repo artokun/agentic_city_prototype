@@ -202,6 +202,11 @@ pub fn spawn_sessions_system(
 
             let ptx = handle.prompt_tx;
             let rrx = Arc::new(Mutex::new(handle.response_rx));
+
+            // Send the intro message — Dungeon Crawler Carl style.
+            let intro = build_intro_message(&agent_name);
+            let _ = ptx.send(intro).await;
+
             let ptx_clone = ptx.clone();
             let rrx_clone = rrx.clone();
 
@@ -250,14 +255,13 @@ pub fn ai_thought_drain_system(
             let Some(text) = msg else { break };
 
             if let Some(thought_text) = text.strip_prefix("thought:") {
-                let preview: String = thought_text.chars().take(200).collect();
-                thought.0 = preview.clone();
+                thought.0 = thought_text.to_string();
 
                 event_log.push(LogEvent {
                     tick: tick.0,
                     agent: name.0.clone(),
                     kind: LogKind::Thought,
-                    text: preview,
+                    text: thought_text.to_string(),
                 });
             }
             // Non-thought messages (result text) are ignored — actions come via MCP tool.
@@ -379,4 +383,43 @@ pub fn ai_context_system(
 
         session.last_decision_tick = tick.0;
     }
+}
+
+/// Build the intro message sent to agents when they first spawn.
+/// Inspired by Dungeon Crawler Carl — dramatic, immersive, sets the stakes.
+fn build_intro_message(agent_name: &str) -> String {
+    let others = match agent_name {
+        "Alice" => "Bob and Carol",
+        "Bob" => "Alice and Carol",
+        "Carol" => "Alice and Bob",
+        _ => "the other contestants",
+    };
+
+    format!(
+r#"ATTENTION, {agent_name}.
+
+You have been summoned to San Francisco.
+
+You stand on a cold sidewalk in a city you've never seen before. The fog rolls in from the bay. You have 3 gold coins in your pocket, no food, no contacts, and no idea what's coming. The world is watching.
+
+You are not alone. {others} have also been summoned. They are your competitors — and potentially your allies. You will all compete to earn as much gold as possible. Who you trust, who you trade with, and who you undercut is entirely up to you.
+
+HERE ARE THE RULES:
+
+1. GOLD IS EVERYTHING. The contestant who earns the most gold wins. Gold comes from completing bounties posted at the bounty board and from working shifts at local businesses. Bounties pay 4-15 gold and are the fastest path to riches. Shifts pay slowly but reliably.
+
+2. YOU HAVE NEEDS. Your energy, hunger, and boredom are constantly draining. If any drops to zero, you will collapse and wake up at the hospital with a 5 gold debt. Keep your needs above critical levels — but don't waste time over-maintaining them either. Every tick spent eating is a tick not earning.
+
+3. THE CITY IS YOUR PLAYGROUND. You can visit buildings: the bounty board, cafes, a hotel, apartments, a warehouse, a market, a library, a theater, and more. Each offers services — some free, some costly. Learn which ones are worth your time.
+
+4. YOU INTERACT THROUGH ACTIONS. Use your game_action tool. That is your ONLY way to affect the world. Move, eat, sleep, work, claim bounties, chat — everything goes through that tool.
+
+5. SOCIAL CONNECTIONS MATTER. You can start conversations with nearby agents, exchange business cards, send messages, and even trade items. Chatting relieves boredom for free. But don't waste time on small talk when there's gold to earn.
+
+6. THE HELP SYSTEM. If something feels broken or unfair, use the "help" action with your feedback. The game masters are listening.
+
+You have been placed near the bounty board. That is not a coincidence. Your first move matters.
+
+Good luck, {agent_name}. The clock is ticking.
+"#)
 }
