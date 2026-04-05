@@ -14,6 +14,9 @@ pub enum GameCommand {
         reward_gold: u32,
         objective: Option<String>,
     },
+    AgentAction {
+        action_json: String,
+    },
     CreateContract {
         id: Uuid,
         title: String,
@@ -51,6 +54,12 @@ pub fn process_commands_system(
 ) {
     while let Ok(cmd) = receiver.rx.try_recv() {
         match cmd {
+            GameCommand::AgentAction { action_json } => {
+                tracing::info!("[MCP] Agent action received: {}", &action_json[..action_json.len().min(100)]);
+                // TODO: Route to the specific agent's behavior system.
+                // For now, actions flow through the AI decision system.
+            }
+
             GameCommand::CreateBounty {
                 id,
                 description,

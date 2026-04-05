@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "game-engine": {
+      "command": "./target/debug/mcp-game",
+      "args": [],
+      "env": {}
+    }
+  }
+}

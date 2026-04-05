@@ -1,0 +1,175 @@
+//! MCP Game Engine — stdio MCP server with a single `game_action` tool.
+//! Claude agents call this tool to perform actions in the game world.
+//! The tool validates the action, forwards it to the game server via HTTP,
+//! and returns the game engine's response.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::io::{self, BufRead, Write};
+
+const GAME_SERVER: &str = "http://127.0.0.1:8080";
+
+fn main() {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() { continue; }
+
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+
+        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let id = msg.get("id").cloned();
+
+        let response = match method {
+            "initialize" => handle_initialize(&id),
+            "tools/list" => handle_tools_list(&id),
+            "tools/call" => handle_tool_call(&msg, &id),
+            "notifications/initialized" | "notifications/cancelled" => continue,
+            _ => json_rpc_error(&id, -32601, &format!("Unknown method: {}", method)),
+        };
+
+        let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
+        let _ = stdout.flush();
+    }
+}
+
+fn handle_initialize(id: &Option<Value>) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "game-engine",
+                "version": "0.1.0"
+            }
+        }
+    })
+}
+
+fn handle_tools_list(id: &Option<Value>) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "tools": [
+                {
+                    "name": "game_action",
+                    "description": "Perform an action in the game world. This is your ONLY way to interact with the world. Call this tool to move, eat, sleep, work, claim bounties, etc. The game engine will tell you what happened.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "agent_name": {
+                                "type": "string",
+                                "description": "YOUR name (the agent calling this tool)"
+                            },
+                            "action": {
+                                "type": "string",
+                                "description": "The action to perform",
+                                "enum": [
+                                    "go_to_board",
+                                    "go_to_service",
+                                    "look_around",
+                                    "wander",
+                                    "work_shift",
+                                    "leave_shift",
+                                    "complete_bounty",
+                                    "chat_with",
+                                    "send_message"
+                                ]
+                            },
+                            "building": {
+                                "type": "string",
+                                "description": "Target building name (for go_to_service, work_shift)"
+                            },
+                            "service": {
+                                "type": "string",
+                                "description": "Service to use (eat_cafe, buy_coffee, sleep_hotel, sleep_at_home, cook_at_home, redeem_paycheck, search_internet)"
+                            },
+                            "agent": {
+                                "type": "string",
+                                "description": "Agent name (for chat_with, send_message)"
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "Message text (for send_message)"
+                            }
+                        },
+                        "required": ["agent_name", "action"]
+                    }
+                }
+            ]
+        }
+    })
+}
+
+fn handle_tool_call(msg: &Value, id: &Option<Value>) -> Value {
+    let tool_name = msg.pointer("/params/name").and_then(|n| n.as_str()).unwrap_or("");
+    let arguments = msg.pointer("/params/arguments").cloned().unwrap_or(json!({}));
+
+    if tool_name != "game_action" {
+        return json_rpc_error(id, -32602, &format!("Unknown tool: {}", tool_name));
+    }
+
+    let action = arguments.get("action").and_then(|a| a.as_str()).unwrap_or("unknown");
+
+    // Forward the action to the game server.
+    let result = match forward_to_game_server(&arguments) {
+        Ok(response) => response,
+        Err(e) => format!("Game server error: {}", e),
+    };
+
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": result
+                }
+            ]
+        }
+    })
+}
+
+fn forward_to_game_server(action: &Value) -> Result<String, String> {
+    let client = reqwest::blocking::Client::new();
+
+    let resp = client
+        .post(&format!("{}/api/action", GAME_SERVER))
+        .json(action)
+        .send()
+        .map_err(|e| format!("HTTP error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server returned {}", resp.status()));
+    }
+
+    let body: Value = resp.json().map_err(|e| format!("JSON error: {}", e))?;
+
+    body.get("result")
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| serde_json::to_string_pretty(&body).ok())
+        .ok_or_else(|| "Empty response".to_string())
+}
+
+fn json_rpc_error(id: &Option<Value>, code: i32, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message
+        }
+    })
+}

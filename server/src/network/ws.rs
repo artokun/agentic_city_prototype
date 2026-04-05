@@ -32,6 +32,7 @@ pub async fn start_server(state: AppState) {
         .route("/api/bounties", get(list_bounties))
         .route("/api/contracts", post(create_contract))
         .route("/api/stripe/test", get(stripe_test))
+        .route("/api/action", post(handle_game_action))
         .route("/agent/{id}/ws", get({
             let relays = state.agent_relays.clone();
             move |ws, path| agent_relay::agent_ws_handler(ws, path, axum::extract::State(relays))
@@ -319,4 +320,93 @@ async fn verify_stripe_payment(
     }
 
     Ok(net)
+}
+
+// --- Game action endpoint (for MCP tool) ---
+
+#[derive(Deserialize)]
+struct GameActionRequest {
+    action: String,
+    building: Option<String>,
+    service: Option<String>,
+    agent: Option<String>,
+    text: Option<String>,
+}
+
+async fn handle_game_action(
+    State(state): State<AppState>,
+    Json(req): Json<GameActionRequest>,
+) -> impl IntoResponse {
+    // Validate the action.
+    let valid_actions = [
+        "go_to_board", "go_to_service", "look_around", "wander",
+        "work_shift", "leave_shift", "complete_bounty", "chat_with", "send_message",
+    ];
+
+    if !valid_actions.contains(&req.action.as_str()) {
+        return Json(serde_json::json!({
+            "result": format!("Invalid action '{}'. Valid actions: {}", req.action, valid_actions.join(", ")),
+            "success": false,
+        }));
+    }
+
+    // Build the command to forward to the game engine.
+    let mut result_text = format!("Action '{}' acknowledged.", req.action);
+
+    match req.action.as_str() {
+        "go_to_service" => {
+            let building = req.building.as_deref().unwrap_or("unknown");
+            let service = req.service.as_deref().unwrap_or("browse");
+            result_text = format!(
+                "Walking to {}. You'll be notified when you arrive. \
+                 Once there, you can choose from available services. \
+                 Requested service: {}.",
+                building, service,
+            );
+        }
+        "go_to_board" => {
+            result_text = "Heading to the bounty board. You'll be notified when you arrive and can browse available bounties.".into();
+        }
+        "work_shift" => {
+            let building = req.building.as_deref().unwrap_or("unknown");
+            result_text = format!(
+                "Starting a shift at {}. You'll earn paychecks based on ticks worked. Use 'leave_shift' when done.",
+                building,
+            );
+        }
+        "look_around" => {
+            result_text = "Scanning your surroundings... You'll see nearby agents and buildings in your next status update.".into();
+        }
+        "complete_bounty" => {
+            result_text = "Marking bounty as complete. Heading to the bounty board to collect your reward.".into();
+        }
+        "leave_shift" => {
+            result_text = "Leaving your shift. You'll receive a paycheck for the ticks worked. Redeem it at the bounty board.".into();
+        }
+        "send_message" => {
+            let recipient = req.agent.as_deref().unwrap_or("unknown");
+            let text = req.text.as_deref().unwrap_or("");
+            result_text = format!("Message sent to {}: '{}'", recipient, text);
+        }
+        _ => {}
+    }
+
+    // Forward as a game command.
+    let cmd_json = serde_json::json!({
+        "action": req.action,
+        "building": req.building,
+        "service": req.service,
+        "agent": req.agent,
+        "text": req.text,
+    });
+
+    // Send via the command channel.
+    let _ = state.command_tx.send(super::commands::GameCommand::AgentAction {
+        action_json: serde_json::to_string(&cmd_json).unwrap_or_default(),
+    }).await;
+
+    Json(serde_json::json!({
+        "result": result_text,
+        "success": true,
+    }))
 }

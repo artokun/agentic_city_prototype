@@ -94,6 +94,11 @@ pub fn spawn_sessions_system(
             let mut env: HashMap<String, String> = std::env::vars().collect();
             env.remove("ANTHROPIC_API_KEY");
 
+            // MCP config for game engine tool.
+            let mcp_config = std::env::current_dir()
+                .map(|d| d.join("mcp-config.json").to_string_lossy().to_string())
+                .unwrap_or_else(|_| "mcp-config.json".into());
+
             let child = tokio::process::Command::new("claude")
                 .args([
                     "--sdk-url", &sdk_url,
@@ -102,6 +107,7 @@ pub fn spawn_sessions_system(
                     "--permission-mode", "bypassPermissions",
                     "--model", &model_name,
                     "--append-system-prompt-file", &prompt_file,
+                    "--mcp-config", &mcp_config,
                     "--verbose",
                 ])
                 .stdin(Stdio::null())
