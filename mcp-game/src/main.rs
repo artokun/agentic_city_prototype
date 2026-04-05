@@ -91,6 +91,8 @@ fn handle_tools_list(id: &Option<Value>) -> Value {
                                     "complete_bounty",
                                     "chat_with",
                                     "send_message",
+                                    "claim_bounty",
+                                    "leave_board",
                                     "help"
                                 ]
                             },

@@ -233,31 +233,12 @@ pub fn execution_system(
             }
 
             AgentGoal::InteractingWithBoard => {
-                let available: Vec<_> = bounty_registry.available().iter()
-                    .map(|b| (b.id, b.description.clone())).collect();
-
-                if let Some((bounty_id, desc)) = available.first() {
-                    let bounty_id = *bounty_id;
-                    if let Some(bounty) = bounty_registry.claim(bounty_id, agent_entity, tick.0) {
-                        let claim_items = bounty.claim_items.clone();
-                        thought.0 = format!("Claimed: {desc}");
-                        tracing::info!("{} claimed: {desc}", name.0);
-                        action_log.log(tick.0, ActionEvent::BountyPickedUp { bounty_id });
-                        for (item, count) in &claim_items { inv.add(*item, *count); }
-                        if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
-                            queue.leave(agent_entity);
-                        }
-                        anim.0 = AnimState::Idle;
-                        *goal = AgentGoal::ExecutingBounty(bounty_id);
-                    }
-                } else {
-                    thought.0 = "No bounties available.".into();
-                    if let Ok((_, _, mut queue)) = boards.get_mut(board_entity) {
-                        queue.leave(agent_entity);
-                    }
-                    anim.0 = AnimState::Idle;
-                    *goal = AgentGoal::Idle; // Back to idle — AI decides next.
-                }
+                // Agent is at the board. The AI context system will show them
+                // available bounties. They must call claim_bounty via MCP tool
+                // to pick one. NO auto-claiming.
+                // Just wait — the agent is "browsing" and will make a choice.
+                // The context system sends bounty details when at_board is true.
+                anim.0 = AnimState::Working;
             }
 
             AgentGoal::ExecutingBounty(bounty_id) => {

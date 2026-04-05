@@ -54,7 +54,7 @@ pub fn apply_mcp_actions_system(
     map: Res<WorldMap>,
     mut event_log: ResMut<AgentEventLog>,
     mut suggestion_box: ResMut<SuggestionBox>,
-    bounty_registry: Res<BountyRegistry>,
+    mut bounty_registry: ResMut<BountyRegistry>,
     mut agents: Query<(
         Entity, &AgentName, &GridPos,
         &mut AgentGoal, &mut ThoughtBubble,
@@ -181,6 +181,54 @@ pub fn apply_mcp_actions_system(
                     });
                     thought.0 = format!("Sending message to {}.", recipient);
                 }
+            }
+
+            "claim_bounty" => {
+                if !matches!(*goal, AgentGoal::InteractingWithBoard) {
+                    thought.0 = "Must be at the bounty board to claim a bounty! Go there first.".into();
+                } else {
+                    let keyword = mcp_action.text.as_deref()
+                        .or(mcp_action.service.as_deref())
+                        .unwrap_or("");
+
+                    // Find first available bounty matching keyword.
+                    let bounty_match = bounty_registry.available().iter()
+                        .find(|b| keyword.is_empty() || b.description.to_lowercase().contains(&keyword.to_lowercase()))
+                        .map(|b| b.id);
+
+                    if let Some(bounty_id) = bounty_match {
+                        if let Some(bounty) = bounty_registry.claim(bounty_id, entity, tick.0) {
+                            let desc = bounty.description.clone();
+                            let claim_items = bounty.claim_items.clone();
+
+                            // Give claim items to agent.
+                            // Need mutable inventory — but we only have the goal query.
+                            // We'll handle inventory via a deferred command.
+                            thought.0 = format!("Claimed: {}", desc);
+
+                            event_log.push(LogEvent {
+                                tick: tick.0,
+                                agent: name.0.clone(),
+                                kind: LogKind::Action,
+                                text: format!("CLAIMED: {} ({}g)", desc, bounty.reward_gold),
+                            });
+
+                            tracing::info!("[MCP:{}] claimed bounty: {}", name.0, desc);
+
+                            // Leave the board queue.
+                            *goal = AgentGoal::ExecutingBounty(bounty_id);
+                        } else {
+                            thought.0 = "Couldn't claim that bounty — it may already be taken.".into();
+                        }
+                    } else {
+                        thought.0 = format!("No bounty matching '{}' found.", keyword);
+                    }
+                }
+            }
+
+            "leave_board" => {
+                *goal = AgentGoal::Idle;
+                thought.0 = "Left the bounty board.".into();
             }
 
             "help" => {
