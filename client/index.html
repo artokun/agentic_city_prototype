@@ -125,6 +125,16 @@
       </table>
     </div>
   </div>
+  <!-- Document modal -->
+  <div id="doc-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:100;align-items:center;justify-content:center" onclick="this.style.display='none'">
+    <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;max-width:700px;max-height:80vh;overflow-y:auto;width:90%" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 id="doc-title" style="color:#635bff;margin:0;font-size:13px"></h3>
+        <span style="cursor:pointer;color:#666;font-size:16px" onclick="document.getElementById('doc-modal').style.display='none'">✕</span>
+      </div>
+      <pre id="doc-content" style="white-space:pre-wrap;font-size:11px;color:#ccc;line-height:1.6;margin:0"></pre>
+    </div>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

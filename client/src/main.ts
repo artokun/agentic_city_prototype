@@ -108,10 +108,10 @@ function render(s: WorldSnapshot) {
         const itemName = slot.itemType() ?? "?";
         const cls = itemClass(itemName);
         if (itemName.startsWith("doc:")) {
-          // Clickable document — opens in new tab via REST API
+          // Clickable document — fetches and shows in modal
           const docTitle = itemName.substring(4);
           const docUrl = `/api/documents/${agentName.toLowerCase()}/${docTitle}`;
-          invHtml += `<a class="item item-doc" href="${docUrl}" target="_blank" style="text-decoration:none;cursor:pointer" title="Click to read">${docTitle}</a>`;
+          invHtml += `<span class="item item-doc" style="cursor:pointer" title="Click to read" onclick="fetch('${docUrl}').then(r=>r.text()).then(t=>{const m=document.getElementById('doc-modal')!;document.getElementById('doc-content')!.textContent=t;document.getElementById('doc-title')!.textContent='${docTitle}';m.style.display='flex'})">${docTitle}</span>`;
         } else {
           invHtml += `<span class="item ${cls}">${itemName}${slot.count() > 1 ? ` x${slot.count()}` : ''}</span>`;
         }
