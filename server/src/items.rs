@@ -11,17 +11,45 @@ pub enum ItemType {
     Rations,
     Sandwich,
     Soup,
+    Paycheck,
+    // Raw materials
+    CoffeeBeans,
+    Flour,
+    RawMeat,
 }
 
 impl ItemType {
     /// Wholesale price at the warehouse (gold per unit).
     pub fn wholesale_price(&self) -> Option<(u32, u32)> {
         match self {
-            ItemType::Coffee => Some((1, 10)),   // 1g per 10 coffee
-            ItemType::Muffin => Some((1, 5)),    // 1g per 5 muffins
-            ItemType::Rations => Some((1, 10)),  // 1g per 10 rations
-            ItemType::Sandwich => Some((1, 5)),  // 1g per 5 sandwiches
-            ItemType::Soup => Some((1, 8)),      // 1g per 8 soup
+            ItemType::CoffeeBeans => Some((1, 20)), // 1g per 20 beans
+            ItemType::Flour => Some((1, 15)),       // 1g per 15 flour
+            ItemType::RawMeat => Some((1, 10)),     // 1g per 10 raw meat
+            _ => None,
+        }
+    }
+
+    /// If this is a raw material, returns (output ItemType, ticks to process one unit).
+    pub fn processing_recipe(&self) -> Option<(ItemType, u32)> {
+        match self {
+            ItemType::CoffeeBeans => Some((ItemType::Coffee, 10)),
+            ItemType::Flour => Some((ItemType::Muffin, 15)),
+            ItemType::RawMeat => Some((ItemType::Sandwich, 12)),
+            _ => None,
+        }
+    }
+
+    pub fn is_raw_material(&self) -> bool {
+        self.processing_recipe().is_some()
+    }
+
+    /// If this is a finished good that can be produced from a raw material,
+    /// returns the raw material needed.
+    pub fn raw_ingredient(&self) -> Option<ItemType> {
+        match self {
+            ItemType::Coffee => Some(ItemType::CoffeeBeans),
+            ItemType::Muffin => Some(ItemType::Flour),
+            ItemType::Sandwich => Some(ItemType::RawMeat),
             _ => None,
         }
     }
@@ -53,6 +81,10 @@ impl fmt::Display for ItemType {
             ItemType::Rations => write!(f, "rations"),
             ItemType::Sandwich => write!(f, "sandwich"),
             ItemType::Soup => write!(f, "soup"),
+            ItemType::Paycheck => write!(f, "paycheck"),
+            ItemType::CoffeeBeans => write!(f, "coffee_beans"),
+            ItemType::Flour => write!(f, "flour"),
+            ItemType::RawMeat => write!(f, "raw_meat"),
         }
     }
 }

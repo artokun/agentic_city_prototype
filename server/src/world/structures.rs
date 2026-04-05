@@ -92,11 +92,9 @@ fn spawn_structures(mut commands: Commands) {
             }
             "warehouse" => {
                 let mut inv = Inventory::default();
-                inv.add(ItemType::Coffee, 999);
-                inv.add(ItemType::Muffin, 999);
-                inv.add(ItemType::Rations, 999);
-                inv.add(ItemType::Sandwich, 999);
-                inv.add(ItemType::Soup, 999);
+                inv.add(ItemType::CoffeeBeans, 999);
+                inv.add(ItemType::Flour, 999);
+                inv.add(ItemType::RawMeat, 999);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
                     ticks_per_gold: 30,
@@ -147,24 +145,20 @@ fn spawn_structures(mut commands: Commands) {
     // Seed bounties.
     commands.insert_resource(BountyRegistry {
         bounties: vec![
-            Bounty {
-                id: Uuid::new_v4(),
-                description: "Hide a gold egg inside a structure".into(),
-                objective: BountyObjective::HideItem(ItemType::GoldEgg),
-                reward_gold: 10,
-                state: BountyState::Available,
-                claimed_by: None,
-                claim_items: vec![(ItemType::GoldEgg, 1)],
-            },
-            Bounty {
-                id: Uuid::new_v4(),
-                description: "Find the hidden gold egg".into(),
-                objective: BountyObjective::FindItem(ItemType::GoldEgg),
-                reward_gold: 10,
-                state: BountyState::Available,
-                claimed_by: None,
-                claim_items: vec![],
-            },
+            Bounty::simple(
+                Uuid::new_v4(),
+                "Hide a gold egg inside a structure".into(),
+                BountyObjective::HideItem(ItemType::GoldEgg),
+                10,
+                vec![(ItemType::GoldEgg, 1)],
+            ),
+            Bounty::simple(
+                Uuid::new_v4(),
+                "Find the hidden gold egg".into(),
+                BountyObjective::FindItem(ItemType::GoldEgg),
+                10,
+                vec![],
+            ),
         ],
     });
 }

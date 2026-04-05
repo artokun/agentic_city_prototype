@@ -60,8 +60,11 @@ pub fn auto_restock_system(
                 continue;
             }
 
+            // Order the raw ingredient if one exists, otherwise order the item directly.
+            let order_item = stock.item.raw_ingredient().unwrap_or(stock.item);
+
             // Calculate cost: wholesale price for the reorder quantity.
-            let wholesale_cost = stock.item.wholesale_price().map(|(gold, units)| {
+            let wholesale_cost = order_item.wholesale_price().map(|(gold, units)| {
                 let batches = (stock.reorder_qty + units - 1) / units; // ceil division
                 batches * gold
             }).unwrap_or(1);
@@ -74,22 +77,23 @@ pub fn auto_restock_system(
                 continue;
             }
 
-            let bounty = Bounty {
-                id: Uuid::new_v4(),
-                description: format!(
+            let bounty = Bounty::simple(
+                Uuid::new_v4(),
+                format!(
                     "Restock {} {} at {} (buy from warehouse, deliver here)",
-                    stock.reorder_qty, stock.item, sprite.0,
+                    stock.reorder_qty, order_item, sprite.0,
                 ),
-                objective: BountyObjective::RestockDelivery {
-                    item: stock.item,
+                BountyObjective::RestockDelivery {
+                    item: order_item,
                     quantity: stock.reorder_qty,
                     destination: sprite.0.clone(),
                 },
-                reward_gold: reward,
-                state: BountyState::Available,
-                claimed_by: None,
-                claim_items: vec![],
-            };
+                reward,
+                vec![],
+            );
+
+            // Deduct reward from building's gold reserve.
+            gold_reserve.0 -= reward as i32;
 
             tracing::info!(
                 "Auto-restock: {} needs {} {} (reward: {}g, reserve: {}g)",

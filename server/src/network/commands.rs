@@ -3,8 +3,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::items::ItemType;
-use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
-use crate::world::bounty_contract::{BountyContract, BountyStep, ContractBoard, StepCondition};
+use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyStep, StepCondition};
 
 /// Commands sent from Axum REST handlers into Bevy.
 #[derive(Debug)]
@@ -48,7 +47,6 @@ pub struct CommandReceiver {
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
     mut bounty_registry: ResMut<BountyRegistry>,
-    mut contract_board: ResMut<ContractBoard>,
     tick: Res<crate::tick::TickCount>,
 ) {
     while let Ok(cmd) = receiver.rx.try_recv() {
@@ -75,21 +73,15 @@ pub fn process_commands_system(
                     _ => vec![],
                 };
 
-                bounty_registry.bounties.push(Bounty {
-                    id,
-                    description,
-                    objective: obj,
-                    reward_gold,
-                    state: BountyState::Available,
-                    claimed_by: None,
-                    claim_items,
-                });
+                let bounty = Bounty::simple(id, description, obj, reward_gold, claim_items);
 
                 tracing::info!(
                     "New bounty created via API: {} ({} gold)",
-                    bounty_registry.bounties.last().unwrap().description,
+                    bounty.description,
                     reward_gold,
                 );
+
+                bounty_registry.bounties.push(bounty);
             }
 
             GameCommand::CreateContract {
@@ -129,23 +121,22 @@ pub fn process_commands_system(
                     })
                     .collect();
 
-                contract_board.contracts.push(BountyContract {
+                let bounty = Bounty::contract(
                     id,
-                    title: title.clone(),
                     description,
+                    BountyObjective::WorkAtBuilding,
                     reward_gold,
-                    steps: bounty_steps,
-                    created_tick: tick.0,
-                    picked_up_tick: None,
+                    tick.0,
                     ttl_ticks,
-                    holder: None,
-                    expired: false,
-                });
+                    bounty_steps,
+                );
 
                 tracing::info!(
                     "Contract created: '{}' ({} gold, {} ticks TTL)",
                     title, reward_gold, ttl_ticks,
                 );
+
+                bounty_registry.bounties.push(bounty);
             }
         }
     }

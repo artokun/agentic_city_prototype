@@ -4,7 +4,6 @@ use uuid::Uuid;
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyObjective, BountyRegistry, BountyState};
 use crate::world::structures::{Entrance, SpriteType, StructureId};
-use crate::items::ItemType;
 
 /// A building that can offer jobs.
 #[derive(Component)]
@@ -46,16 +45,13 @@ pub fn job_posting_system(
 
         // Pick a random job template.
         if let Some(job) = employer.jobs.first() {
-            let bounty = Bounty {
-                id: Uuid::new_v4(),
-                description: format!("{} at {}", job.title, sprite.0),
-                // Jobs use a special objective — agent goes to the building and works.
-                objective: BountyObjective::WorkAtBuilding,
-                reward_gold: job.pay_gold,
-                state: BountyState::Available,
-                claimed_by: None,
-                claim_items: vec![],
-            };
+            let bounty = Bounty::simple(
+                Uuid::new_v4(),
+                format!("{} at {}", job.title, sprite.0),
+                BountyObjective::WorkAtBuilding,
+                job.pay_gold,
+                vec![],
+            );
 
             tracing::info!("Job posted: {} ({} gold)", bounty.description, bounty.reward_gold);
             bounty_registry.bounties.push(bounty);

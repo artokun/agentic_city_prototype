@@ -8,6 +8,7 @@ use crate::agents::perception::{InspectionLog, KnownLocations, Tracking, Vision}
 use crate::agents::social::Relationships;
 use crate::items::Inventory;
 use crate::world::map::GridPos;
+use crate::world::shifts::PaycheckWallet;
 
 #[derive(Component)]
 pub struct AgentId(pub Uuid);
@@ -97,6 +98,7 @@ pub struct AgentBundle {
     pub speed: Speed,
     pub move_timer: MoveTimer,
     pub goal: AgentGoal,
+    pub paycheck_wallet: PaycheckWallet,
 }
 
 impl AgentBundle {
@@ -123,6 +125,7 @@ impl AgentBundle {
             speed: Speed(speed),
             move_timer: MoveTimer::from_speed(speed),
             goal: AgentGoal::default(),
+            paycheck_wallet: PaycheckWallet::default(),
         }
     }
 }

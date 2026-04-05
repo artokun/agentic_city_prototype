@@ -230,7 +230,7 @@ pub fn execution_system(
 
                 if let Some((bounty_id, desc)) = available.first() {
                     let bounty_id = *bounty_id;
-                    if let Some(bounty) = bounty_registry.claim(bounty_id, agent_entity) {
+                    if let Some(bounty) = bounty_registry.claim(bounty_id, agent_entity, tick.0) {
                         let claim_items = bounty.claim_items.clone();
                         thought.0 = format!("Claimed: {desc}");
                         tracing::info!("{} claimed: {desc}", name.0);

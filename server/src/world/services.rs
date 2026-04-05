@@ -126,6 +126,14 @@ pub fn all_services() -> Vec<BuildingService> {
             effects: ServiceEffects::default(),
             consumes_item: None,
         },
+        BuildingService {
+            building_name: "bounty_board",
+            action_name: "redeem_paycheck",
+            gold_cost: 0,
+            duration_ticks: 5,
+            effects: ServiceEffects::default(),
+            consumes_item: None,
+        },
     ]
 }
 

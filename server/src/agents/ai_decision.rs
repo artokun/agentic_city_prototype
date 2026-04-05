@@ -112,10 +112,12 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 {"action": "send_message", "recipient": "AgentName", "text": "short message", "thought": "why"}
 {"action": "work_shift", "building": "cafe", "thought": "why"}
 {"action": "leave_shift", "thought": "why"}
+{"action": "go_to_service", "building": "bounty_board", "service": "redeem_paycheck", "thought": "why"}
 ```
 You can work shifts at: cafe (1g/100t, food perk), market (1g/100t, food perk), warehouse (1g/150t), hotel (1g/120t).
 Shifts are open-ended — you work until you leave or get ejected (low energy/hunger).
-Prioritize: critical needs first, then earning gold, then socializing. Be strategic about time/money tradeoffs.
+Shifts pay in paychecks (not direct gold). You must go to the bounty board and use redeem_paycheck to convert paychecks into gold.
+Prioritize: critical needs first, then earning gold (redeem paychecks!), then socializing. Be strategic about time/money tradeoffs.
 "#;
 
     ctx
