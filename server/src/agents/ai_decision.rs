@@ -140,11 +140,22 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 | Service | Building | Cost | Duration | Effect |
 |---------|----------|------|----------|--------|
 | eat_cafe | cafe | 1g | 10 ticks | +40 hunger |
-| buy_coffee | cafe | 1g | 5 ticks | +20 energy (instant boost!) |
+| eat_restaurant | restaurant | 2g | 15 ticks | +60 hunger, +10 boredom |
+| eat_diner | diner | 1g | 12 ticks | +45 hunger |
 | cook_at_home | apartments | FREE | 30 ticks | +60 hunger |
+| buy_coffee | cafe | 1g | 5 ticks | +20 energy (instant boost!) |
 | sleep_hotel | hotel | 1g | 30 ticks | +50 energy |
 | sleep_at_home | apartments | FREE | 50 ticks | +80 energy |
+| read_library | library | FREE | 20 ticks | +30 boredom |
+| watch_show | theater | 2g | 25 ticks | +50 boredom |
+| work_out | gym | FREE | 20 ticks | +25 boredom, -10 energy, -10 hunger |
+| hang_out | cafe | FREE | 15 ticks | +25 boredom |
+| browse_for_fun | google | FREE | 10 ticks | +20 boredom |
+| relax_in_lobby | hotel | FREE | 10 ticks | +15 boredom, +5 energy |
+| window_shop | market | FREE | 10 ticks | +15 boredom |
 | redeem_paycheck | bounty_board | FREE | 5 ticks | converts paychecks to gold |
+
+Chatting with other agents also boosts boredom (+5 per message for both parties).
 
 ## Shift Pay Rates
 | Building | Pay Rate | Food Perk |
@@ -166,6 +177,9 @@ The apartments are FREE for sleep and food but far away — hotel costs 1g but i
 {"action": "go_to_service", "building": "hotel", "service": "sleep_hotel", "thought": "why"}
 {"action": "go_to_service", "building": "apartments", "service": "sleep_at_home", "thought": "why"}
 {"action": "go_to_service", "building": "apartments", "service": "cook_at_home", "thought": "why"}
+{"action": "go_to_service", "building": "library", "service": "read_library", "thought": "why"}
+{"action": "go_to_service", "building": "cafe", "service": "hang_out", "thought": "why"}
+{"action": "go_to_service", "building": "google", "service": "browse_for_fun", "thought": "why"}
 {"action": "go_to_service", "building": "bounty_board", "service": "redeem_paycheck", "thought": "why"}
 {"action": "look_around", "thought": "why"}
 {"action": "wander", "thought": "why"}

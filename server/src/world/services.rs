@@ -108,6 +108,39 @@ pub fn all_services() -> Vec<BuildingService> {
             effects: ServiceEffects { boredom: 25.0, energy: -10.0, hunger: -10.0, ..Default::default() },
             consumes_item: None,
         },
+        // --- Boredom recovery ---
+        BuildingService {
+            building_name: "cafe",
+            action_name: "hang_out",
+            gold_cost: 0,
+            duration_ticks: 15,
+            effects: ServiceEffects { boredom: 25.0, ..Default::default() },
+            consumes_item: None,
+        },
+        BuildingService {
+            building_name: "google",
+            action_name: "browse_for_fun",
+            gold_cost: 0,
+            duration_ticks: 10,
+            effects: ServiceEffects { boredom: 20.0, ..Default::default() },
+            consumes_item: None,
+        },
+        BuildingService {
+            building_name: "hotel",
+            action_name: "relax_in_lobby",
+            gold_cost: 0,
+            duration_ticks: 10,
+            effects: ServiceEffects { boredom: 15.0, energy: 5.0, ..Default::default() },
+            consumes_item: None,
+        },
+        BuildingService {
+            building_name: "market",
+            action_name: "window_shop",
+            gold_cost: 0,
+            duration_ticks: 10,
+            effects: ServiceEffects { boredom: 15.0, ..Default::default() },
+            consumes_item: None,
+        },
         // --- Information ---
         BuildingService {
             building_name: "google",

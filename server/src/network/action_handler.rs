@@ -77,7 +77,7 @@ pub fn apply_conversation_messages_system(
             log.messages.push(pending_msg.message.clone());
         }
         if let Ok(mut partner_needs) = needs.get_mut(pending_msg.partner) {
-            partner_needs.boredom = (partner_needs.boredom + 1.0).min(100.0);
+            partner_needs.boredom = (partner_needs.boredom + 5.0).min(100.0);
         }
         // Remove the marker.
         commands.entity(entity).remove::<PendingConversationMessage>();
@@ -450,7 +450,7 @@ pub fn apply_mcp_actions_system(
                     thought.0 = format!("Said: \"{}\"", message_text);
 
                     // Boost boredom for the speaker.
-                    needs.boredom = (needs.boredom + 1.0).min(100.0);
+                    needs.boredom = (needs.boredom + 5.0).min(100.0);
 
                     event_log.push(LogEvent {
                         tick: tick.0,

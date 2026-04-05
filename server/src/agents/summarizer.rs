@@ -26,18 +26,20 @@ pub fn summarize_thoughts_system(
 
         // Only update if the thought text differs from current bubble content
         // (avoid overwriting action-set bubbles with stale thoughts).
-        if thought.0 == entry.text || thought.0.starts_with(&entry.text[..entry.text.len().min(10)]) {
+        let prefix: String = entry.text.chars().take(10).collect();
+        if thought.0 == entry.text || thought.0.starts_with(&prefix) {
             continue;
         }
 
-        // Truncate to 60 chars with ellipsis.
-        if entry.text.len() <= 60 {
+        // Truncate to 60 chars with ellipsis (char-safe for multi-byte UTF-8).
+        let char_count = entry.text.chars().count();
+        if char_count <= 60 {
             thought.0 = entry.text.clone();
         } else {
-            let truncated = &entry.text[..57];
+            let truncated: String = entry.text.chars().take(57).collect();
             // Avoid splitting mid-word: find last space.
-            let end = truncated.rfind(' ').unwrap_or(57);
-            thought.0 = format!("{}...", &entry.text[..end]);
+            let end = truncated.rfind(' ').unwrap_or(truncated.len());
+            thought.0 = format!("{}...", &truncated[..end]);
         }
     }
 }
