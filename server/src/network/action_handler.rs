@@ -153,7 +153,11 @@ pub fn process_gm_verdicts_system(
     mut library: ResMut<Library>,
 ) {
     let Some((mut bounty_registry, mut dropbox)) = boards_verdict.iter_mut().next() else { return; };
+    if !verdicts.verdicts.is_empty() {
+        tracing::info!("[GM VERDICT PROCESSING] {} verdicts pending", verdicts.verdicts.len());
+    }
     for (bounty_id, approved, reason) in verdicts.verdicts.drain(..) {
+        tracing::info!("[GM VERDICT PROCESSING] bounty={} approved={}", bounty_id, approved);
         let bounty = bounty_registry.tokens.get(&bounty_id).cloned();
         let Some(bounty) = bounty else {
             tracing::warn!("[GM] Bounty {} not found", bounty_id);
