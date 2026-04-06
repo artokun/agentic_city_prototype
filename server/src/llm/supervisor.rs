@@ -1,7 +1,10 @@
 //! Session lifecycle supervisor — start, monitor, restart sessions.
-//! Stub for Gate 0; will be filled in during later gates.
+//! Manages adapter lifecycle and integrates with durable persistence.
+
+use std::collections::HashMap;
 
 use super::config::SessionProfile;
+use super::persistence::CheckpointStore;
 use super::session_registry::SessionHandle;
 use super::types::{AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, SessionOwner};
 use tokio::sync::mpsc;
@@ -47,11 +50,118 @@ pub fn create_handle_channels(
     (handle, command_rx, event_tx)
 }
 
-/// Placeholder: will manage adapter lifecycle in later gates.
-pub struct SessionSupervisor;
+/// Manages adapter lifecycle, persistence, and recovery.
+pub struct SessionSupervisor {
+    store: CheckpointStore,
+    /// Cached checkpoints loaded at startup.
+    checkpoints: HashMap<SessionOwner, SessionCheckpoint>,
+}
 
 impl SessionSupervisor {
+    /// Create a supervisor with config-driven persistence directory.
     pub fn new() -> Self {
-        Self
+        let store = CheckpointStore::from_env();
+        let checkpoints = store.load_all();
+        if !checkpoints.is_empty() {
+            tracing::info!(
+                "[supervisor] loaded {} checkpoint(s) from disk",
+                checkpoints.len()
+            );
+        }
+        Self { store, checkpoints }
+    }
+
+    /// Create a supervisor with a custom store (for testing).
+    pub fn with_store(store: CheckpointStore) -> Self {
+        let checkpoints = store.load_all();
+        Self { store, checkpoints }
+    }
+
+    /// Get a cached checkpoint for a session owner, if one exists.
+    pub fn get_checkpoint(&self, owner: &SessionOwner) -> Option<&SessionCheckpoint> {
+        self.checkpoints.get(owner)
+    }
+
+    /// Save a checkpoint to disk and update the cache.
+    pub fn save_checkpoint(&mut self, checkpoint: SessionCheckpoint) {
+        if let Err(e) = self.store.save(&checkpoint) {
+            tracing::error!(
+                "[supervisor] failed to save checkpoint for {}: {e}",
+                checkpoint.owner
+            );
+            return;
+        }
+        self.checkpoints.insert(checkpoint.owner.clone(), checkpoint);
+    }
+
+    /// Save a checkpoint after compaction: updates token counters and clears the event log.
+    pub fn save_after_compaction(
+        &mut self,
+        owner: &SessionOwner,
+        compacted_context: Option<String>,
+        total_input_tokens: u32,
+        total_output_tokens: u32,
+        total_cost_usd: f64,
+    ) {
+        if let Some(cp) = self.checkpoints.get_mut(owner) {
+            cp.total_input_tokens = total_input_tokens;
+            cp.total_output_tokens = total_output_tokens;
+            cp.total_cost_usd = total_cost_usd;
+            cp.compacted_context = compacted_context;
+
+            if let Err(e) = self.store.save(cp) {
+                tracing::error!(
+                    "[supervisor] failed to save post-compaction checkpoint for {}: {e}",
+                    owner
+                );
+                return;
+            }
+
+            // Truncate the event log since we've compacted.
+            if let Err(e) = self.store.truncate_events(owner) {
+                tracing::warn!(
+                    "[supervisor] failed to truncate event log for {}: {e}",
+                    owner
+                );
+            }
+
+            tracing::info!("[supervisor] saved post-compaction checkpoint for {}", owner);
+        } else {
+            tracing::warn!(
+                "[supervisor] no cached checkpoint for {} — cannot save after compaction",
+                owner
+            );
+        }
+    }
+
+    /// Remove a checkpoint (e.g. when a session is permanently ended).
+    pub fn remove_checkpoint(&mut self, owner: &SessionOwner) {
+        self.checkpoints.remove(owner);
+        if let Err(e) = self.store.remove(owner) {
+            tracing::warn!(
+                "[supervisor] failed to remove checkpoint for {}: {e}",
+                owner
+            );
+        }
+    }
+
+    /// Append an event to the persistent event log for a session.
+    pub fn log_event(
+        &self,
+        owner: &SessionOwner,
+        event: &SessionEvent,
+    ) {
+        let persisted = super::persistence::session_event_to_persisted(event);
+        if let Err(e) = self.store.append_event(owner, &persisted) {
+            tracing::warn!(
+                "[supervisor] failed to log event for {}: {e}",
+                owner
+            );
+        }
+    }
+
+    /// Get a reference to the underlying checkpoint store.
+    pub fn store(&self) -> &CheckpointStore {
+        &self.store
     }
 }

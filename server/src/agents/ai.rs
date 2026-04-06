@@ -12,6 +12,7 @@ use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
 use crate::llm::providers::claude::{self, AgentIdentity};
+use crate::llm::types::COMPACT_COMMAND;
 use crate::network::agent_relay::AgentRelays;
 use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -33,8 +34,7 @@ impl AgentSessions {
     /// Translates SessionCommand::Compact to the underlying transport.
     pub fn send_compact(&self, entity: &Entity) -> bool {
         if let Some(session) = self.sessions.get(entity) {
-            // The relay translates "/compact" to the actual compaction command.
-            session.prompt_tx.try_send("/compact".to_string()).is_ok()
+            session.prompt_tx.try_send(COMPACT_COMMAND.to_string()).is_ok()
         } else {
             false
         }

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::config;
 use crate::llm::providers::claude;
+use crate::llm::types::COMPACT_COMMAND;
 use crate::network::agent_relay::TokenUsageEvent;
 use crate::network::system_relay::SystemRelayResource;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -101,7 +102,7 @@ impl SystemAiState {
     /// Send a compaction command to the System AI session.
     pub fn send_compact(&self) -> bool {
         if let Some(ref prompt_tx) = self.prompt_tx {
-            prompt_tx.try_send("/compact".to_string()).is_ok()
+            prompt_tx.try_send(COMPACT_COMMAND.to_string()).is_ok()
         } else {
             false
         }

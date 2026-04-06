@@ -6,7 +6,7 @@
 //!   agent_alice/
 //!     state.json      — SessionCheckpoint (latest snapshot)
 //!     events.jsonl    — append-only event log
-//!   system-ai/
+//!   system_ai/
 //!     state.json
 //!     events.jsonl
 //! ```
@@ -49,11 +49,9 @@ impl CheckpointStore {
         }
     }
 
-    /// Create a store using the default or env-configured directory.
+    /// Create a store using the config-driven directory.
     pub fn from_env() -> Self {
-        let dir = std::env::var("LLM_SESSIONS_DIR")
-            .unwrap_or_else(|_| DEFAULT_SESSIONS_DIR.to_string());
-        Self::new(dir)
+        Self::new(crate::config::runtime_dir())
     }
 
     /// Get the directory path for a session owner.
@@ -272,14 +270,14 @@ impl CheckpointStore {
 
 /// Convert a SessionOwner to a filesystem-safe directory name.
 /// `Agent("Alice Haiku")` → `agent_alice_haiku`
-/// `SystemAi` → `system-ai`
+/// `SystemAi` → `system_ai`
 /// `Research("web search")` → `research_web_search`
 fn owner_to_dirname(owner: &SessionOwner) -> String {
     match owner {
         SessionOwner::Agent(name) => {
             format!("agent_{}", sanitize_name(name))
         }
-        SessionOwner::SystemAi => "system-ai".to_string(),
+        SessionOwner::SystemAi => "system_ai".to_string(),
         SessionOwner::Research(topic) => {
             format!("research_{}", sanitize_name(topic))
         }
@@ -535,7 +533,7 @@ mod tests {
         );
         assert_eq!(
             owner_to_dirname(&SessionOwner::SystemAi),
-            "system-ai"
+            "system_ai"
         );
         assert_eq!(
             owner_to_dirname(&SessionOwner::Research("web search!!".to_string())),

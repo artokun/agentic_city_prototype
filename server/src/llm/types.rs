@@ -3,6 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Sentinel string sent through legacy prompt_tx channels to trigger compaction.
+/// The relay loop detects this value and issues `/compact` to the Claude CLI.
+pub const COMPACT_COMMAND: &str = "/compact";
+
 /// Identifies who owns a session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SessionOwner {

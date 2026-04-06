@@ -87,3 +87,9 @@ pub fn recycle_cost() -> u32 {
 pub fn chat_boredom_boost() -> f32 {
     env_or("CHAT_BOREDOM_BOOST", 5.0)
 }
+
+// --- LLM sessions ---
+/// Base directory for durable session state (checkpoints and event logs).
+pub fn runtime_dir() -> String {
+    env_or("RUNTIME_DIR", "runtime/llm-sessions".to_string())
+}
