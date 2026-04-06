@@ -14,6 +14,9 @@ documents/
 # Run logs
 logs/
 
+# Runtime session state (checkpoints, event logs)
+runtime/
+
 # Claude Code tooling
 .claude/worktrees/
 .playwright-mcp/
