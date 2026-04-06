@@ -29,16 +29,19 @@ pub fn transaction_system(
     mut event_log: ResMut<AgentEventLog>,
     // Customers wanting to buy something (must also be InsideBuilding).
     mut customers: Query<
-        (Entity, &AgentName, &WantsToBuy, &InsideBuilding, &mut Inventory),
+        (
+            Entity,
+            &AgentName,
+            &WantsToBuy,
+            &InsideBuilding,
+            &mut Inventory,
+        ),
         Without<ShiftWorker>,
     >,
     // Workers on shift (must also be InsideBuilding).
     workers: Query<(Entity, &AgentName, &ShiftWorker, &InsideBuilding)>,
     // Building inventories and names.
-    mut buildings: Query<
-        (&mut Inventory, &SpriteType),
-        (Without<AgentName>, Without<ShiftWorker>),
-    >,
+    mut buildings: Query<(&mut Inventory, &SpriteType), (Without<AgentName>, Without<ShiftWorker>)>,
 ) {
     for (cust_entity, cust_name, wants, cust_inside, mut cust_inv) in &mut customers {
         let target_building = wants.from_building;
@@ -66,10 +69,7 @@ pub fn transaction_system(
                 tick: tick.0,
                 agent: cust_name.0.clone(),
                 kind: LogKind::Action,
-                text: format!(
-                    "Can't afford {} (need {}g)",
-                    wants.item, price,
-                ),
+                text: format!("Can't afford {} (need {}g)", wants.item, price,),
             });
             commands.entity(cust_entity).remove::<WantsToBuy>();
             continue;
@@ -86,10 +86,7 @@ pub fn transaction_system(
                 tick: tick.0,
                 agent: cust_name.0.clone(),
                 kind: LogKind::Action,
-                text: format!(
-                    "{} is out of {}",
-                    bld_sprite.0, wants.item,
-                ),
+                text: format!("{} is out of {}", bld_sprite.0, wants.item,),
             });
             commands.entity(cust_entity).remove::<WantsToBuy>();
             continue;
@@ -122,15 +119,16 @@ pub fn transaction_system(
             tick: tick.0,
             agent: worker_name.0.clone(),
             kind: LogKind::Action,
-            text: format!(
-                "Sold {} to {} at {}",
-                item_name, cust_name.0, building_name,
-            ),
+            text: format!("Sold {} to {} at {}", item_name, cust_name.0, building_name,),
         });
 
         tracing::info!(
             "Transaction: {} bought {} from {} at {} for {}g",
-            cust_name.0, item_name, worker_name.0, building_name, price,
+            cust_name.0,
+            item_name,
+            worker_name.0,
+            building_name,
+            price,
         );
 
         // Transaction complete -- remove the WantsToBuy marker.

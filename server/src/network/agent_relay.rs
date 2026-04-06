@@ -2,7 +2,10 @@
 //! Handles the full NDJSON protocol: user messages, control requests, responses.
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, State,
+    },
     response::IntoResponse,
 };
 use std::collections::HashMap;
@@ -51,14 +54,22 @@ impl AgentRelays {
         let (token_tx, token_rx) = mpsc::channel::<TokenUsageEvent>(64);
         let connected = Arc::new(Notify::new());
 
-        self.inner.lock().await.insert(agent_id.to_string(), RelayState {
-            prompt_rx: Some(prompt_rx),
-            response_tx,
-            token_tx,
-            connected: connected.clone(),
-        });
+        self.inner.lock().await.insert(
+            agent_id.to_string(),
+            RelayState {
+                prompt_rx: Some(prompt_rx),
+                response_tx,
+                token_tx,
+                connected: connected.clone(),
+            },
+        );
 
-        RelayHandle { prompt_tx, response_rx, token_rx, connected }
+        RelayHandle {
+            prompt_tx,
+            response_rx,
+            token_rx,
+            connected,
+        }
     }
 }
 
@@ -81,7 +92,12 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
             return;
         };
         let rx = state.prompt_rx.take();
-        (rx, state.response_tx.clone(), state.token_tx.clone(), state.connected.clone())
+        (
+            rx,
+            state.response_tx.clone(),
+            state.token_tx.clone(),
+            state.connected.clone(),
+        )
     };
 
     let Some(mut prompt_rx) = prompt_rx else {

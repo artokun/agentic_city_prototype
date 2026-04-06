@@ -14,6 +14,11 @@ fn main() {
     // Generate TypeScript types for client
     let _ = std::fs::create_dir_all("../client/src/generated");
     let _ = Command::new("flatc")
-        .args(["--ts", "-o", "../client/src/generated/", "schemas/world.fbs"])
+        .args([
+            "--ts",
+            "-o",
+            "../client/src/generated/",
+            "schemas/world.fbs",
+        ])
         .status();
 }

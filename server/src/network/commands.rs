@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::items::{DocumentInventory, Inventory, ItemType};
 use crate::network::action_handler::{MpcAction, PendingActions};
-use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyStep, BountyTokenStore, StepCondition};
+use crate::world::bounty::{
+    Bounty, BountyBoard, BountyObjective, BountyStep, BountyTokenStore, StepCondition,
+};
 
 /// Commands sent from Axum REST handlers into Bevy.
 #[derive(Debug)]
@@ -35,6 +37,12 @@ pub enum GameCommand {
         agent_name: String,
         title: String,
         content: String,
+    },
+    GrantGold {
+        agent_name: String,
+        amount: u32,
+        reason: String,
+        message: Option<String>,
     },
 }
 
@@ -69,6 +77,12 @@ pub struct PendingDocuments {
     pub docs: Vec<(String, String, String)>, // (agent_name, title, content)
 }
 
+/// Resource: pending discretionary gold grants from the System AI.
+#[derive(Resource, Default)]
+pub struct PendingGoldGrants {
+    pub grants: Vec<(String, u32, String, Option<String>)>,
+}
+
 /// System: drain commands from the REST API and apply them to the world.
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
@@ -76,28 +90,56 @@ pub fn process_commands_system(
     mut pending_actions: ResMut<PendingActions>,
     mut pending_verdicts: ResMut<PendingVerdicts>,
     mut pending_docs: ResMut<PendingDocuments>,
+    mut pending_gold_grants: ResMut<PendingGoldGrants>,
     tick: Res<crate::tick::TickCount>,
 ) {
-    let Some(mut bounty_registry) = boards.iter_mut().next() else { return; };
+    let Some(mut bounty_registry) = boards.iter_mut().next() else {
+        return;
+    };
     while let Ok(cmd) = receiver.rx.try_recv() {
         match cmd {
             GameCommand::AgentAction { action_json } => {
                 // Parse and queue for the action handler system.
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&action_json) {
                     pending_actions.actions.push(MpcAction {
-                        agent_name: val.get("agent_name").and_then(|a| a.as_str()).unwrap_or("").into(),
-                        agent_id: val.get("agent_id").and_then(|a| a.as_str()).unwrap_or("").into(),
-                        action: val.get("action").and_then(|a| a.as_str()).unwrap_or("").into(),
-                        building: val.get("building").and_then(|b| b.as_str()).map(|s| s.into()),
-                        service: val.get("service").and_then(|s| s.as_str()).map(|s| s.into()),
+                        agent_name: val
+                            .get("agent_name")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("")
+                            .into(),
+                        agent_id: val
+                            .get("agent_id")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("")
+                            .into(),
+                        action: val
+                            .get("action")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("")
+                            .into(),
+                        building: val
+                            .get("building")
+                            .and_then(|b| b.as_str())
+                            .map(|s| s.into()),
+                        service: val
+                            .get("service")
+                            .and_then(|s| s.as_str())
+                            .map(|s| s.into()),
                         agent_target: val.get("agent").and_then(|a| a.as_str()).map(|s| s.into()),
                         text: val.get("text").and_then(|t| t.as_str()).map(|s| s.into()),
-                        feedback: val.get("feedback").and_then(|f| f.as_str()).map(|s| s.into()),
+                        feedback: val
+                            .get("feedback")
+                            .and_then(|f| f.as_str())
+                            .map(|s| s.into()),
                         x: val.get("x").and_then(|v| v.as_i64()).map(|v| v as i32),
                         y: val.get("y").and_then(|v| v.as_i64()).map(|v| v as i32),
                     });
-                    tracing::info!("[MCP] Queued action from {}",
-                        val.get("agent_name").and_then(|a| a.as_str()).unwrap_or("?"));
+                    tracing::info!(
+                        "[MCP] Queued action from {}",
+                        val.get("agent_name")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("?")
+                    );
                 }
             }
 
@@ -183,24 +225,61 @@ pub fn process_commands_system(
 
                 tracing::info!(
                     "Contract created: '{}' ({} gold, {} ticks TTL)",
-                    title, reward_gold, ttl_ticks,
+                    title,
+                    reward_gold,
+                    ttl_ticks,
                 );
 
                 bounty_registry.tokens.insert(bounty.id, bounty);
             }
 
-            GameCommand::DeliverDocument { agent_name, title, content } => {
-                tracing::info!("[DOC] Delivering '{}' to {} ({} chars)", title, agent_name, content.len());
+            GameCommand::DeliverDocument {
+                agent_name,
+                title,
+                content,
+            } => {
+                tracing::info!(
+                    "[DOC] Delivering '{}' to {} ({} chars)",
+                    title,
+                    agent_name,
+                    content.len()
+                );
                 pending_docs.docs.push((agent_name, title, content));
             }
 
-            GameCommand::GmVerdict { bounty_id, approved, reason } => {
+            GameCommand::GmVerdict {
+                bounty_id,
+                approved,
+                reason,
+            } => {
                 if let Ok(uuid) = Uuid::parse_str(&bounty_id) {
-                    tracing::info!("[GM] Verdict for {}: approved={} reason={}", bounty_id, approved, reason);
+                    tracing::info!(
+                        "[GM] Verdict for {}: approved={} reason={}",
+                        bounty_id,
+                        approved,
+                        reason
+                    );
                     pending_verdicts.verdicts.push((uuid, approved, reason));
                 } else {
                     tracing::warn!("[GM] Invalid bounty ID: {}", bounty_id);
                 }
+            }
+
+            GameCommand::GrantGold {
+                agent_name,
+                amount,
+                reason,
+                message,
+            } => {
+                tracing::info!(
+                    "[GM] Queued discretionary grant: {}g to {} ({})",
+                    amount,
+                    agent_name,
+                    reason
+                );
+                pending_gold_grants
+                    .grants
+                    .push((agent_name, amount, reason, message));
             }
         }
     }

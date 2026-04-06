@@ -2,15 +2,15 @@
 //! Used by integration tests to spawn isolated game instances with custom agents, bounties,
 //! and deterministic shutdown.
 
-use bevy::prelude::*;
 use bevy::ecs::message::MessageWriter;
+use bevy::prelude::*;
 use std::sync::{Arc, Mutex};
 
+use crate::agents::components::*;
+use crate::agents::needs::Needs;
 use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyTokenStore};
-use crate::agents::components::*;
-use crate::agents::needs::Needs;
 use crate::world::map::GridPos;
 
 // ---------------------------------------------------------------------------
@@ -146,9 +146,9 @@ pub fn snapshot_system(
 
     if let Some(store) = boards.iter().next() {
         for bounty in store.tokens.values() {
-            let claimed_by_name = bounty.claimed_by.and_then(|e| {
-                agent_names.get(e).ok().map(|n| n.0.clone())
-            });
+            let claimed_by_name = bounty
+                .claimed_by
+                .and_then(|e| agent_names.get(e).ok().map(|n| n.0.clone()));
 
             snap.bounties.push(BountySnapshot {
                 description: bounty.description.clone(),
@@ -171,16 +171,16 @@ pub fn shutdown_system(
     mut exit: MessageWriter<AppExit>,
 ) {
     if tick.0 >= max_ticks.0 {
-        tracing::info!("[SCENARIO] Reached max ticks ({}), shutting down", max_ticks.0);
+        tracing::info!(
+            "[SCENARIO] Reached max ticks ({}), shutting down",
+            max_ticks.0
+        );
         exit.write(AppExit::Success);
     }
 }
 
 /// System: exit when the shutdown flag is set by the test harness.
-pub fn shutdown_flag_system(
-    flag: Res<ShutdownFlag>,
-    mut exit: MessageWriter<AppExit>,
-) {
+pub fn shutdown_flag_system(flag: Res<ShutdownFlag>, mut exit: MessageWriter<AppExit>) {
     if let Ok(guard) = flag.0.lock() {
         if *guard {
             tracing::info!("[SCENARIO] Shutdown flag set, exiting");
@@ -206,7 +206,9 @@ pub fn seed_scenario_bounties_system(
     // Mark the normal injector as already seeded so it doesn't run.
     injector.seeded = true;
 
-    let Some(mut store) = boards.iter_mut().next() else { return; };
+    let Some(mut store) = boards.iter_mut().next() else {
+        return;
+    };
 
     for sb in &config.bounties {
         let mut bounty = Bounty::simple(

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,6 +18,68 @@ pub enum ItemType {
     CoffeeBeans,
     Flour,
     RawMeat,
+}
+
+/// ECS component: the semantic kind of an item entity.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ItemKind(pub ItemType);
+
+/// ECS component: display name for an item entity.
+#[derive(Component, Debug, Clone)]
+pub struct ItemName(pub String);
+
+/// ECS component: human-readable description for an item entity.
+#[derive(Component, Debug, Clone)]
+pub struct ItemDescription(pub String);
+
+/// ECS component: arbitrary textual contents for an item entity.
+#[derive(Component, Debug, Clone)]
+pub struct ItemContents(pub String);
+
+/// ECS component: optional image URL for an item entity.
+#[derive(Component, Debug, Clone)]
+pub struct ItemImageUrl(pub String);
+
+/// ECS component: attaches item entities to a container entity such as an agent or structure.
+#[derive(Component, Default, Debug, Clone)]
+pub struct ContainedItems {
+    pub items: Vec<Entity>,
+}
+
+impl ContainedItems {
+    pub fn insert(&mut self, item: Entity) {
+        if !self.items.contains(&item) {
+            self.items.push(item);
+        }
+    }
+
+    pub fn remove(&mut self, item: Entity) -> bool {
+        let len_before = self.items.len();
+        self.items.retain(|candidate| *candidate != item);
+        self.items.len() != len_before
+    }
+}
+
+/// ECS component: identifies which container currently owns this item.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ItemContainer(pub Entity);
+
+/// ECS component: restrict which item kinds a container accepts.
+#[derive(Component, Default, Debug, Clone)]
+pub struct RestrictedItems {
+    pub allowed: HashSet<ItemType>,
+}
+
+impl RestrictedItems {
+    pub fn only(allowed: impl IntoIterator<Item = ItemType>) -> Self {
+        Self {
+            allowed: allowed.into_iter().collect(),
+        }
+    }
+
+    pub fn allows(&self, item_type: ItemType) -> bool {
+        self.allowed.is_empty() || self.allowed.contains(&item_type)
+    }
 }
 
 impl ItemType {
@@ -69,13 +131,23 @@ impl ItemType {
     }
 
     pub fn is_food(&self) -> bool {
-        matches!(self, ItemType::Coffee | ItemType::Muffin | ItemType::Rations | ItemType::Sandwich | ItemType::Soup)
+        matches!(
+            self,
+            ItemType::Coffee
+                | ItemType::Muffin
+                | ItemType::Rations
+                | ItemType::Sandwich
+                | ItemType::Soup
+        )
     }
 }
 
 impl ItemType {
     pub fn is_carry_food(&self) -> bool {
-        matches!(self, ItemType::Muffin | ItemType::Sandwich | ItemType::Rations | ItemType::Soup)
+        matches!(
+            self,
+            ItemType::Muffin | ItemType::Sandwich | ItemType::Rations | ItemType::Soup
+        )
     }
 
     pub fn is_carry_drink(&self) -> bool {
@@ -496,7 +568,10 @@ mod tests {
 
     #[test]
     fn raw_ingredient_roundtrip() {
-        assert_eq!(ItemType::Coffee.raw_ingredient(), Some(ItemType::CoffeeBeans));
+        assert_eq!(
+            ItemType::Coffee.raw_ingredient(),
+            Some(ItemType::CoffeeBeans)
+        );
         assert_eq!(ItemType::Muffin.raw_ingredient(), Some(ItemType::Flour));
         assert_eq!(ItemType::Sandwich.raw_ingredient(), Some(ItemType::RawMeat));
         assert_eq!(ItemType::Soup.raw_ingredient(), None);

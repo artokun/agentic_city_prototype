@@ -81,13 +81,8 @@ pub fn shift_processing_system(
     mut commands: Commands,
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
-    workers_without_task: Query<
-        (Entity, &AgentName, &ShiftWorker),
-        Without<ProcessingTask>,
-    >,
-    mut workers_with_task: Query<
-        (Entity, &AgentName, &ShiftWorker, &mut ProcessingTask),
-    >,
+    workers_without_task: Query<(Entity, &AgentName, &ShiftWorker), Without<ProcessingTask>>,
+    mut workers_with_task: Query<(Entity, &AgentName, &ShiftWorker, &mut ProcessingTask)>,
     mut building_invs: Query<&mut Inventory, Without<AgentName>>,
 ) {
     // Advance existing processing tasks.
@@ -111,7 +106,10 @@ pub fn shift_processing_system(
 
             tracing::info!(
                 "{} processed {} → {} at {}",
-                name.0, task.input, task.output, shift.building_name,
+                name.0,
+                task.input,
+                task.output,
+                shift.building_name,
             );
 
             commands.entity(entity).remove::<ProcessingTask>();
@@ -124,15 +122,21 @@ pub fn shift_processing_system(
         if shift.building_name == "warehouse" || shift.building_name == "hotel" {
             continue; // Warehouse is wholesale only, hotel doesn't process food.
         }
-        let Ok(mut inv) = building_invs.get_mut(shift.building) else { continue };
+        let Ok(mut inv) = building_invs.get_mut(shift.building) else {
+            continue;
+        };
 
         // Find first raw material in the building's inventory.
-        let raw = inv.items.iter()
+        let raw = inv
+            .items
+            .iter()
             .find(|(item, count)| item.is_raw_material() && **count > 0)
             .map(|(item, _)| *item);
 
         let Some(raw_item) = raw else { continue };
-        let Some((output, ticks)) = raw_item.processing_recipe() else { continue };
+        let Some((output, ticks)) = raw_item.processing_recipe() else {
+            continue;
+        };
 
         // Consume one unit of raw material.
         inv.remove(raw_item, 1);
@@ -145,7 +149,11 @@ pub fn shift_processing_system(
 
         tracing::info!(
             "{} started processing {} → {} ({} ticks) at {}",
-            name.0, raw_item, output, ticks, shift.building_name,
+            name.0,
+            raw_item,
+            output,
+            ticks,
+            shift.building_name,
         );
     }
 }
@@ -154,12 +162,18 @@ pub fn shift_processing_system(
 pub fn shift_demand_system(
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
-    mut staffable: Query<(Entity, &crate::world::structures::SpriteType, &mut Staffable)>,
+    mut staffable: Query<(
+        Entity,
+        &crate::world::structures::SpriteType,
+        &mut Staffable,
+    )>,
     agents_at_entrance: Query<(&AgentName, &crate::world::map::GridPos, &AgentGoal)>,
     building_entrances: Query<&crate::world::structures::Entrance>,
 ) {
     // Only check every 10 ticks.
-    if tick.0 % 10 != 0 { return; }
+    if tick.0 % 10 != 0 {
+        return;
+    }
 
     for (building_entity, sprite, mut staffable) in &mut staffable {
         if staffable.worker.is_some() {
@@ -168,10 +182,13 @@ pub fn shift_demand_system(
         }
 
         // Check if any agent is trying to use this building's service.
-        let Ok(entrance) = building_entrances.get(building_entity) else { continue };
+        let Ok(entrance) = building_entrances.get(building_entity) else {
+            continue;
+        };
 
         let customer_waiting = agents_at_entrance.iter().any(|(_, pos, goal)| {
-            pos.x == entrance.0.x && pos.y == entrance.0.y
+            pos.x == entrance.0.x
+                && pos.y == entrance.0.y
                 && matches!(goal, AgentGoal::GoingToService { .. })
         });
 
@@ -205,7 +222,9 @@ pub fn shift_tracking_system(
     )>,
     mut staffable: Query<&mut Staffable>,
 ) {
-    for (entity, name, mut shift, mut needs, mut inv, mut goal, mut thought, mut wallet) in &mut workers {
+    for (entity, name, mut shift, mut needs, mut inv, mut goal, mut thought, mut wallet) in
+        &mut workers
+    {
         // Detect voluntary exit: AI set goal away from WorkingShift (e.g. LeaveShift).
         let voluntary_exit = !matches!(*goal, AgentGoal::WorkingShift { .. });
 
@@ -233,7 +252,11 @@ pub fn shift_tracking_system(
             };
             let gold_value = paycheck.gold_value();
 
-            let reason = if voluntary_exit { "Left" } else { "Ejected from" };
+            let reason = if voluntary_exit {
+                "Left"
+            } else {
+                "Ejected from"
+            };
 
             if gold_value > 0 {
                 wallet.paychecks.push(paycheck);
@@ -261,7 +284,11 @@ pub fn shift_tracking_system(
 
             tracing::info!(
                 "{} {} {} shift ({}t → paycheck {}g)",
-                name.0, reason.to_lowercase(), shift.building_name, shift.ticks_worked, gold_value,
+                name.0,
+                reason.to_lowercase(),
+                shift.building_name,
+                shift.ticks_worked,
+                gold_value,
             );
 
             // Clear the staffable slot.
@@ -277,9 +304,9 @@ pub fn shift_tracking_system(
     }
 }
 
-/// System: redeem paychecks when an agent finishes the `redeem_paycheck` action.
-/// Runs after action_timer_system — detects agents who just had their timer removed
-/// and whose goal just returned to Idle from a redeem_paycheck action.
+/// System: redeem paychecks when the `redeem_paycheck` action timer hits 0.
+/// Must run after `action_timer_system` (which decrements and schedules removal).
+/// The `ActionTimer` component is still visible this tick because removal is deferred.
 pub fn paycheck_redemption_system(
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
@@ -292,7 +319,7 @@ pub fn paycheck_redemption_system(
     )>,
 ) {
     for (name, mut inv, mut wallet, mut thought, timer) in &mut agents {
-        if timer.action_name != "redeem_paycheck" || timer.remaining_ticks != 1 {
+        if timer.action_name != "redeem_paycheck" || timer.remaining_ticks != 0 {
             continue;
         }
         if wallet.paychecks.is_empty() {

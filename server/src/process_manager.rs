@@ -27,7 +27,9 @@ impl ProcessRegistry {
 
     pub fn kill_all(&self) {
         let pids = self.pids.lock().unwrap().clone();
-        if pids.is_empty() { return; }
+        if pids.is_empty() {
+            return;
+        }
         tracing::info!("[ProcessManager] Killing {} child processes", pids.len());
         for pid in &pids {
             tracing::info!("[ProcessManager] Killing PID {}", pid);
@@ -53,5 +55,6 @@ pub fn install_signal_handler(registry: ProcessRegistry) {
         tracing::info!("[ProcessManager] Signal received — cleaning up child processes");
         reg.kill_all();
         std::process::exit(0);
-    }).expect("Failed to set signal handler");
+    })
+    .expect("Failed to set signal handler");
 }

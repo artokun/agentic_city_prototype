@@ -9,14 +9,14 @@ use uuid::Uuid;
 use crate::agents::ai::AgentSessions;
 use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
-use crate::agents::token_tracking::ContextWindow;
 use crate::agents::needs::Needs;
+use crate::agents::token_tracking::ContextWindow;
 use crate::config;
 use crate::items::{Inventory, ItemType};
-use crate::world::map::TileInventory;
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
 use crate::world::map::GridPos;
+use crate::world::map::TileInventory;
 
 // Hospital constants now in config.rs.
 
@@ -41,12 +41,22 @@ pub fn pass_out_system(
     mut event_log: ResMut<AgentEventLog>,
     mut boards_hospital: Query<&mut BountyTokenStore, With<BountyBoard>>,
     mut tile_inventory: ResMut<TileInventory>,
-    mut agents: Query<(
-        Entity, &AgentName, &GridPos, &mut Needs, &mut Inventory,
-        &mut AgentGoal, &mut ThoughtBubble,
-    ), Without<Incapacitated>>,
+    mut agents: Query<
+        (
+            Entity,
+            &AgentName,
+            &GridPos,
+            &mut Needs,
+            &mut Inventory,
+            &mut AgentGoal,
+            &mut ThoughtBubble,
+        ),
+        Without<Incapacitated>,
+    >,
 ) {
-    let Some(mut bounty_registry) = boards_hospital.iter_mut().next() else { return; };
+    let Some(mut bounty_registry) = boards_hospital.iter_mut().next() else {
+        return;
+    };
     for (entity, name, pos, mut needs, mut inv, mut goal, mut thought) in &mut agents {
         let passed_out = needs.energy <= 0.0 || needs.hunger <= 0.0;
         if !passed_out {
@@ -59,7 +69,13 @@ pub fn pass_out_system(
             "starvation"
         };
 
-        tracing::info!("{} PASSED OUT from {} at ({},{})", name.0, reason, pos.x, pos.y);
+        tracing::info!(
+            "{} PASSED OUT from {} at ({},{})",
+            name.0,
+            reason,
+            pos.x,
+            pos.y
+        );
 
         // Deduct hospital fee (can go into debt).
         inv.deduct_gold_with_debt(config::hospital_fee());
@@ -68,7 +84,10 @@ pub fn pass_out_system(
         let bounty_id = Uuid::new_v4();
         let bounty = Bounty::simple(
             bounty_id,
-            format!("RESCUE: Carry {} to the hospital (passed out at ({},{}))", name.0, pos.x, pos.y),
+            format!(
+                "RESCUE: Carry {} to the hospital (passed out at ({},{}))",
+                name.0, pos.x, pos.y
+            ),
             BountyObjective::WorkAtBuilding, // rescuer goes to hospital with the agent
             config::rescue_reward(),
             vec![],
@@ -85,7 +104,12 @@ pub fn pass_out_system(
 
         // Drop the agent as a tile item — can be picked up by rescuers.
         tile_inventory.drop_item(pos.x, pos.y, format!("body:{}", name.0));
-        tracing::info!("{} is now a tile item at ({},{}) — needs rescue!", name.0, pos.x, pos.y);
+        tracing::info!(
+            "{} is now a tile item at ({},{}) — needs rescue!",
+            name.0,
+            pos.x,
+            pos.y
+        );
 
         // Clamp needs to 0.
         needs.energy = 0.0;
@@ -99,7 +123,11 @@ pub fn pass_out_system(
             tick: tick.0,
             agent: name.0.clone(),
             kind: LogKind::System,
-            text: format!("PASSED OUT from {}! Hospital fee: {}g. Rescue bounty posted.", reason, config::hospital_fee()),
+            text: format!(
+                "PASSED OUT from {}! Hospital fee: {}g. Rescue bounty posted.",
+                reason,
+                config::hospital_fee()
+            ),
         });
     }
 }
@@ -111,7 +139,11 @@ pub fn hospital_recovery_system(
     mut event_log: ResMut<AgentEventLog>,
     sessions: Res<AgentSessions>,
     mut patients: Query<(
-        Entity, &AgentName, &mut Recovering, &mut Needs, &mut ThoughtBubble,
+        Entity,
+        &AgentName,
+        &mut Recovering,
+        &mut Needs,
+        &mut ThoughtBubble,
         &mut ContextWindow,
     )>,
 ) {
@@ -128,7 +160,10 @@ pub fn hospital_recovery_system(
                 let _ = session.prompt_tx.try_send("/compact".to_string());
             }
             ctx_window.tokens_used = 0;
-            tracing::info!("[HOSPITAL COMPACT] {} — /compact sent, tokens reset", name.0);
+            tracing::info!(
+                "[HOSPITAL COMPACT] {} — /compact sent, tokens reset",
+                name.0
+            );
 
             tracing::info!("{} has recovered in the hospital!", name.0);
             thought.0 = "Waking up in the hospital... feeling groggy but rested.".into();

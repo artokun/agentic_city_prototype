@@ -33,7 +33,13 @@ pub struct Warehouse;
 /// System: check retail buildings for low stock, auto-create restock bounties.
 pub fn auto_restock_system(
     tick: Res<TickCount>,
-    mut retailers: Query<(Entity, &SpriteType, &Inventory, &RetailConfig, &mut GoldReserve)>,
+    mut retailers: Query<(
+        Entity,
+        &SpriteType,
+        &Inventory,
+        &RetailConfig,
+        &mut GoldReserve,
+    )>,
     mut boards_restock: Query<&mut BountyTokenStore, With<BountyBoard>>,
 ) {
     // Only check every 50 ticks (5 seconds).
@@ -41,7 +47,9 @@ pub fn auto_restock_system(
         return;
     }
 
-    let Some(mut bounty_registry) = boards_restock.iter_mut().next() else { return; };
+    let Some(mut bounty_registry) = boards_restock.iter_mut().next() else {
+        return;
+    };
 
     for (_entity, sprite, inv, config, mut gold_reserve) in &mut retailers {
         for stock in &config.stock {
@@ -66,10 +74,13 @@ pub fn auto_restock_system(
             let order_item = stock.item.raw_ingredient().unwrap_or(stock.item);
 
             // Calculate cost: wholesale price for the reorder quantity.
-            let wholesale_cost = order_item.wholesale_price().map(|(gold, units)| {
-                let batches = (stock.reorder_qty + units - 1) / units; // ceil division
-                batches * gold
-            }).unwrap_or(1);
+            let wholesale_cost = order_item
+                .wholesale_price()
+                .map(|(gold, units)| {
+                    let batches = (stock.reorder_qty + units - 1) / units; // ceil division
+                    batches * gold
+                })
+                .unwrap_or(1);
 
             // Reward = wholesale cost + 1g profit margin for the delivery agent.
             let reward = wholesale_cost + 1;
@@ -99,7 +110,11 @@ pub fn auto_restock_system(
 
             tracing::info!(
                 "Auto-restock: {} needs {} {} (reward: {}g, reserve: {}g)",
-                sprite.0, stock.reorder_qty, stock.item, reward, gold_reserve.0,
+                sprite.0,
+                stock.reorder_qty,
+                stock.item,
+                reward,
+                gold_reserve.0,
             );
 
             bounty_registry.tokens.insert(bounty.id, bounty);
@@ -108,8 +123,7 @@ pub fn auto_restock_system(
 }
 
 /// System: when an agent uses a paid service, transfer gold to the building's reserve.
-pub fn building_revenue_system(
-    // This is handled inline by the action_timer_system when gold_cost > 0.
+pub fn building_revenue_system(// This is handled inline by the action_timer_system when gold_cost > 0.
     // We just need a system that deducts the bounty reward from the building's reserve
     // when a restock bounty is claimed.
 ) {

@@ -1,5 +1,5 @@
-pub mod config;
 mod agents;
+pub mod config;
 mod items;
 mod network;
 mod process_manager;
@@ -20,7 +20,9 @@ fn main() {
 
     App::new()
         .add_plugins(
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(config::tick_ms()))),
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(
+                config::tick_ms(),
+            ))),
         )
         .add_plugins(TokioTasksPlugin::default())
         .insert_resource(process_manager::ProcessRegistryRes(registry))

@@ -28,17 +28,19 @@ pub fn job_posting_system(
     mut employers: Query<(&SpriteType, &Entrance, &mut Employer)>,
     mut boards_jobs: Query<&mut BountyTokenStore, With<BountyBoard>>,
 ) {
-    let Some(mut bounty_registry) = boards_jobs.iter_mut().next() else { return; };
+    let Some(mut bounty_registry) = boards_jobs.iter_mut().next() else {
+        return;
+    };
     for (sprite, entrance, mut employer) in &mut employers {
         if tick.0 - employer.last_posted_tick < employer.post_interval as u64 {
             continue;
         }
 
         // Check if there's already an available job bounty from this building.
-        let has_open = bounty_registry.tokens.values().any(|b| {
-            b.state == BountyState::Available
-                && b.description.contains(&sprite.0)
-        });
+        let has_open = bounty_registry
+            .tokens
+            .values()
+            .any(|b| b.state == BountyState::Available && b.description.contains(&sprite.0));
 
         if has_open {
             continue;
@@ -54,7 +56,11 @@ pub fn job_posting_system(
                 vec![],
             );
 
-            tracing::info!("Job posted: {} ({} gold)", bounty.description, bounty.reward_gold);
+            tracing::info!(
+                "Job posted: {} ({} gold)",
+                bounty.description,
+                bounty.reward_gold
+            );
             bounty_registry.tokens.insert(bounty.id, bounty);
             employer.last_posted_tick = tick.0;
         }
