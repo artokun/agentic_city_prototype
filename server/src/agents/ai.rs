@@ -13,12 +13,12 @@ use crate::agents::perception::KnownLocations;
 use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
+use crate::network::agent_relay::AgentRelays;
 use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
 use crate::world::map::{GridPos, WorldMap};
-use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
 use crate::world::shifts::ShiftWorker;
-use crate::network::agent_relay::AgentRelays;
+use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
 
 use super::actions::ActionTimer;
 use super::personality::Personality;
@@ -65,16 +65,23 @@ pub fn spawn_sessions_system(
         let relays_clone = relays.0.clone();
         let sys_prompt_clone = system_prompt.clone();
 
-        tracing::info!("Spawning Claude --sdk-url session for {} ({})", agent_name, agent_uuid);
+        tracing::info!(
+            "Spawning Claude --sdk-url session for {} ({})",
+            agent_name,
+            agent_uuid
+        );
 
         let (placeholder_tx, _) = mpsc::channel(1);
         let (_, placeholder_rx) = mpsc::channel(1);
-        sessions.sessions.insert(entity, SessionState {
-            prompt_tx: placeholder_tx,
-            response_rx: Arc::new(Mutex::new(placeholder_rx)),
-            last_decision_tick: 0,
-            system_prompt: system_prompt.clone(),
-        });
+        sessions.sessions.insert(
+            entity,
+            SessionState {
+                prompt_tx: placeholder_tx,
+                response_rx: Arc::new(Mutex::new(placeholder_rx)),
+                last_decision_tick: 0,
+                system_prompt: system_prompt.clone(),
+            },
+        );
 
         let entity_copy = entity;
         let process_registry = process_registry.clone();
@@ -272,7 +279,9 @@ pub fn ai_thought_drain_system(
     mut agents: Query<(Entity, &AgentName, &mut ThoughtBubble)>,
 ) {
     for (entity, name, mut thought) in &mut agents {
-        let Some(session) = sessions.sessions.get_mut(&entity) else { continue };
+        let Some(session) = sessions.sessions.get_mut(&entity) else {
+            continue;
+        };
 
         // Drain all available messages from the relay.
         loop {
@@ -312,49 +321,92 @@ pub fn ai_context_system(
     boards_ai: Query<&BountyTokenStore, With<BountyBoard>>,
     mut sessions: ResMut<AgentSessions>,
     agents: Query<(
-        Entity, &AgentName, &GridPos, &Speed,
-        &AgentGoal, &Needs, &Inventory, &KnownLocations, &Relationships,
-        Option<&ActionTimer>, Option<&Path>,
-        Option<&InsideBuilding>, Option<&ShiftWorker>,
-        &crate::items::CarrySlots, &BusinessCards,
+        Entity,
+        &AgentName,
+        &GridPos,
+        &Speed,
+        &AgentGoal,
+        &Needs,
+        &Inventory,
+        &KnownLocations,
+        &Relationships,
+        Option<&ActionTimer>,
+        Option<&Path>,
+        Option<&InsideBuilding>,
+        Option<&ShiftWorker>,
+        &crate::items::CarrySlots,
+        &BusinessCards,
     )>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
 ) {
-    let Some(bounty_registry) = boards_ai.iter().next() else { return; };
+    let Some(bounty_registry) = boards_ai.iter().next() else {
+        return;
+    };
     for (
-        entity, name, pos, speed, goal, needs, inv, known_locs, rels,
-        action_timer, path, inside_building, shift_worker,
-        carry_slots, business_cards,
-    ) in &agents {
-        if action_timer.is_some() { continue; }
+        entity,
+        name,
+        pos,
+        speed,
+        goal,
+        needs,
+        inv,
+        known_locs,
+        rels,
+        action_timer,
+        path,
+        inside_building,
+        shift_worker,
+        carry_slots,
+        business_cards,
+    ) in &agents
+    {
+        if action_timer.is_some() {
+            continue;
+        }
 
         // Don't prompt incapacitated agents — they're passed out.
         // (Checked via goal since Incapacitated isn't in this query.)
-        if matches!(goal, AgentGoal::Idle) && needs.energy <= 0.0 { continue; }
+        if matches!(goal, AgentGoal::Idle) && needs.energy <= 0.0 {
+            continue;
+        }
         let has_path = path.is_some_and(|p| !p.0.is_empty());
-        if has_path { continue; }
+        if has_path {
+            continue;
+        }
 
-        let Some(session) = sessions.sessions.get_mut(&entity) else { continue };
+        let Some(session) = sessions.sessions.get_mut(&entity) else {
+            continue;
+        };
 
         // Rate limit context updates.
-        if tick.0 - session.last_decision_tick < config::context_interval() { continue; }
+        if tick.0 - session.last_decision_tick < config::context_interval() {
+            continue;
+        }
 
         // Only send context when agent can act.
         // PerformingAction is NOT included — let the action timer finish first.
-        if matches!(goal, AgentGoal::PerformingAction) { continue; }
+        if matches!(goal, AgentGoal::PerformingAction) {
+            continue;
+        }
 
         // Bounty visibility: MUST be physically at the bounty board to see bounties.
         // Only exception: your own active bounty is always visible (you know what you're working on).
-        let at_board = known_locs.locations.values()
+        let at_board = known_locs
+            .locations
+            .values()
             .find(|l| l.name == "bounty_board")
             .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
 
-        let available_bounties: Vec<String> = bounty_registry.tokens.values()
+        let available_bounties: Vec<String> = bounty_registry
+            .tokens
+            .values()
             .filter(|b| {
                 // Always show your own active bounty.
                 let is_mine = b.claimed_by == Some(entity);
-                if is_mine { return true; }
+                if is_mine {
+                    return true;
+                }
                 // Only show available bounties if physically at the board entrance.
                 at_board && b.state == crate::world::bounty::BountyState::Available
             })
@@ -362,14 +414,17 @@ pub fn ai_context_system(
                 let is_mine = b.claimed_by == Some(entity);
                 let status = match b.state {
                     crate::world::bounty::BountyState::Claimed if is_mine => "(YOUR ACTIVE BOUNTY)",
-                    crate::world::bounty::BountyState::PendingVerification if is_mine => "(PENDING GM REVIEW)",
+                    crate::world::bounty::BountyState::PendingVerification if is_mine => {
+                        "(PENDING GM REVIEW)"
+                    }
                     crate::world::bounty::BountyState::Claimed => "(taken)",
                     _ => "(available)",
                 };
                 // Show instructions only for the agent's own active bounty.
                 let instructions = if is_mine {
                     // Extract agent-facing instructions (before the GM criteria).
-                    let agent_instructions = b.hidden_criteria
+                    let agent_instructions = b
+                        .hidden_criteria
                         .split("\n\nGM:")
                         .next()
                         .unwrap_or("")
@@ -384,27 +439,63 @@ pub fn ai_context_system(
                     String::new()
                 };
                 let short_id = &b.id.to_string()[..6];
-                format!("[{}] {} — {}g {}{}", short_id, b.description, b.reward_gold, status, instructions)
-            }).collect();
+                format!(
+                    "[{}] {} — {}g {}{}",
+                    short_id, b.description, b.reward_gold, status, instructions
+                )
+            })
+            .collect();
 
-        let nearby: Vec<(String, GridPos)> = all_agents.iter()
+        let nearby: Vec<(String, GridPos)> = all_agents
+            .iter()
             .filter(|(n, _)| n.0 != name.0)
             .filter(|(_, p)| (p.x - pos.x).abs() + (p.y - pos.y).abs() <= 10)
-            .map(|(n, p)| (n.0.clone(), *p)).collect();
+            .map(|(n, p)| (n.0.clone(), *p))
+            .collect();
 
         // Location-specific tools.
-        let mut location_tools: Vec<&str> = vec!["look_around", "wander", "go_to_board", "go_to_service", "work_shift"];
+        let mut location_tools: Vec<&str> = vec![
+            "look_around",
+            "wander",
+            "go_to_board",
+            "go_to_service",
+            "work_shift",
+        ];
         if let Some(inside) = inside_building {
             if let Ok((_, _, sprite)) = structures.get(inside.0) {
                 let on_shift = shift_worker.is_some();
                 match sprite.0.as_str() {
-                    "google" => { location_tools.push("search_internet"); }
-                    "cafe" if on_shift => { location_tools.push("brew_coffee"); location_tools.push("sell_to_customer"); }
-                    "market" if on_shift => { location_tools.push("stock_shelves"); location_tools.push("sell_to_customer"); }
-                    "warehouse" if on_shift => { location_tools.push("buy_wholesale"); }
-                    "hotel" if on_shift => { location_tools.push("check_in_guest"); }
-                    "apartments" => { location_tools.push("cook_meal"); location_tools.push("rest"); }
-                    "bounty_board" => { location_tools.push("claim_bounty"); location_tools.push("redeem_paycheck"); }
+                    "google" => {
+                        location_tools.push("search_internet");
+                    }
+                    "cafe" if on_shift => {
+                        location_tools.push("brew_coffee");
+                        location_tools.push("sell_to_customer");
+                    }
+                    "market" if on_shift => {
+                        location_tools.push("stock_shelves");
+                        location_tools.push("sell_to_customer");
+                    }
+                    "warehouse" if on_shift => {
+                        location_tools.push("buy_wholesale");
+                    }
+                    "hotel" if on_shift => {
+                        location_tools.push("check_in_guest");
+                    }
+                    "apartments" => {
+                        location_tools.push("cook_meal");
+                        location_tools.push("rest");
+                    }
+                    "library" => {
+                        location_tools.push("search_library — search documents by keyword");
+                        location_tools.push(
+                            "copy_document — copy a document to your inventory (service=title)",
+                        );
+                    }
+                    "bounty_board" => {
+                        location_tools.push("claim_bounty");
+                        location_tools.push("redeem_paycheck");
+                    }
                     _ => {}
                 }
             }
@@ -434,10 +525,20 @@ pub fn ai_context_system(
         };
 
         let context = super::ai_decision::build_context(
-            &name.0, pos, needs, inv, goal, known_locs, rels,
-            speed.0, &available_bounties, &nearby, &location_tools,
+            &name.0,
+            pos,
+            needs,
+            inv,
+            goal,
+            known_locs,
+            rels,
+            speed.0,
+            &available_bounties,
+            &nearby,
+            &location_tools,
             active_bounty_desc.as_deref(),
-            carry_slots, business_cards,
+            carry_slots,
+            business_cards,
         );
 
         // Send context as a user message. Claude will think and call game_action tool.
@@ -461,7 +562,7 @@ fn build_intro_message(agent_name: &str) -> String {
     };
 
     format!(
-r#"ATTENTION, {agent_name}.
+        r#"ATTENTION, {agent_name}.
 
 You have been summoned to San Francisco.
 
@@ -486,5 +587,6 @@ HERE ARE THE RULES:
 You have been placed near the bounty board. That is not a coincidence. Your first move matters.
 
 Good luck, {agent_name}. The clock is ticking.
-"#)
+"#
+    )
 }

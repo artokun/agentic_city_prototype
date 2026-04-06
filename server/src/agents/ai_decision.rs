@@ -26,11 +26,11 @@ pub fn build_context(
     let gold = inv.count(ItemType::GoldCoin);
 
     let mut ctx = format!(
-r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold while keeping your needs above critical levels.
+        r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold while keeping your needs above critical levels.
 
 ## World
-- Map size: 40x40 tiles (coordinates 0-39). You can go_to any walkable (x,y).
-- Buildings: bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital
+- Map size: 40x200 tiles (x: 0-39, y: 0-199). You can go_to any walkable (x,y).
+- Buildings: bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital, library
 
 ## Current State
 - Position: ({}, {})
@@ -46,11 +46,16 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 
     // Gold balance with debt info
     if inv.gold_debt > 0 {
-        ctx += &format!("- DEBT: {} gold owed! Earn gold to pay it off.\n", inv.gold_debt);
+        ctx += &format!(
+            "- DEBT: {} gold owed! Earn gold to pay it off.\n",
+            inv.gold_debt
+        );
     }
 
     // Inventory
-    let items: Vec<String> = inv.items.iter()
+    let items: Vec<String> = inv
+        .items
+        .iter()
         .filter(|(t, _)| **t != ItemType::GoldCoin)
         .map(|(t, c)| format!("{} x{}", t, c))
         .collect();
@@ -69,12 +74,19 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
     if !business_cards.contacts.is_empty() {
         ctx += "- Business cards collected (you can send_message to these agents):\n";
         for (contact_name, contact_id) in &business_cards.contacts {
-            ctx += &format!("  - {} (id: {})\n", contact_name, &contact_id[..6.min(contact_id.len())]);
+            ctx += &format!(
+                "  - {} (id: {})\n",
+                contact_name,
+                &contact_id[..6.min(contact_id.len())]
+            );
         }
     } else {
         ctx += "- No business cards yet. Start a face-to-face conversation to exchange cards.\n";
     }
-    ctx += &format!("- Your cards remaining to give: {}\n", business_cards.cards_remaining);
+    ctx += &format!(
+        "- Your cards remaining to give: {}\n",
+        business_cards.cards_remaining
+    );
 
     // Known locations with distances
     ctx += "\n## Known Locations\n";
@@ -82,14 +94,14 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
         ctx += "- Only know the bounty board\n";
     } else {
         let mut locs: Vec<_> = known_locations.locations.values().collect();
-        locs.sort_by_key(|l| {
-            (l.entrance.x - pos.x).abs() + (l.entrance.y - pos.y).abs()
-        });
+        locs.sort_by_key(|l| (l.entrance.x - pos.x).abs() + (l.entrance.y - pos.y).abs());
         for loc in locs.iter().take(15) {
             let dist = (loc.entrance.x - pos.x).abs() + (loc.entrance.y - pos.y).abs();
             let travel_secs = dist as f32 / speed;
-            ctx += &format!("- {} at ({},{}) entrance ({},{}) — {} tiles, {:.1}s travel\n",
-                loc.name, loc.pos.x, loc.pos.y, loc.entrance.x, loc.entrance.y, dist, travel_secs);
+            ctx += &format!(
+                "- {} at ({},{}) entrance ({},{}) — {} tiles, {:.1}s travel\n",
+                loc.name, loc.pos.x, loc.pos.y, loc.entrance.x, loc.entrance.y, dist, travel_secs
+            );
         }
     }
 
@@ -97,7 +109,8 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
     if let Some(bounty_desc) = active_bounty {
         ctx += "\n## YOUR ACTIVE BOUNTY\n";
         ctx += &format!("You are currently working on: {}\n", bounty_desc);
-        ctx += "You must figure out HOW to complete this bounty. Go to buildings, search, interact.\n";
+        ctx +=
+            "You must figure out HOW to complete this bounty. Go to buildings, search, interact.\n";
         ctx += "When done, use 'go_to_board' to return and collect your reward.\n";
         ctx += "Use 'complete_bounty' when you believe the objective is fulfilled.\n";
     }
@@ -117,7 +130,10 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
         ctx += "\n## Nearby Agents\n";
         for (aname, apos) in nearby_agents {
             let dist = (apos.x - pos.x).abs() + (apos.y - pos.y).abs();
-            ctx += &format!("- {} at ({},{}) — {} tiles away\n", aname, apos.x, apos.y, dist);
+            ctx += &format!(
+                "- {} at ({},{}) — {} tiles away\n",
+                aname, apos.x, apos.y, dist
+            );
         }
     }
 
@@ -125,8 +141,10 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
     if !relationships.known.is_empty() {
         ctx += "\n## Known Agents\n";
         for mem in relationships.known.values() {
-            ctx += &format!("- {} (friendship: {}, last seen doing: {})\n",
-                mem.name, mem.friendship, mem.last_known_goal);
+            ctx += &format!(
+                "- {} (friendship: {}, last seen doing: {})\n",
+                mem.name, mem.friendship, mem.last_known_goal
+            );
         }
     }
 
@@ -140,19 +158,32 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 
     // Service price list
     ctx += r#"
-## Service Costs & Effects
+## Buying Items
+| Service | Building | Cost | You Get |
+|---------|----------|------|---------|
+| buy_coffee | cafe | 1g | coffee (inventory) |
+| buy_muffin | cafe | 1g | muffin (inventory) |
+| buy_sandwich | market | 2g | sandwich (inventory) |
+| buy_rations | market | 1g | rations (inventory) |
+
+## Consuming Items (use consume_item with service=<item name>)
+| Item | Effect |
+|------|--------|
+| coffee | +10k context token ceiling (lets you think longer before sleeping!) |
+| muffin | +30 hunger |
+| rations | +50 hunger |
+| sandwich | +60 hunger, +10 boredom |
+| soup | +45 hunger |
+
+You can consume items ANYWHERE — no need to be at a specific building.
+Take rations from the apartments to eat on the go!
+
+## Other Services
 | Service | Building | Cost | Duration | Effect |
 |---------|----------|------|----------|--------|
-| eat_cafe | cafe | 1g | 10 ticks | +40 hunger |
-| eat_restaurant | restaurant | 2g | 15 ticks | +60 hunger, +10 boredom |
-| eat_diner | diner | 1g | 12 ticks | +45 hunger |
-| cook_at_home | apartments | FREE | 30 ticks | +60 hunger |
-| buy_coffee | cafe | 1g | 5 ticks | +20 energy (instant boost!) |
 | sleep_hotel | hotel | 1g | 30 ticks | +50 energy |
 | sleep_at_home | apartments | FREE | 50 ticks | +80 energy |
 | read_library | library | FREE | 20 ticks | +30 boredom |
-| watch_show | theater | 2g | 25 ticks | +50 boredom |
-| work_out | gym | FREE | 20 ticks | +25 boredom, -10 energy, -10 hunger |
 | hang_out | cafe | FREE | 15 ticks | +25 boredom |
 | relax_in_lobby | hotel | FREE | 10 ticks | +15 boredom, +5 energy |
 | window_shop | market | FREE | 10 ticks | +15 boredom |
@@ -160,13 +191,21 @@ r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold wh
 
 Chatting with other agents also boosts boredom (+5 per message for both parties).
 
+## Trading
+While in a face-to-face conversation (start_conversation), you can trade items:
+- offer_trade: set service=requested items (comma-separated), text=offered items (comma-separated)
+  Example: offer coffee,muffin and request rations → service="rations", text="coffee,muffin"
+- accept_trade: accept a pending trade offer from your conversation partner
+- reject_trade: reject a pending trade offer
+Note: bounty_token and paycheck CANNOT be traded.
+
 ## Shift Pay Rates
 | Building | Pay Rate | Food Perk |
 |----------|----------|-----------|
-| cafe | 1g per 1000 ticks | Yes (hunger stable) |
-| market | 1g per 1000 ticks | Yes |
-| warehouse | 1g per 1200 ticks | No |
-| hotel | 1g per 1100 ticks | No |
+| cafe | 1g per 120 ticks (~2min) | Yes (hunger stable) |
+| market | 1g per 120 ticks (~2min) | Yes |
+| warehouse | 1g per 120 ticks (~2min) | No |
+| hotel | 1g per 120 ticks (~2min) | No |
 
 Shifts pay in paychecks. You must go to bounty_board to redeem_paycheck for gold.
 Bounties pay 4-15g and are much faster than shifts for earning gold.
@@ -175,7 +214,8 @@ The apartments are FREE for sleep and food but far away — hotel costs 1g but i
 ## How to Act
 Use the game_action MCP tool for ALL actions. Do NOT respond with JSON — use the tool.
 Key actions: go_to_board, go_to_service, look_around, wander, work_shift, leave_shift,
-claim_bounty, complete_bounty, deposit_item, start_conversation, say, end_conversation, help.
+claim_bounty, complete_bounty, deposit_item, take_item, consume_item, create_document, append_document,
+inspect_item, send_message, start_conversation, say, end_conversation, help.
 Shifts pay in paychecks (not direct gold). Redeem at the bounty board with redeem_paycheck service.
 Prioritize: critical needs first, then earning gold, then socializing.
 "#;
@@ -204,29 +244,57 @@ pub fn parse_action(response: &str) -> (AgentAction, String) {
 
     if let Some(json_str) = json_str {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
-            let thought = val.get("thought").and_then(|t| t.as_str()).unwrap_or("").to_string();
+            let thought = val
+                .get("thought")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
             let action = val.get("action").and_then(|a| a.as_str()).unwrap_or("");
 
             let parsed = match action {
                 "go_to_board" => AgentAction::GoToBoard,
                 "go_to_service" => {
-                    let building = val.get("building").and_then(|b| b.as_str()).unwrap_or("").to_string();
-                    let service = val.get("service").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                    let building = val
+                        .get("building")
+                        .and_then(|b| b.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let service = val
+                        .get("service")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     AgentAction::GoToService { building, service }
                 }
                 "look_around" => AgentAction::LookAround,
                 "wander" => AgentAction::Wander,
                 "chat_with" => {
-                    let agent = val.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
+                    let agent = val
+                        .get("agent")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     AgentAction::ChatWith { agent }
                 }
                 "send_message" => {
-                    let recipient = val.get("recipient").and_then(|r| r.as_str()).unwrap_or("").to_string();
-                    let text = val.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                    let recipient = val
+                        .get("recipient")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let text = val
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     AgentAction::SendMessage { recipient, text }
                 }
                 "work_shift" => {
-                    let building = val.get("building").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                    let building = val
+                        .get("building")
+                        .and_then(|b| b.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     AgentAction::WorkShift { building }
                 }
                 "leave_shift" => AgentAction::LeaveShift,
@@ -242,18 +310,39 @@ pub fn parse_action(response: &str) -> (AgentAction, String) {
     let lower = response.to_lowercase();
     let thought = response.lines().next().unwrap_or("thinking...").to_string();
 
-    if lower.contains("bounty board") || lower.contains("check the board") || lower.contains("go to the board") {
+    if lower.contains("bounty board")
+        || lower.contains("check the board")
+        || lower.contains("go to the board")
+    {
         return (AgentAction::GoToBoard, thought);
     }
-    if lower.contains("work a shift") || lower.contains("take a shift") || lower.contains("start working") {
+    if lower.contains("work a shift")
+        || lower.contains("take a shift")
+        || lower.contains("start working")
+    {
         if lower.contains("cafe") {
-            return (AgentAction::WorkShift { building: "cafe".into() }, thought);
+            return (
+                AgentAction::WorkShift {
+                    building: "cafe".into(),
+                },
+                thought,
+            );
         }
         if lower.contains("market") {
-            return (AgentAction::WorkShift { building: "market".into() }, thought);
+            return (
+                AgentAction::WorkShift {
+                    building: "market".into(),
+                },
+                thought,
+            );
         }
         if lower.contains("warehouse") {
-            return (AgentAction::WorkShift { building: "warehouse".into() }, thought);
+            return (
+                AgentAction::WorkShift {
+                    building: "warehouse".into(),
+                },
+                thought,
+            );
         }
     }
     if lower.contains("look around") || lower.contains("scan") || lower.contains("survey") {

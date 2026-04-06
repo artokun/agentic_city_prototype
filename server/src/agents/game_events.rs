@@ -70,7 +70,9 @@ pub fn game_events_system(
     )>,
     structures: Query<(&Entrance, &SpriteType), With<StructureId>>,
 ) {
-    let Some(bounty_registry) = boards_events.iter().next() else { return; };
+    let Some(bounty_registry) = boards_events.iter().next() else {
+        return;
+    };
     // Pre-compute: detect new bounties (global, not per-agent).
     let current_bounty_count = bounty_registry.tokens.len();
 
@@ -115,7 +117,10 @@ pub fn game_events_system(
         // --- New bounty detection ---
         if current_bounty_count > event_state.last_bounty_count {
             let new_count = current_bounty_count - event_state.last_bounty_count;
-            messages.push(format!("{} new bounty(s) posted! Check the bounty board.", new_count));
+            messages.push(format!(
+                "{} new bounty(s) posted! Check the bounty board.",
+                new_count
+            ));
             event_state.last_bounty_count = current_bounty_count;
         }
 
@@ -135,9 +140,13 @@ pub fn game_events_system(
             match goal {
                 AgentGoal::ExecutingBounty(bid) => {
                     if let Some(bounty) = bounty_registry.get(*bid) {
-                        status += &format!("\nACTIVE BOUNTY: '{}' ({}g reward)", bounty.description, bounty.reward_gold);
+                        status += &format!(
+                            "\nACTIVE BOUNTY: '{}' ({}g reward)",
+                            bounty.description, bounty.reward_gold
+                        );
                         // Show agent-facing instructions.
-                        let instructions = bounty.hidden_criteria
+                        let instructions = bounty
+                            .hidden_criteria
                             .split("\n\nGM:")
                             .next()
                             .unwrap_or("")
@@ -158,7 +167,9 @@ pub fn game_events_system(
             }
 
             // Full inventory.
-            let items: Vec<String> = inv.items.iter()
+            let items: Vec<String> = inv
+                .items
+                .iter()
                 .filter(|(t, c)| **t != ItemType::GoldCoin && **c > 0)
                 .map(|(t, c)| format!("{} x{}", t, c))
                 .collect();
@@ -171,7 +182,14 @@ pub fn game_events_system(
             // Business card contacts.
             if !cards.contacts.is_empty() {
                 let names: Vec<&String> = cards.contacts.keys().collect();
-                status += &format!("\nContacts: {} (can send_message to them)", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+                status += &format!(
+                    "\nContacts: {} (can send_message to them)",
+                    names
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
 
             // Walking state.
@@ -181,6 +199,8 @@ pub fn game_events_system(
                 }
             }
 
+            status += "\nReminder: Use inspect_item with service='game_manual' to review the full rules and action list.";
+            status += "\nReminder: Use the help action to report bugs or give feedback to the developers.";
             status += "\n=== END STATUS ===";
             messages.push(status);
             event_state.last_stat_tick = tick.0;
@@ -213,7 +233,8 @@ fn building_arrival_message(building_name: &str) -> String {
             - deposit_item — deposit your bounty_token and proof items/documents into the dropbox\n\
             - complete_bounty — submit for GM review (you MUST deposit bounty_token first!)\n\
             - look_around — see nearby agents and buildings\n\
-            WORKFLOW: deposit_item(bounty_token) → deposit_item(doc:yourfile.md) → complete_bounty".to_string(),
+            WORKFLOW: deposit_item(bounty_token) → deposit_item(doc:yourfile.md) → complete_bounty"
+            .to_string(),
 
         "cafe" => "You arrived at the CAFE.\n\
             A cozy spot for food, coffee, and socializing.\n\
@@ -221,65 +242,55 @@ fn building_arrival_message(building_name: &str) -> String {
             - eat_cafe (1g, 10 ticks) — +40 hunger\n\
             - buy_coffee (1g, 5 ticks) — +20 energy\n\
             - hang_out (free, 15 ticks) — +25 boredom\n\
-            Available shifts: work_shift (1g per 1000 ticks, food perk)".to_string(),
+            Available shifts: work_shift (1g per 120 ticks, food perk)"
+            .to_string(),
 
         "hotel" => "You arrived at the HOTEL.\n\
             Rest and recharge here.\n\
             Available services:\n\
             - sleep_hotel (1g, 30 ticks) — +50 energy\n\
             - relax_in_lobby (free, 10 ticks) — +15 boredom, +5 energy\n\
-            Available shifts: work_shift (1g per 1100 ticks)".to_string(),
+            Available shifts: work_shift (1g per 120 ticks)"
+            .to_string(),
 
         "apartments" => "You arrived at the APARTMENTS.\n\
             Your free home base — no gold required.\n\
             Available services:\n\
             - sleep_at_home (free, 50 ticks) — +80 energy\n\
-            - cook_at_home (free, 30 ticks) — +60 hunger".to_string(),
+            - cook_at_home (free, 30 ticks) — +60 hunger"
+            .to_string(),
 
         "warehouse" => "You arrived at the WAREHOUSE.\n\
             Raw materials are stored here.\n\
-            Available shifts: work_shift (1g per 1200 ticks)\n\
-            Delivery bounties may require picking up items here.".to_string(),
+            Available shifts: work_shift (1g per 120 ticks)\n\
+            Delivery bounties may require picking up items here."
+            .to_string(),
 
         "market" => "You arrived at the MARKET.\n\
             Buy and sell goods.\n\
             Available services:\n\
             - window_shop (free, 10 ticks) — +15 boredom\n\
-            Available shifts: work_shift (1g per 1000 ticks, food perk)".to_string(),
+            Available shifts: work_shift (1g per 120 ticks, food perk)"
+            .to_string(),
+
+        "library" => "You arrived at the LIBRARY.\n\
+            Archive of all completed bounty research documents.\n\
+            Available actions:\n\
+            - search_library (free) — search documents by keyword (use service=keyword)\n\
+            - copy_document (free) — copy a document to your inventory (use service=title)\n\
+            You cannot take originals, only copies."
+            .to_string(),
 
         "google" => "You arrived at GOOGLE.\n\
             The internet is here. Costs 1 gold per visit.\n\
             Available services:\n\
-            - search_internet (1g, 10 ticks) — real web search for bounty research".to_string(),
-
-        "library" => "You arrived at the LIBRARY.\n\
-            Quiet place to read and relax.\n\
-            Available services:\n\
-            - read_library (free, 20 ticks) — +30 boredom".to_string(),
-
-        "theater" => "You arrived at the THEATER.\n\
-            Entertainment venue.\n\
-            Available services:\n\
-            - watch_show (2g, 25 ticks) — +50 boredom".to_string(),
-
-        "gym" => "You arrived at the GYM.\n\
-            Work out to relieve boredom.\n\
-            Available services:\n\
-            - work_out (free, 20 ticks) — +25 boredom, -10 energy, -10 hunger".to_string(),
+            - search_internet (1g, 10 ticks) — real web search for bounty research"
+            .to_string(),
 
         "hospital" => "You arrived at the HOSPITAL.\n\
             You end up here if you collapse from critical needs.\n\
-            Recovery costs 5 gold (can go into debt).".to_string(),
-
-        "diner" => "You arrived at the DINER.\n\
-            Quick and cheap eats.\n\
-            Available services:\n\
-            - eat_diner (1g, 12 ticks) — +45 hunger".to_string(),
-
-        "restaurant" => "You arrived at the RESTAURANT.\n\
-            Fine dining with social benefits.\n\
-            Available services:\n\
-            - eat_restaurant (2g, 15 ticks) — +60 hunger, +10 boredom".to_string(),
+            Recovery costs 5 gold (can go into debt)."
+            .to_string(),
 
         other => format!("You arrived at {}.", other),
     }

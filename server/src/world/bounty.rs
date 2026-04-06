@@ -299,10 +299,14 @@ impl BountyTokenData {
 pub struct DropboxSlot {
     /// The bounty token ID being submitted (if deposited).
     pub bounty_token_id: Option<Uuid>,
+    /// The bounty token item entity currently parked in the slot.
+    pub bounty_token_item: Option<Entity>,
     /// Proof items deposited by the agent.
     pub items: Vec<(ItemType, u32)>,
     /// Documents deposited by the agent: (title, content).
     pub documents: Vec<(String, String)>,
+    /// Document item entities currently parked in the slot.
+    pub document_items: Vec<Entity>,
 }
 
 /// Per-agent ephemeral submission boxes on the bounty board.
@@ -315,9 +319,10 @@ pub struct BountyDropbox {
 
 impl BountyDropbox {
     /// Deposit a bounty token into the agent's dropbox slot.
-    pub fn deposit_token(&mut self, agent: Entity, bounty_id: Uuid) {
+    pub fn deposit_token(&mut self, agent: Entity, bounty_id: Uuid, item_entity: Option<Entity>) {
         let slot = self.slots.entry(agent).or_default();
         slot.bounty_token_id = Some(bounty_id);
+        slot.bounty_token_item = item_entity;
     }
 
     /// Deposit a regular item into the agent's dropbox slot.
@@ -332,9 +337,18 @@ impl BountyDropbox {
     }
 
     /// Deposit a document into the agent's dropbox slot.
-    pub fn deposit_document(&mut self, agent: Entity, title: String, content: String) {
+    pub fn deposit_document(
+        &mut self,
+        agent: Entity,
+        title: String,
+        content: String,
+        item_entity: Option<Entity>,
+    ) {
         let slot = self.slots.entry(agent).or_default();
         slot.documents.push((title, content));
+        if let Some(item_entity) = item_entity {
+            slot.document_items.push(item_entity);
+        }
     }
 
     /// Get a reference to an agent's dropbox slot.
@@ -389,9 +403,10 @@ impl BountyTokenStore {
 
     pub fn claim(&mut self, bounty_id: Uuid, agent: Entity, tick: u64) -> Option<&BountyTokenData> {
         // Enforce max 1 active bounty per agent.
-        let already_has = self.tokens.values().any(|b| {
-            b.claimed_by == Some(agent) && b.state == BountyState::Claimed
-        });
+        let already_has = self
+            .tokens
+            .values()
+            .any(|b| b.claimed_by == Some(agent) && b.state == BountyState::Claimed);
         if already_has {
             return None;
         }
@@ -436,16 +451,16 @@ pub fn bounty_expiry_system(
     tick: Res<TickCount>,
     mut boards: Query<&mut BountyTokenStore, With<BountyBoard>>,
 ) {
-    let Some(mut store) = boards.iter_mut().next() else { return; };
+    let Some(mut store) = boards.iter_mut().next() else {
+        return;
+    };
     for bounty in store.tokens.values_mut() {
-        if bounty.state == BountyState::Claimed
-            && !bounty.expired
-            && bounty.is_expired(tick.0)
-        {
+        if bounty.state == BountyState::Claimed && !bounty.expired && bounty.is_expired(tick.0) {
             bounty.expired = true;
             tracing::info!(
                 "Bounty '{}' has EXPIRED — agent must return it ({}g recycling fee)",
-                bounty.description, recycle_cost(),
+                bounty.description,
+                recycle_cost(),
             );
         }
     }
@@ -453,7 +468,9 @@ pub fn bounty_expiry_system(
 
 /// Recycle cost for expired bounties.
 /// Gold penalty for recycling expired bounties — now in config.rs.
-pub fn recycle_cost() -> u32 { crate::config::recycle_cost() }
+pub fn recycle_cost() -> u32 {
+    crate::config::recycle_cost()
+}
 
 #[cfg(test)]
 mod tests {
@@ -604,13 +621,16 @@ mod tests {
     fn claim_sets_state_and_agent() {
         let id = Uuid::new_v4();
         let mut reg = BountyTokenStore::default();
-        insert(&mut reg, Bounty::simple(
-            id,
-            "test".into(),
-            BountyObjective::WorkAtBuilding,
-            10,
-            vec![],
-        ));
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id,
+                "test".into(),
+                BountyObjective::WorkAtBuilding,
+                10,
+                vec![],
+            ),
+        );
         let agent = entity(1);
         let result = reg.claim(id, agent, 5);
         assert!(result.is_some());
@@ -625,20 +645,26 @@ mod tests {
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
         let mut reg = BountyTokenStore::default();
-        insert(&mut reg, Bounty::simple(
-            id1,
-            "first".into(),
-            BountyObjective::WorkAtBuilding,
-            10,
-            vec![],
-        ));
-        insert(&mut reg, Bounty::simple(
-            id2,
-            "second".into(),
-            BountyObjective::WorkAtBuilding,
-            20,
-            vec![],
-        ));
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id1,
+                "first".into(),
+                BountyObjective::WorkAtBuilding,
+                10,
+                vec![],
+            ),
+        );
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id2,
+                "second".into(),
+                BountyObjective::WorkAtBuilding,
+                20,
+                vec![],
+            ),
+        );
         let agent = entity(1);
         assert!(reg.claim(id1, agent, 0).is_some());
         assert!(reg.claim(id2, agent, 1).is_none());
@@ -767,9 +793,16 @@ mod tests {
     fn bounty_claim_sets_state_and_agent() {
         let mut reg = BountyTokenStore::default();
         let id = Uuid::new_v4();
-        insert(&mut reg, Bounty::simple(
-            id, "test".into(), BountyObjective::WorkAtBuilding, 5, vec![],
-        ));
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id,
+                "test".into(),
+                BountyObjective::WorkAtBuilding,
+                5,
+                vec![],
+            ),
+        );
         let agent = entity(1);
         let bounty = reg.claim(id, agent, 100);
         assert!(bounty.is_some());
@@ -782,9 +815,16 @@ mod tests {
     fn bounty_double_claim_fails() {
         let mut reg = BountyTokenStore::default();
         let id = Uuid::new_v4();
-        insert(&mut reg, Bounty::simple(
-            id, "test".into(), BountyObjective::WorkAtBuilding, 5, vec![],
-        ));
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id,
+                "test".into(),
+                BountyObjective::WorkAtBuilding,
+                5,
+                vec![],
+            ),
+        );
         let a = entity(1);
         let b = entity(2);
         assert!(reg.claim(id, a, 100).is_some());
@@ -796,12 +836,26 @@ mod tests {
         let mut reg = BountyTokenStore::default();
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
-        insert(&mut reg, Bounty::simple(
-            id1, "claimed".into(), BountyObjective::WorkAtBuilding, 5, vec![],
-        ));
-        insert(&mut reg, Bounty::simple(
-            id2, "available".into(), BountyObjective::WorkAtBuilding, 5, vec![],
-        ));
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id1,
+                "claimed".into(),
+                BountyObjective::WorkAtBuilding,
+                5,
+                vec![],
+            ),
+        );
+        insert(
+            &mut reg,
+            Bounty::simple(
+                id2,
+                "available".into(),
+                BountyObjective::WorkAtBuilding,
+                5,
+                vec![],
+            ),
+        );
         reg.claim(id1, entity(1), 100);
         let avail = reg.available();
         assert_eq!(avail.len(), 1);
@@ -821,8 +875,20 @@ mod tests {
         };
         let bounty_id = Uuid::new_v4();
         let mut log = ActionLog::default();
-        log.log(5, ActionEvent::GoldSpent { amount: 6, building: "cafe".into() });
-        log.log(7, ActionEvent::GoldSpent { amount: 5, building: "cafe".into() });
+        log.log(
+            5,
+            ActionEvent::GoldSpent {
+                amount: 6,
+                building: "cafe".into(),
+            },
+        );
+        log.log(
+            7,
+            ActionEvent::GoldSpent {
+                amount: 5,
+                building: "cafe".into(),
+            },
+        );
         assert!(step.verify(&log, 0, 10, bounty_id, None));
     }
 
@@ -837,7 +903,13 @@ mod tests {
         };
         let bounty_id = Uuid::new_v4();
         let mut log = ActionLog::default();
-        log.log(5, ActionEvent::GoldSpent { amount: 4, building: "cafe".into() });
+        log.log(
+            5,
+            ActionEvent::GoldSpent {
+                amount: 4,
+                building: "cafe".into(),
+            },
+        );
         assert!(!step.verify(&log, 0, 10, bounty_id, None));
     }
 
@@ -852,7 +924,13 @@ mod tests {
         };
         let bounty_id = Uuid::new_v4();
         let mut log = ActionLog::default();
-        log.log(5, ActionEvent::GoldSpent { amount: 10, building: "market".into() });
+        log.log(
+            5,
+            ActionEvent::GoldSpent {
+                amount: 10,
+                building: "market".into(),
+            },
+        );
         assert!(!step.verify(&log, 0, 10, bounty_id, None));
     }
 
@@ -867,7 +945,13 @@ mod tests {
         };
         let bounty_id = Uuid::new_v4();
         let mut log = ActionLog::default();
-        log.log(20, ActionEvent::GoldSpent { amount: 10, building: "cafe".into() });
+        log.log(
+            20,
+            ActionEvent::GoldSpent {
+                amount: 10,
+                building: "cafe".into(),
+            },
+        );
         assert!(!step.verify(&log, 0, 10, bounty_id, None));
     }
 }
