@@ -134,6 +134,10 @@ impl ScenarioBuilder {
                 app.add_plugins(server::agents::AgentPlugin);
                 app.add_plugins(server::network::NetworkPlugin);
 
+                // Insert LLM engine resources (empty config for tests).
+                app.insert_resource(server::llm::config::LlmConfig::default());
+                app.init_resource::<server::llm::session_registry::SessionRegistry>();
+
                 // Insert scenario-specific resources.
                 app.insert_resource(server::network::ws::ServerPort(port));
                 app.insert_resource(ScenarioObserver(snapshot_clone));

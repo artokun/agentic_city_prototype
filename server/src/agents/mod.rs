@@ -4,7 +4,6 @@ pub mod ai;
 pub mod ai_chat;
 pub mod ai_decision;
 pub mod behavior;
-pub mod claude;
 pub mod components;
 pub mod conversation;
 pub mod event_log;
@@ -174,7 +173,6 @@ fn spawn_agents(
 
         // Generate unique personality.
         let personality = personality::generate_personality(name);
-        let claude_model = components::ClaudeModel(model.to_string());
         let profile_ref = match *model {
             "opus" => components::SessionProfileRef("agent-smart".into()),
             _ => components::SessionProfileRef("agent-default".into()),
@@ -187,7 +185,7 @@ fn spawn_agents(
             personality.traits
         );
 
-        commands.spawn((bundle, personality, claude_model, profile_ref));
+        commands.spawn((bundle, personality, profile_ref));
     }
 }
 

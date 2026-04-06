@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 /// Top-level config from `config/llm.toml`.
-#[derive(Debug, Clone, Deserialize, Resource)]
+#[derive(Debug, Clone, Default, Deserialize, Resource)]
 pub struct LlmConfig {
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,

@@ -74,7 +74,6 @@ pub fn spawn_sessions_system(
         &AgentId,
         &AgentName,
         &Personality,
-        &ClaudeModel,
         &SessionProfileRef,
     )>,
     server_port: Option<Res<crate::network::ws::ServerPort>>,
@@ -82,7 +81,7 @@ pub fn spawn_sessions_system(
 ) {
     let port = server_port.map(|p| p.0).unwrap_or(8080);
     let process_registry = proc_registry.map(|r| r.0.clone()).unwrap_or_default();
-    for (entity, agent_id, name, personality, claude_model, profile_ref) in &agents {
+    for (entity, agent_id, name, personality, profile_ref) in &agents {
         if sessions.sessions.contains_key(&entity) {
             continue;
         }
@@ -103,7 +102,7 @@ pub fn spawn_sessions_system(
         let model_name = llm_config
             .profile(&profile_ref.0)
             .and_then(|p| llm_config.effective_model(p))
-            .unwrap_or_else(|| claude_model.0.clone());
+            .unwrap_or_else(|| "haiku".to_string());
 
         // Resolve tool sets from profile.
         let tool_sets = llm_config

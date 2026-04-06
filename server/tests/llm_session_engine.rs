@@ -922,12 +922,10 @@ fn supervisor_factory_functions_exist() {
 }
 
 #[test]
-fn factory_openai_agent_adapter_channels_none_before_start() {
-    // Structural test: before start(), channels don't exist yet.
-    // This is correct behavior — channels are created in start().
-    // The dead-wired bug was role code creating ITS OWN channels instead of
-    // using take_event_receiver() after start(). The fix routes through
-    // spawn_session() which calls start() then take_event_receiver() in order.
+fn factory_openai_agent_adapter_has_event_receiver_at_construction() {
+    // Channels are created in the constructor so take_event_receiver() works
+    // before start(). This fixes the dead-wired channel bug where role code
+    // needed the receiver before the stream loop was running.
     let mut adapter = server::llm::supervisor::create_openai_agent_adapter(
         "Alice",
         "uuid-alice",
@@ -935,25 +933,23 @@ fn factory_openai_agent_adapter_channels_none_before_start() {
         "You are Alice.".to_string(),
         vec!["game".to_string()],
     );
-    // Before start(), no channels exist — take returns None.
+    // Event receiver is available immediately.
     let rx = adapter.take_event_receiver();
-    assert!(rx.is_none(), "No event receiver should exist before start()");
-    // send_command should fail before start().
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let err = rt.block_on(adapter.send_command(SessionCommand::SendUserTurn("test".into())));
-    assert!(err.is_err(), "send_command should fail before start()");
+    assert!(rx.is_some(), "Event receiver must exist at construction time");
+    // Second call returns None (already taken).
+    let rx2 = adapter.take_event_receiver();
+    assert!(rx2.is_none(), "take_event_receiver should return None after first take");
 }
 
 #[test]
-fn factory_openai_system_ai_adapter_created_correctly() {
-    let adapter = server::llm::supervisor::create_openai_system_ai_adapter(
+fn factory_openai_system_ai_adapter_has_event_receiver_at_construction() {
+    let mut adapter = server::llm::supervisor::create_openai_system_ai_adapter(
         "gpt-5.4",
         "You are the system AI.".to_string(),
         vec!["system".to_string()],
     );
-    // Structural: the adapter exists as a Box<dyn SessionAdapter>.
-    // Can't call start() without API key, but the factory produces a valid object.
-    let _ = adapter;
+    let rx = adapter.take_event_receiver();
+    assert!(rx.is_some(), "System AI adapter must have event receiver at construction");
 }
 
 #[test]

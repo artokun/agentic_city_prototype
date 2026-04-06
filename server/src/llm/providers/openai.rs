@@ -613,10 +613,14 @@ pub struct OpenAiAdapter {
     model: String,
     /// API base URL.
     api_base: String,
-    /// Command sender — cloned from the handle channels.
+    /// Command sender — used by send_command().
     command_tx: Option<mpsc::Sender<SessionCommand>>,
-    /// Event receiver — taken once by the supervisor.
+    /// Command receiver — created in constructor, consumed by start().
+    command_rx: Option<mpsc::Receiver<SessionCommand>>,
+    /// Event receiver — created in constructor, taken once by take_event_receiver().
     event_rx: Option<mpsc::Receiver<SessionEvent>>,
+    /// Event sender — created in constructor, consumed by start() for the stream loop.
+    event_tx: Option<mpsc::Sender<SessionEvent>>,
     /// System prompt content.
     system_prompt: String,
     /// Tool set names (e.g. ["game"] or ["system"]).
@@ -644,12 +648,16 @@ impl OpenAiAdapter {
         system_prompt: String,
         tool_sets: Vec<String>,
     ) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
+        let (evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
         Self {
             model: model.to_string(),
             api_base: std::env::var("OPENAI_API_BASE")
                 .unwrap_or_else(|_| DEFAULT_API_BASE.to_string()),
-            command_tx: None,
-            event_rx: None,
+            command_tx: Some(cmd_tx),
+            command_rx: Some(cmd_rx),
+            event_rx: Some(evt_rx),
+            event_tx: Some(evt_tx),
             system_prompt,
             tool_sets,
             label: format!("openai:{agent_name}"),
@@ -667,12 +675,16 @@ impl OpenAiAdapter {
         system_prompt: String,
         tool_sets: Vec<String>,
     ) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
+        let (evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
         Self {
             model: model.to_string(),
             api_base: std::env::var("OPENAI_API_BASE")
                 .unwrap_or_else(|_| DEFAULT_API_BASE.to_string()),
-            command_tx: None,
-            event_rx: None,
+            command_tx: Some(cmd_tx),
+            command_rx: Some(cmd_rx),
+            event_rx: Some(evt_rx),
+            event_tx: Some(evt_tx),
             system_prompt,
             tool_sets,
             label: "openai:system-ai".to_string(),
@@ -702,7 +714,7 @@ impl SessionAdapter for OpenAiAdapter {
         profile: &SessionProfile,
         checkpoint: Option<&SessionCheckpoint>,
     ) -> Result<(), AdapterError> {
-        if self.command_tx.is_some() {
+        if self.command_rx.is_none() {
             return Err(AdapterError::AlreadyRunning);
         }
 
@@ -732,12 +744,11 @@ impl SessionAdapter for OpenAiAdapter {
                 self.shared_response_id.try_lock().ok().and_then(|g| g.clone())
             });
 
-        // Create channels.
-        let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
-        let (evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
-
-        self.command_tx = Some(cmd_tx);
-        self.event_rx = Some(evt_rx);
+        // Take pre-created channels (created in constructor).
+        let cmd_rx = self.command_rx.take()
+            .ok_or_else(|| AdapterError::Config("command_rx already consumed".into()))?;
+        let evt_tx = self.event_tx.take()
+            .ok_or_else(|| AdapterError::Config("event_tx already consumed".into()))?;
 
         let config = StreamConfig {
             api_base: self.api_base.clone(),
