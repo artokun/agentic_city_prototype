@@ -87,18 +87,24 @@ pub struct UsageData {
 pub struct SessionCheckpoint {
     pub owner: SessionOwner,
     /// Opaque provider session identifier (e.g. session ID, thread ID).
-    pub provider_id: String,
+    /// `None` for providers without stable conversation IDs.
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model: String,
     pub compact_threshold: u32,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
     pub total_cost_usd: f64,
     /// Provider-specific turn marker for resumption.
-    pub last_turn_marker: String,
+    /// `None` for providers that don't use turn markers.
+    #[serde(default)]
+    pub last_turn_marker: Option<String>,
     /// Compacted context summary (if any).
     pub compacted_context: Option<String>,
     /// Opaque provider-specific metadata.
-    pub provider_metadata: serde_json::Value,
+    /// `None` for providers with no extra state to persist.
+    #[serde(default)]
+    pub provider_metadata: Option<serde_json::Value>,
 }
 
 /// Error type for adapter operations.
