@@ -17,6 +17,10 @@ const structuresTable = $("structures-table");
 const queueInfo = $("queue-info");
 const chatLog = $("chat-log");
 const relsTable = $("rels-table");
+const docModal = $("doc-modal");
+const docTitleEl = $("doc-title");
+const docContentEl = $("doc-content");
+const libraryPanel = $("library-panel");
 
 // Per-agent history (persisted across renders).
 const agentThoughts: Record<string, string[]> = {};
@@ -29,6 +33,19 @@ const MAX_CONVO_HISTORY = 50;
 
 let messageCount = 0;
 setInterval(() => { msgRate.textContent = `${messageCount} msg/s`; messageCount = 0; }, 1000);
+
+async function openDocumentModal(agentName: string, docTitle: string) {
+  const agent = agentName.toLowerCase();
+  const encodedTitle = encodeURIComponent(docTitle);
+  const resp = await fetch(`/api/documents/${agent}/${encodedTitle}`);
+  if (!resp.ok) {
+    throw new Error(`Failed to load ${docTitle} (${resp.status})`);
+  }
+  const text = await resp.text();
+  docTitleEl.textContent = docTitle;
+  docContentEl.textContent = text;
+  docModal.style.display = "flex";
+}
 
 function connect() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -55,6 +72,15 @@ function itemClass(name: string): string {
   if (name.includes("document") || name.includes("Document") || name.includes(".md")) return "item-doc";
   if (name.includes("egg") || name.includes("Egg")) return "item-egg";
   return "";
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function render(s: WorldSnapshot) {
@@ -110,18 +136,19 @@ function render(s: WorldSnapshot) {
 
     // Inventory items
     let invHtml = "";
+    const hasNamedDocs = Array.from({ length: a.inventoryLength() }, (_, idx) => a.inventory(idx))
+      .some((slot) => (slot?.itemType() ?? "").startsWith("doc:"));
     for (let j = 0; j < a.inventoryLength(); j++) {
       const slot = a.inventory(j);
       if (slot) {
         const itemName = slot.itemType() ?? "?";
+        if (itemName === "document" && hasNamedDocs) continue;
         const cls = itemClass(itemName);
         if (itemName.startsWith("doc:")) {
-          // Clickable document — fetches and shows in modal
           const docTitle = itemName.substring(4);
-          const docUrl = `/api/documents/${agentName.toLowerCase()}/${docTitle}`;
-          invHtml += `<span class="item item-doc" style="cursor:pointer" title="Click to read" onclick="fetch('${docUrl}').then(r=>r.text()).then(t=>{const m=document.getElementById('doc-modal')!;document.getElementById('doc-content')!.textContent=t;document.getElementById('doc-title')!.textContent='${docTitle}';m.style.display='flex'})">${docTitle}</span>`;
+          invHtml += `<button class="item item-doc doc-link" type="button" data-agent="${escapeHtml(agentName)}" data-doc-title="${escapeHtml(docTitle)}" title="Click to read">${escapeHtml(docTitle)}</button>`;
         } else {
-          invHtml += `<span class="item ${cls}">${itemName}${slot.count() > 1 ? ` x${slot.count()}` : ''}</span>`;
+          invHtml += `<span class="item ${cls}">${escapeHtml(itemName)}${slot.count() > 1 ? ` x${slot.count()}` : ""}</span>`;
         }
       }
     }
@@ -215,7 +242,9 @@ function render(s: WorldSnapshot) {
     if (entry.kind() === "speech") {
       const agent = entry.agent() ?? "?";
       const text = entry.text() ?? "";
-      const key = `${agent}:${text}`;
+      // Strip "[to X] " prefix for dedup — activeChat has raw text, eventLog has "[to Partner] text".
+      const rawText = text.replace(/^\[to [^\]]+\]\s*/, "");
+      const key = `${agent}:${rawText}`;
       if (!seenMessages.has(key)) {
         seenMessages.add(key);
         conversationHistory.push({ speaker: agent, text });
@@ -311,9 +340,9 @@ function render(s: WorldSnapshot) {
 }
 
 const AGENT_COLORS: Record<string, string> = {
-  "Alice": "#ff6b6b",
-  "Bob": "#4ecdc4",
-  "Carol": "#ffe66d",
+  "Alice Haiku": "#ff6b6b",
+  "Bob Sonnet": "#4ecdc4",
+  "Carol Opus": "#ffe66d",
   "SYSTEM": "#635bff",
 };
 function agentColor(name: string): string {
@@ -321,6 +350,69 @@ function agentColor(name: string): string {
 }
 
 connect();
+
+// Library panel — poll every 5 seconds.
+interface LibraryDoc { title: string; author: string; bounty: string; tick: number; content: string; }
+let libraryCache: LibraryDoc[] = [];
+
+async function fetchLibrary() {
+  try {
+    const resp = await fetch("/api/library");
+    if (resp.ok) {
+      libraryCache = await resp.json();
+      renderLibrary();
+    }
+  } catch { /* ignore */ }
+}
+
+function renderLibrary() {
+  if (libraryCache.length === 0) {
+    libraryPanel.innerHTML = '<span class="muted">No documents archived yet</span>';
+    return;
+  }
+  let html = "";
+  for (const doc of libraryCache) {
+    html += `<div class="lib-entry" data-lib-title="${escapeHtml(doc.title)}" data-lib-author="${escapeHtml(doc.author)}">
+      <div class="lib-title">${escapeHtml(doc.title)}</div>
+      <div class="lib-meta">by ${escapeHtml(doc.author)} — ${escapeHtml(doc.bounty)}</div>
+    </div>`;
+  }
+  libraryPanel.innerHTML = html;
+}
+
+libraryPanel.addEventListener("click", (event) => {
+  const entry = (event.target as HTMLElement).closest(".lib-entry") as HTMLElement | null;
+  if (!entry) return;
+  const title = entry.dataset.libTitle ?? "";
+  const author = entry.dataset.libAuthor ?? "";
+  const doc = libraryCache.find(d => d.title === title && d.author === author);
+  if (doc) {
+    docTitleEl.textContent = `${doc.title} (by ${doc.author})`;
+    docContentEl.textContent = doc.content;
+    docModal.style.display = "flex";
+  }
+});
+
+fetchLibrary();
+setInterval(fetchLibrary, 5000);
+
+agentCardsEl.addEventListener("click", async (event) => {
+  const target = event.target as HTMLElement | null;
+  const docLink = target?.closest(".doc-link") as HTMLElement | null;
+  if (!docLink) return;
+
+  const agentName = docLink.dataset.agent;
+  const title = docLink.dataset.docTitle;
+  if (!agentName || !title) return;
+
+  try {
+    await openDocumentModal(agentName, title);
+  } catch (err) {
+    docTitleEl.textContent = title;
+    docContentEl.textContent = err instanceof Error ? err.message : String(err);
+    docModal.style.display = "flex";
+  }
+});
 
 // Contract creation form
 const form = document.getElementById("contract-form") as HTMLFormElement;
