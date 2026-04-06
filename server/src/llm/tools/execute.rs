@@ -233,3 +233,133 @@ fn forward_post(url: &str, body: &Value) -> Result<String, String> {
         .or_else(|| serde_json::to_string_pretty(&body).ok())
         .ok_or_else(|| "Empty response".to_string())
 }
+
+// ---------------------------------------------------------------------------
+// Async variants — used by in-process adapters (OpenAI) that run inside tokio.
+// The blocking variants above are used by MCP stdio wrappers.
+// ---------------------------------------------------------------------------
+
+/// Async POST to game server.
+async fn forward_post_async(url: &str, body: &Value) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server returned {}", resp.status()));
+    }
+
+    let body: Value = resp.json().await.map_err(|e| format!("JSON error: {e}"))?;
+    body.get("result")
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| serde_json::to_string_pretty(&body).ok())
+        .ok_or_else(|| "Empty response".to_string())
+}
+
+/// Async version of execute_game_action.
+pub async fn execute_game_action_async(
+    arguments: &Value,
+    agent_name: &str,
+    agent_id: &str,
+) -> ToolCallResult {
+    let mut args = arguments.clone();
+    args["agent_name"] = json!(agent_name);
+    args["agent_id"] = json!(agent_id);
+
+    let result = forward_post_async(&format!("{}/api/action", game_server_url()), &args).await;
+    match result {
+        Ok(response) => ToolCallResult {
+            id: String::new(),
+            output: response,
+            is_error: false,
+        },
+        Err(e) => ToolCallResult {
+            id: String::new(),
+            output: format!("Game server error: {e}"),
+            is_error: true,
+        },
+    }
+}
+
+/// Async version of execute_system_tool.
+pub async fn execute_system_tool_async(
+    tool_name: &str,
+    arguments: &Value,
+    mut inspected_docs: Option<&mut std::collections::HashSet<String>>,
+) -> ToolCallResult {
+    let base = game_server_url();
+    let result = match tool_name {
+        "query_world_state" => {
+            let query = arguments.get("query").and_then(|q| q.as_str()).unwrap_or("");
+            // Async GET.
+            let client = reqwest::Client::new();
+            match client.get(format!("{base}/api/gm/query")).query(&[("q", query)]).send().await {
+                Ok(resp) if resp.status().is_success() => Ok(resp.text().await.unwrap_or_default()),
+                Ok(resp) => Err(format!("Server error: {}", resp.status())),
+                Err(e) => Err(format!("Connection error: {e}")),
+            }
+        }
+        "read_document" => {
+            let agent_name = arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or("").trim().to_ascii_lowercase();
+            let title = arguments.get("title").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+            if agent_name.is_empty() || title.is_empty() {
+                Err("read_document requires non-empty agent_name and title.".into())
+            } else {
+                let url = format!("{base}/api/documents/{agent_name}/{title}");
+                let client = reqwest::Client::new();
+                match client.get(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let content = resp.text().await.unwrap_or_default();
+                        if let Some(ref mut docs) = inspected_docs {
+                            let key = super::policy::document_key(&agent_name, &title, content.len());
+                            docs.insert(key);
+                        }
+                        Ok(content)
+                    }
+                    Ok(resp) => Err(format!("Server error: {}", resp.status())),
+                    Err(e) => Err(format!("Connection error: {e}")),
+                }
+            }
+        }
+        "approve" | "reject" => {
+            let approved = tool_name == "approve";
+            let bounty_id = arguments.get("bounty_id").and_then(|b| b.as_str()).unwrap_or("");
+            let message = arguments.get("message").and_then(|m| m.as_str())
+                .unwrap_or(if approved { "approved" } else { "rejected" });
+
+            if let Some(ref docs) = inspected_docs {
+                if let Ok(required) = super::policy::required_document_keys(bounty_id) {
+                    if let Err(msg) = super::policy::validate_document_inspection(&required, docs) {
+                        return ToolCallResult {
+                            id: String::new(),
+                            output: format!("BLOCKED: {}. Read all submitted documents first.", msg),
+                            is_error: true,
+                        };
+                    }
+                }
+            }
+
+            let body = json!({ "bounty_id": bounty_id, "approved": approved, "reason": message });
+            forward_post_async(&format!("{base}/api/gm/verdict"), &body).await
+        }
+        "grant_gold" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "amount": arguments.get("amount").and_then(|a| a.as_u64()).unwrap_or(0),
+                "reason": arguments.get("reason").and_then(|r| r.as_str()).unwrap_or(""),
+            });
+            forward_post_async(&format!("{base}/api/gm/grant_gold"), &body).await
+        }
+        _ => Err(format!("Unknown system tool: {tool_name}")),
+    };
+
+    match result {
+        Ok(output) => ToolCallResult { id: String::new(), output, is_error: false },
+        Err(e) => ToolCallResult { id: String::new(), output: e, is_error: true },
+    }
+}

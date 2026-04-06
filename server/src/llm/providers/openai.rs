@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use crate::llm::config::SessionProfile;
 use crate::llm::supervisor::SessionAdapter;
 use crate::llm::tools::catalog::tools_for_set;
-use crate::llm::tools::execute::{execute_game_action, execute_system_tool};
+use crate::llm::tools::execute::{execute_game_action_async, execute_system_tool_async};
 use crate::llm::tools::schema::to_openai_functions;
 use crate::llm::types::{
     AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, SessionOwner, ToolCallRequest,
@@ -338,6 +338,9 @@ async fn stream_loop(
                     Err(e) => {
                         tracing::error!("[{}] stream error: {e}", config.label);
                         let _ = event_tx.send(SessionEvent::Error(e)).await;
+                        // Clear the response chain so the next turn starts fresh.
+                        previous_response_id = None;
+                        *shared_response_id.lock().await = None;
                     }
                 }
             }
@@ -452,7 +455,8 @@ async fn run_with_tool_loop(
                 &tc.arguments,
                 config.agent_identity.as_ref(),
                 Some(inspected_docs),
-            );
+            )
+            .await;
 
             tracing::info!(
                 "[{}] tool {} -> {} (err={})",
@@ -479,7 +483,7 @@ async fn run_with_tool_loop(
 }
 
 /// Execute a single tool call through the shared local tool runtime.
-fn execute_tool_call(
+async fn execute_tool_call(
     tool_name: &str,
     arguments: &serde_json::Value,
     agent_identity: Option<&(String, String)>,
@@ -490,11 +494,11 @@ fn execute_tool_call(
             let (name, id) = agent_identity
                 .map(|(n, i)| (n.as_str(), i.as_str()))
                 .unwrap_or(("unknown", ""));
-            execute_game_action(arguments, name, id)
+            execute_game_action_async(arguments, name, id).await
         }
         _ => {
             // System tools — pass inspection tracking for policy enforcement.
-            execute_system_tool(tool_name, arguments, inspected_docs)
+            execute_system_tool_async(tool_name, arguments, inspected_docs).await
         }
     }
 }

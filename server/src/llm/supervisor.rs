@@ -182,11 +182,30 @@ async fn spawn_openai_session(
 
     tokio::spawn(async move {
         let mut evt_rx = evt_rx;
+        // Accumulate text deltas into complete thoughts.
+        // Flush on Completed, ToolCallRequested, Error, or when the channel closes.
+        let mut pending_text = String::new();
+
         while let Some(event) = evt_rx.recv().await {
             match event {
                 SessionEvent::TextDelta(text) => {
-                    let msg = format!("thought:{}", text);
-                    let _ = response_tx.send(msg).await;
+                    pending_text.push_str(&text);
+                }
+                SessionEvent::Completed | SessionEvent::CompactCompleted => {
+                    // Flush accumulated text as a complete thought.
+                    if !pending_text.trim().is_empty() {
+                        let msg = format!("thought:{}", pending_text.trim());
+                        let _ = response_tx.send(msg).await;
+                        pending_text.clear();
+                    }
+                }
+                SessionEvent::ToolCallRequested(_) => {
+                    // Flush text before tool call (the thinking before the action).
+                    if !pending_text.trim().is_empty() {
+                        let msg = format!("thought:{}", pending_text.trim());
+                        let _ = response_tx.send(msg).await;
+                        pending_text.clear();
+                    }
                 }
                 SessionEvent::Usage(usage) => {
                     let _ = token_tx
@@ -198,10 +217,20 @@ async fn spawn_openai_session(
                         .await;
                 }
                 SessionEvent::Error(msg) => {
+                    // Flush any pending text first.
+                    if !pending_text.trim().is_empty() {
+                        let m = format!("thought:{}", pending_text.trim());
+                        let _ = response_tx.send(m).await;
+                        pending_text.clear();
+                    }
                     tracing::warn!("[openai:{}] session error: {}", label, msg);
                 }
-                _ => {}
             }
+        }
+        // Flush any remaining text when channel closes.
+        if !pending_text.trim().is_empty() {
+            let msg = format!("thought:{}", pending_text.trim());
+            let _ = response_tx.send(msg).await;
         }
     });
 
