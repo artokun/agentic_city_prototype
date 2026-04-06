@@ -46,6 +46,10 @@ pub enum LogKind {
     System,
     /// AI decision result.
     Decision,
+    /// Game Master verdict on a bounty.
+    GmVerdict,
+    /// Game Master thinking/reasoning.
+    GmThinking,
 }
 
 impl LogKind {
@@ -56,6 +60,8 @@ impl LogKind {
             LogKind::Speech => "speech",
             LogKind::System => "system",
             LogKind::Decision => "decision",
+            LogKind::GmVerdict => "gm_verdict",
+            LogKind::GmThinking => "gm_thinking",
         }
     }
 }
