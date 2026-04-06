@@ -13,7 +13,7 @@ use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
 use crate::llm::config::LlmConfig;
 use crate::llm::session_registry::SessionRegistry;
-use crate::llm::types::{AgentIdentity, SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
+use crate::llm::types::{AgentIdentity, SessionOwner, COMPACT_COMMAND};
 use crate::network::agent_relay::AgentRelays;
 use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -143,230 +143,77 @@ pub fn spawn_sessions_system(
         let process_registry = process_registry.clone();
         let sys_prompt_clone = system_prompt;
         let relays_clone = relays.0.clone();
+        let llm_config_clone = llm_config.clone();
 
-        match provider_type.as_str() {
-            "openai_responses" => {
-                // OpenAI: self-contained adapter with HTTP SSE, no relay needed.
-                let model = model_name.clone();
-                let agent_name_clone = agent_name.clone();
-                let agent_uuid_clone = agent_uuid.clone();
+        // Unified spawn path — the factory handles provider routing.
+        let profile_name = profile_ref.0.clone();
+        runtime.spawn_background_task(move |mut ctx| async move {
+            let spawn_params = crate::llm::supervisor::SpawnParams {
+                profile_name: profile_name.clone(),
+                system_prompt: sys_prompt_clone.clone(),
+                agent_identity: Some(AgentIdentity {
+                    name: agent_name.clone(),
+                    uuid: agent_uuid.clone(),
+                }),
+                ws_port: port,
+                process_registry: process_registry.clone(),
+                agent_relays: Some(relays_clone),
+                system_relay: None,
+            };
 
-                runtime.spawn_background_task(move |mut ctx| async move {
-                    // Create command/event channels for the gameplay interface.
-                    let (cmd_tx, _cmd_rx) = mpsc::channel::<SessionCommand>(64);
-                    let (_evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
-
-                    // Create a bridge: prompt_tx (String) -> cmd_tx (SessionCommand).
-                    let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(32);
-                    let cmd_tx_bridge = cmd_tx.clone();
-                    tokio::spawn(async move {
-                        while let Some(text) = prompt_rx.recv().await {
-                            if text == COMPACT_COMMAND {
-                                let _ = cmd_tx_bridge.send(SessionCommand::Compact).await;
-                            } else {
-                                let _ = cmd_tx_bridge
-                                    .send(SessionCommand::SendUserTurn(text))
-                                    .await;
-                            }
-                        }
-                    });
-
-                    // Create a bridge: evt_rx (SessionEvent) -> response_tx (String) + token_tx.
-                    let (response_tx, response_rx) = mpsc::channel::<String>(64);
-                    let (token_tx, token_rx) =
-                        mpsc::channel::<crate::network::agent_relay::TokenUsageEvent>(64);
-                    let agent_label = agent_name_clone.clone();
-                    tokio::spawn(async move {
-                        let mut evt_rx = evt_rx;
-                        while let Some(event) = evt_rx.recv().await {
-                            match event {
-                                SessionEvent::TextDelta(text) => {
-                                    let msg = format!("thought:{}", text);
-                                    let _ = response_tx.send(msg).await;
-                                }
-                                SessionEvent::Usage(usage) => {
-                                    let _ = token_tx
-                                        .send(
-                                            crate::network::agent_relay::TokenUsageEvent {
-                                                input_tokens: usage.input_tokens,
-                                                output_tokens: usage.output_tokens,
-                                                cost_usd: usage.cost_usd,
-                                            },
-                                        )
-                                        .await;
-                                }
-                                SessionEvent::Error(msg) => {
-                                    tracing::warn!(
-                                        "[openai:{}] session error: {}",
-                                        agent_label,
-                                        msg
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                    });
-
-                    // Start the OpenAI adapter via factory.
-                    let mut adapter =
-                        crate::llm::supervisor::create_openai_agent_adapter(
-                            &agent_name_clone,
-                            &agent_uuid_clone,
-                            &model,
-                            sys_prompt_clone.clone(),
-                            tool_sets,
-                        );
-
-                    let profile = crate::llm::config::SessionProfile {
-                        provider: "openai".to_string(),
-                        model: Some(model.clone()),
-                        system_prompt_file: None,
-                        compact_threshold: 50_000,
-                        tool_sets: vec!["game".to_string()],
-                    };
-
-                    if let Err(e) = adapter.start(&profile, None).await {
-                        tracing::error!(
-                            "[openai:{}] failed to start: {}",
-                            agent_name_clone,
-                            e
-                        );
-                        ctx.run_on_main_thread(move |main_ctx| {
-                            let world = main_ctx.world;
-                            let mut sessions =
-                                world.resource_mut::<AgentSessions>();
-                            sessions.sessions.remove(&entity_copy);
-                        })
-                        .await;
-                        return;
-                    }
-
-                    // Send intro message via command channel.
-                    let intro = build_intro_message(&agent_name_clone);
-                    let _ = cmd_tx.send(SessionCommand::SendUserTurn(intro)).await;
-
-                    let ptx_clone = prompt_tx.clone();
-                    let rrx_clone = Arc::new(Mutex::new(response_rx));
-                    let token_rx_clone = Arc::new(Mutex::new(token_rx));
-                    let uuid_for_main = agent_uuid_clone.clone();
-
+            let bridge = match crate::llm::supervisor::spawn_session(
+                &llm_config_clone, spawn_params,
+            ).await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!("Failed to spawn session for {}: {}", agent_name, e);
                     ctx.run_on_main_thread(move |main_ctx| {
                         let world = main_ctx.world;
-                        let mut sessions =
-                            world.resource_mut::<AgentSessions>();
-                        if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
-                            s.prompt_tx = ptx_clone;
-                            s.response_rx = rrx_clone;
-                            tracing::info!(
-                                "[openai] Session channels updated for {:?}",
-                                entity_copy
-                            );
-                        }
-                        let mut token_queue =
-                            world.resource_mut::<TokenEventQueue>();
-                        token_queue
-                            .receivers
-                            .insert(uuid_for_main, token_rx_clone);
-                    })
-                    .await;
-                });
-            }
+                        let mut sessions = world.resource_mut::<AgentSessions>();
+                        sessions.sessions.remove(&entity_copy);
+                    }).await;
+                    return;
+                }
+            };
 
-            // Default: claude_cli — uses relay + process spawning.
-            _ => {
-                let model_name = model_name.clone();
-                runtime.spawn_background_task(move |mut ctx| async move {
-                    // Register relay for this agent.
-                    let handle = relays_clone.register(&agent_uuid).await;
-
-                    // Spawn Claude process via the adapter factory.
-                    let identity = AgentIdentity {
-                        name: agent_name.clone(),
-                        uuid: agent_uuid.clone(),
-                    };
-                    if let Err(e) =
-                        crate::llm::supervisor::spawn_agent_process(
-                            &identity,
-                            &model_name,
-                            &sys_prompt_clone,
-                            port,
-                            &process_registry,
-                        )
-                        .await
-                    {
-                        tracing::error!(
-                            "Failed to spawn claude for {}: {}",
-                            agent_name,
-                            e
-                        );
-                        ctx.run_on_main_thread(move |main_ctx| {
-                            let world = main_ctx.world;
-                            let mut sessions =
-                                world.resource_mut::<AgentSessions>();
-                            sessions.sessions.remove(&entity_copy);
-                        })
-                        .await;
-                        return;
-                    }
-
-                    // Wait for Claude to connect via WebSocket.
-                    tracing::info!(
-                        "Waiting for Claude to connect for {}...",
-                        agent_name
-                    );
-                    let connected = handle.connected.clone();
-                    tokio::select! {
-                        _ = connected.notified() => {
-                            tracing::info!("Claude connected via --sdk-url for {}", agent_name);
-                        }
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
-                            tracing::error!("Claude connection timeout for {} (90s)", agent_name);
-                            ctx.run_on_main_thread(move |main_ctx| {
-                                let world = main_ctx.world;
-                                let mut sessions = world.resource_mut::<AgentSessions>();
-                                sessions.sessions.remove(&entity_copy);
-                                tracing::info!("Cleared session placeholder for {} — will retry", agent_name);
-                            }).await;
-                            return;
-                        }
-                    }
-
-                    // Wire relay channels into the session state.
-                    let ptx = handle.prompt_tx;
-                    let rrx = Arc::new(Mutex::new(handle.response_rx));
-                    let token_rx = Arc::new(Mutex::new(handle.token_rx));
-
-                    // Send the intro message.
-                    let intro = build_intro_message(&agent_name);
-                    let _ = ptx.send(intro).await;
-
-                    let ptx_clone = ptx.clone();
-                    let rrx_clone = rrx.clone();
-                    let token_rx_clone = token_rx.clone();
-                    let agent_uuid_for_main = agent_uuid.clone();
-
+            // Wait for provider to be ready.
+            let connected = bridge.connected.clone();
+            tokio::select! {
+                _ = connected.notified() => {
+                    tracing::info!("Session connected for {}", agent_name);
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
+                    tracing::error!("Session connection timeout for {} (90s)", agent_name);
                     ctx.run_on_main_thread(move |main_ctx| {
                         let world = main_ctx.world;
-                        let mut sessions =
-                            world.resource_mut::<AgentSessions>();
-                        if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
-                            s.prompt_tx = ptx_clone;
-                            s.response_rx = rrx_clone;
-                            tracing::info!(
-                                "Session channels updated for entity {:?}",
-                                entity_copy
-                            );
-                        }
-                        let mut token_queue =
-                            world.resource_mut::<TokenEventQueue>();
-                        token_queue
-                            .receivers
-                            .insert(agent_uuid_for_main, token_rx_clone);
-                    })
-                    .await;
-                });
+                        let mut sessions = world.resource_mut::<AgentSessions>();
+                        sessions.sessions.remove(&entity_copy);
+                    }).await;
+                    return;
+                }
             }
-        }
+
+            // Send the intro message.
+            let intro = build_intro_message(&agent_name);
+            let _ = bridge.prompt_tx.send(intro).await;
+
+            let ptx_clone = bridge.prompt_tx.clone();
+            let rrx_clone = Arc::new(Mutex::new(bridge.response_rx));
+            let token_rx_clone = Arc::new(Mutex::new(bridge.token_rx));
+            let agent_uuid_for_main = agent_uuid.clone();
+
+            ctx.run_on_main_thread(move |main_ctx| {
+                let world = main_ctx.world;
+                let mut sessions = world.resource_mut::<AgentSessions>();
+                if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
+                    s.prompt_tx = ptx_clone;
+                    s.response_rx = rrx_clone;
+                    tracing::info!("Session channels updated for entity {:?}", entity_copy);
+                }
+                let mut token_queue = world.resource_mut::<TokenEventQueue>();
+                token_queue.receivers.insert(agent_uuid_for_main, token_rx_clone);
+            }).await;
+        });
     }
 }
 

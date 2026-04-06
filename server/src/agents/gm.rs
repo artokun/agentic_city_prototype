@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::config;
 use crate::llm::config::LlmConfig;
 use crate::llm::session_registry::SessionRegistry;
-use crate::llm::types::{SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
+use crate::llm::types::{SessionOwner, COMPACT_COMMAND};
 use crate::network::agent_relay::TokenUsageEvent;
 use crate::network::system_relay::SystemRelayResource;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -168,186 +168,74 @@ pub fn spawn_system_ai_session_system(
         crate::llm::supervisor::create_handle_channels("system-ai");
     registry.register(owner, reg_handle);
 
-    match provider_type.as_str() {
-        "openai_responses" => {
-            let system_prompt_clone = system_prompt.clone();
-            runtime.spawn_background_task(move |mut ctx| async move {
-                // Create bridged channels for gameplay interface.
-                let (cmd_tx, _cmd_rx) = mpsc::channel::<SessionCommand>(64);
-                let (_evt_tx, mut evt_rx) = mpsc::channel::<SessionEvent>(256);
+    // Unified spawn path — the factory handles provider routing.
+    let llm_config_clone = llm_config.clone();
+    runtime.spawn_background_task(move |mut ctx| async move {
+        let spawn_params = crate::llm::supervisor::SpawnParams {
+            profile_name: "system-ai".to_string(),
+            system_prompt: system_prompt.clone(),
+            agent_identity: None,
+            ws_port: port,
+            process_registry: process_registry.clone(),
+            agent_relays: None,
+            system_relay: Some(relays.clone()),
+        };
 
-                let (prompt_tx, mut prompt_bridge_rx) = mpsc::channel::<String>(32);
-                let cmd_tx_bridge = cmd_tx.clone();
-                tokio::spawn(async move {
-                    while let Some(text) = prompt_bridge_rx.recv().await {
-                        if text == COMPACT_COMMAND {
-                            let _ = cmd_tx_bridge.send(SessionCommand::Compact).await;
-                        } else {
-                            let _ = cmd_tx_bridge
-                                .send(SessionCommand::SendUserTurn(text))
-                                .await;
-                        }
-                    }
-                });
-
-                // Bridge events to token tracking.
-                let (token_tx, token_rx) = mpsc::channel::<TokenUsageEvent>(64);
-                let (gm_log_tx, gm_log_rx) =
-                    mpsc::channel::<crate::network::system_relay::GmLogEntry>(64);
-                tokio::spawn(async move {
-                    while let Some(event) = evt_rx.recv().await {
-                        match event {
-                            SessionEvent::TextDelta(text) => {
-                                let _ = gm_log_tx.try_send(
-                                    crate::network::system_relay::GmLogEntry {
-                                        kind: "response",
-                                        text,
-                                    },
-                                );
-                            }
-                            SessionEvent::Usage(usage) => {
-                                let _ = token_tx
-                                    .send(TokenUsageEvent {
-                                        input_tokens: usage.input_tokens,
-                                        output_tokens: usage.output_tokens,
-                                        cost_usd: usage.cost_usd,
-                                    })
-                                    .await;
-                            }
-                            SessionEvent::Error(msg) => {
-                                tracing::warn!("[openai:system-ai] error: {}", msg);
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-
-                // Start the OpenAI adapter via factory.
-                let mut adapter =
-                    crate::llm::supervisor::create_openai_system_ai_adapter(
-                        &model,
-                        system_prompt_clone,
-                        tool_sets,
-                    );
-
-                let profile = crate::llm::config::SessionProfile {
-                    provider: "openai".to_string(),
-                    model: Some(model.clone()),
-                    system_prompt_file: None,
-                    compact_threshold: 15_000,
-                    tool_sets: vec!["system".to_string()],
-                };
-
-                if let Err(e) = adapter.start(&profile, None).await {
-                    tracing::error!("[openai:system-ai] failed to start: {}", e);
-                    ctx.run_on_main_thread(|main_ctx| {
-                        let world = main_ctx.world;
-                        let mut system_ai = world.resource_mut::<SystemAiState>();
-                        system_ai.spawning = false;
-                    })
-                    .await;
-                    return;
-                }
-
-                let prompt_tx_for_main = prompt_tx.clone();
-                let token_rx_for_main = Arc::new(Mutex::new(token_rx));
-                let gm_log_rx_for_main = Arc::new(Mutex::new(gm_log_rx));
-
-                ctx.run_on_main_thread(move |main_ctx| {
+        let bridge = match crate::llm::supervisor::spawn_session(
+            &llm_config_clone, spawn_params,
+        ).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("[SystemAI] Failed to spawn: {}", e);
+                ctx.run_on_main_thread(|main_ctx| {
                     let world = main_ctx.world;
                     let mut system_ai = world.resource_mut::<SystemAiState>();
-                    system_ai.prompt_tx = Some(prompt_tx_for_main);
-                    system_ai.response_rx = None;
-                    system_ai.token_rx = Some(token_rx_for_main);
-                    system_ai.gm_log_rx = Some(gm_log_rx_for_main);
                     system_ai.spawning = false;
-                    system_ai.tokens_since_compact = 0;
-                })
-                .await;
+                }).await;
+                return;
+            }
+        };
 
-                let _ = prompt_tx
-                    .send(
-                        "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
-                            .to_string(),
-                    )
-                    .await;
-            });
+        // Wait for provider to be ready.
+        let connected = bridge.connected.clone();
+        let connected_ok = tokio::select! {
+            _ = connected.notified() => true,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => false,
+        };
+
+        if !connected_ok {
+            tracing::error!("[SystemAI] Connection timeout (90s)");
+            ctx.run_on_main_thread(|main_ctx| {
+                let world = main_ctx.world;
+                let mut system_ai = world.resource_mut::<SystemAiState>();
+                system_ai.spawning = false;
+            }).await;
+            return;
         }
 
-        // Default: claude_cli — uses relay + process spawning.
-        _ => {
-            runtime.spawn_background_task(move |mut ctx| async move {
-                let handle = relays.register().await;
+        tracing::info!("[SystemAI] Session connected");
 
-                // Spawn Claude process via the adapter factory.
-                if let Err(e) =
-                    crate::llm::supervisor::spawn_system_ai_process(
-                        &model,
-                        &system_prompt,
-                        port,
-                        &process_registry,
-                    )
-                    .await
-                {
-                    tracing::error!("[SystemAI] Failed to spawn: {}", e);
-                    ctx.run_on_main_thread(|main_ctx| {
-                        let world = main_ctx.world;
-                        let mut system_ai = world.resource_mut::<SystemAiState>();
-                        system_ai.spawning = false;
-                    })
-                    .await;
-                    return;
-                }
+        let prompt_tx_for_main = bridge.prompt_tx.clone();
+        let token_rx_for_main = Arc::new(Mutex::new(bridge.token_rx));
 
-                // Wait for Claude to connect via WebSocket.
-                let connected = handle.connected.clone();
-                let connected_ok = tokio::select! {
-                    _ = connected.notified() => true,
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => false,
-                };
+        ctx.run_on_main_thread(move |main_ctx| {
+            let world = main_ctx.world;
+            let mut system_ai = world.resource_mut::<SystemAiState>();
+            system_ai.prompt_tx = Some(prompt_tx_for_main);
+            system_ai.response_rx = None;
+            system_ai.token_rx = Some(token_rx_for_main);
+            system_ai.gm_log_rx = None;
+            system_ai.spawning = false;
+            system_ai.tokens_since_compact = 0;
+        }).await;
 
-                if !connected_ok {
-                    tracing::error!("[SystemAI] Claude connection timeout (90s)");
-                    ctx.run_on_main_thread(|main_ctx| {
-                        let world = main_ctx.world;
-                        let mut system_ai = world.resource_mut::<SystemAiState>();
-                        system_ai.spawning = false;
-                    })
-                    .await;
-                    return;
-                }
-
-                tracing::info!("[SystemAI] Claude connected via --sdk-url");
-
-                let prompt_tx = handle.prompt_tx;
-                let token_rx = Arc::new(Mutex::new(handle.token_rx));
-                let gm_log_rx = Arc::new(Mutex::new(handle.gm_log_rx));
-
-                let prompt_tx_for_main = prompt_tx.clone();
-                let token_rx_for_main = token_rx.clone();
-                let gm_log_rx_for_main = gm_log_rx.clone();
-
-                ctx.run_on_main_thread(move |main_ctx| {
-                    let world = main_ctx.world;
-                    let mut system_ai = world.resource_mut::<SystemAiState>();
-                    system_ai.prompt_tx = Some(prompt_tx_for_main);
-                    system_ai.response_rx = None;
-                    system_ai.token_rx = Some(token_rx_for_main);
-                    system_ai.gm_log_rx = Some(gm_log_rx_for_main);
-                    system_ai.spawning = false;
-                    system_ai.tokens_since_compact = 0;
-                })
-                .await;
-
-                let _ = prompt_tx
-                    .send(
-                        "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
-                            .to_string(),
-                    )
-                    .await;
-            });
-        }
-    }
+        let _ = bridge.prompt_tx
+            .send(
+                "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
+                    .to_string(),
+            )
+            .await;
+    });
 }
 
 /// System: move pending bounty review markers into the persistent System AI queue.
@@ -462,7 +350,8 @@ pub fn system_ai_token_drain_system(mut system_ai: ResMut<SystemAiState>) {
 
 /// System: spawn a research agent for agents using search_internet.
 /// Produces a real document via the configured LLM provider.
-/// Provider selection flows through the `research` profile in llm.toml.
+/// Provider selection flows through the `research` profile in llm.toml
+/// via the unified `run_oneshot()` factory.
 pub fn spawn_research_system(
     mut commands: Commands,
     runtime: ResMut<TokioTasksRuntime>,
@@ -478,33 +367,17 @@ pub fn spawn_research_system(
         let name = agent_name.0.clone();
         let topic = research.topic.clone();
         let agent_uuid = agent_id.0.to_string();
-
-        // Resolve provider from research profile (one-shot, light model).
-        let provider_type = llm_config
-            .profile("research")
-            .and_then(|p| llm_config.provider(&p.provider))
-            .map(|p| p.provider_type.clone())
-            .unwrap_or_else(|| "claude_cli".to_string());
-
-        let model = llm_config
-            .profile("research")
-            .and_then(|p| llm_config.effective_model(p))
-            .unwrap_or_else(|| "haiku".to_string());
+        let config = llm_config.clone();
 
         tracing::info!(
-            "[Research] Spawning {} research agent for {} — topic: {} (model={})",
-            provider_type,
+            "[Research] Spawning research agent for {} — topic: {}",
             name,
             topic,
-            model,
         );
         commands.entity(entity).remove::<PendingResearch>();
 
-        let provider = provider_type.clone();
-        let model_clone = model.clone();
         runtime.spawn_background_task(move |_ctx| async move {
-            spawn_research_agent(&name, &agent_uuid, &topic, &provider, &model_clone)
-                .await;
+            spawn_research_agent(&name, &agent_uuid, &topic, &config).await;
         });
     }
 }
@@ -513,8 +386,7 @@ async fn spawn_research_agent(
     agent_name: &str,
     agent_id: &str,
     topic: &str,
-    provider_type: &str,
-    model: &str,
+    config: &LlmConfig,
 ) {
     let prompt = format!(
         r#"You are a research assistant. Do a brief web search on the following topic and write a short markdown research document (3-5 paragraphs).
@@ -526,15 +398,17 @@ Output ONLY the markdown document, nothing else."#
     );
 
     tracing::info!(
-        "[Research] Launching {} research for {} (agent: {})",
-        provider_type,
+        "[Research] Launching research for {} (agent: {})",
         topic,
         agent_name
     );
 
-    let doc_content = match provider_type {
-        "openai_responses" => run_openai_research(&prompt, model).await,
-        _ => run_claude_research(&prompt, model).await,
+    let doc_content = match crate::llm::supervisor::run_oneshot(config, "research", &prompt).await {
+        Ok(text) => text,
+        Err(e) => {
+            tracing::warn!("[Research] Failed for {}: {}", agent_name, e);
+            format!("Research failed: {e}")
+        }
     };
 
     let title = format!("research_{}.md", &agent_id[..6]);
@@ -555,124 +429,6 @@ Output ONLY the markdown document, nothing else."#
         }))
         .send()
         .await;
-}
-
-/// Run research via Claude CLI one-shot (`claude -p`).
-async fn run_claude_research(prompt: &str, model: &str) -> String {
-    let result = tokio::process::Command::new("claude")
-        .args([
-            "-p",
-            prompt,
-            "--output-format",
-            "text",
-            "--model",
-            model,
-            "--permission-mode",
-            "bypassPermissions",
-        ])
-        .output()
-        .await;
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout).to_string();
-            if text.trim().is_empty() {
-                "Research completed but no content was produced.".to_string()
-            } else {
-                text
-            }
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!(
-                "[Research] Process failed: {}",
-                stderr.chars().take(200).collect::<String>()
-            );
-            format!(
-                "Research failed: {}",
-                stderr.chars().take(100).collect::<String>()
-            )
-        }
-        Err(err) => {
-            tracing::error!("[Research] Failed to spawn: {}", err);
-            format!("Research error: {}", err)
-        }
-    }
-}
-
-/// Run research via OpenAI Responses API as a one-shot request.
-async fn run_openai_research(prompt: &str, model: &str) -> String {
-    let api_key = match std::env::var("OPENAI_API_KEY") {
-        Ok(k) => k,
-        Err(_) => return "Research failed: OPENAI_API_KEY not set".to_string(),
-    };
-    let api_base = std::env::var("OPENAI_API_BASE")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-
-    let client = reqwest::Client::new();
-    let body = serde_json::json!({
-        "model": model,
-        "input": [{
-            "role": "user",
-            "content": prompt,
-        }],
-        "stream": false,
-    });
-
-    match client
-        .post(format!("{api_base}/responses"))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            match resp.json::<serde_json::Value>().await {
-                Ok(val) => {
-                    // Extract text from response output.
-                    val.get("output")
-                        .and_then(|o| o.as_array())
-                        .and_then(|arr| {
-                            arr.iter().find_map(|item| {
-                                if item.get("type")?.as_str()? == "message" {
-                                    item.get("content")?
-                                        .as_array()?
-                                        .iter()
-                                        .find_map(|c| {
-                                            if c.get("type")?.as_str()? == "output_text" {
-                                                c.get("text")?.as_str().map(|s| s.to_string())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .unwrap_or_else(|| {
-                            "Research completed but no content was extracted.".to_string()
-                        })
-                }
-                Err(e) => format!("Research failed: JSON parse error: {e}"),
-            }
-        }
-        Ok(resp) => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            tracing::warn!(
-                "[Research:openai] API error {}: {}",
-                status,
-                &body[..body.len().min(200)]
-            );
-            format!("Research failed: API error {status}")
-        }
-        Err(e) => {
-            tracing::error!("[Research:openai] HTTP error: {}", e);
-            format!("Research error: {e}")
-        }
-    }
 }
 
 fn build_system_ai_prompt() -> String {

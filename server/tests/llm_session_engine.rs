@@ -99,6 +99,39 @@ fn config_nonexistent_profile_returns_none() {
     assert!(config.profile("does-not-exist").is_none());
 }
 
+#[test]
+fn config_missing_file_returns_error() {
+    let result = LlmConfig::from_file("/nonexistent/path/llm.toml");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("failed to read"));
+}
+
+#[test]
+fn config_malformed_toml_returns_error() {
+    let tmp = std::env::temp_dir().join("malformed_llm.toml");
+    std::fs::write(&tmp, "this is [[[not valid toml").unwrap();
+    let result = LlmConfig::from_file(tmp.to_str().unwrap());
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("failed to parse"));
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn config_empty_toml_parses_with_defaults() {
+    let tmp = std::env::temp_dir().join("empty_llm.toml");
+    std::fs::write(&tmp, "").unwrap();
+    let config = LlmConfig::from_file(tmp.to_str().unwrap()).unwrap();
+    assert!(config.providers.is_empty());
+    assert!(config.profiles.is_empty());
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn config_nonexistent_provider_returns_none() {
+    let config = LlmConfig::from_file("../config/llm.toml").unwrap();
+    assert!(config.provider("nonexistent").is_none());
+}
+
 // ===========================================================================
 // Session registry
 // ===========================================================================
@@ -508,6 +541,144 @@ fn build_checkpoint_from_parts() {
 }
 
 // ===========================================================================
+// Checkpoint persistence — optional fields
+// ===========================================================================
+
+#[test]
+fn checkpoint_round_trip_with_all_none_optionals() {
+    let checkpoint = SessionCheckpoint {
+        owner: SessionOwner::Agent("Minimal".to_string()),
+        provider_id: None,
+        model: "haiku".to_string(),
+        compact_threshold: 50_000,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cost_usd: 0.0,
+        last_turn_marker: None,
+        compacted_context: None,
+        provider_metadata: None,
+    };
+
+    let json = serde_json::to_string(&checkpoint).unwrap();
+    let loaded: SessionCheckpoint = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(loaded.owner, checkpoint.owner);
+    assert!(loaded.provider_id.is_none());
+    assert!(loaded.last_turn_marker.is_none());
+    assert!(loaded.compacted_context.is_none());
+    assert!(loaded.provider_metadata.is_none());
+}
+
+#[test]
+fn checkpoint_file_persistence_round_trip_none_metadata() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = CheckpointStore::new(dir.path());
+    let owner = SessionOwner::Agent("NullMeta".to_string());
+
+    let checkpoint = SessionCheckpoint {
+        owner: owner.clone(),
+        provider_id: None,
+        model: "haiku".to_string(),
+        compact_threshold: 50_000,
+        total_input_tokens: 100,
+        total_output_tokens: 50,
+        total_cost_usd: 0.01,
+        last_turn_marker: None,
+        compacted_context: None,
+        provider_metadata: None,
+    };
+
+    store.save(&checkpoint).unwrap();
+    let loaded = store.load(&owner).unwrap().expect("should load checkpoint");
+    assert!(loaded.provider_metadata.is_none());
+    assert!(loaded.compacted_context.is_none());
+    assert_eq!(loaded.total_input_tokens, 100);
+}
+
+#[test]
+fn checkpoint_file_persistence_round_trip_with_metadata() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = CheckpointStore::new(dir.path());
+    let owner = SessionOwner::Agent("FullMeta".to_string());
+
+    let metadata = serde_json::json!({"previous_response_id": "resp-abc", "session_id": "sess-xyz"});
+    let checkpoint = SessionCheckpoint {
+        owner: owner.clone(),
+        provider_id: Some("sess-xyz".to_string()),
+        model: "gpt-5.4".to_string(),
+        compact_threshold: 100_000,
+        total_input_tokens: 5000,
+        total_output_tokens: 1000,
+        total_cost_usd: 0.50,
+        last_turn_marker: Some("turn-10".to_string()),
+        compacted_context: Some("Agent was at the market.".to_string()),
+        provider_metadata: Some(metadata.clone()),
+    };
+
+    store.save(&checkpoint).unwrap();
+    let loaded = store.load(&owner).unwrap().expect("should load checkpoint");
+    assert_eq!(loaded.provider_id.as_deref(), Some("sess-xyz"));
+    assert_eq!(loaded.provider_metadata, Some(metadata));
+    assert_eq!(loaded.compacted_context.as_deref(), Some("Agent was at the market."));
+    assert_eq!(loaded.last_turn_marker.as_deref(), Some("turn-10"));
+}
+
+// ===========================================================================
+// SessionRegistry — full lifecycle
+// ===========================================================================
+
+#[test]
+fn registry_full_lifecycle() {
+    let mut registry = SessionRegistry::default();
+    assert!(registry.is_empty());
+
+    // Register multiple owners.
+    let alice = SessionOwner::Agent("Alice".to_string());
+    let bob = SessionOwner::Agent("Bob".to_string());
+    let system = SessionOwner::SystemAi;
+
+    let (h1, _, _) = create_handle_channels("agent-default");
+    let (h2, _, _) = create_handle_channels("agent-default");
+    let (h3, _, _) = create_handle_channels("system-ai");
+
+    registry.register(alice.clone(), h1);
+    registry.register(bob.clone(), h2);
+    registry.register(system.clone(), h3);
+    assert_eq!(registry.len(), 3);
+
+    // Get each one.
+    assert!(registry.get_handle(&alice).is_some());
+    assert!(registry.get_handle(&bob).is_some());
+    assert!(registry.get_handle(&system).is_some());
+
+    // Remove bob.
+    let removed = registry.remove(&bob);
+    assert!(removed.is_some());
+    assert_eq!(removed.unwrap().profile_name, "agent-default");
+    assert_eq!(registry.len(), 2);
+    assert!(registry.get_handle(&bob).is_none());
+
+    // Replace alice's session.
+    let (h4, _, _) = create_handle_channels("agent-smart");
+    let old = registry.register(alice.clone(), h4);
+    assert!(old.is_some());
+    assert_eq!(old.unwrap().profile_name, "agent-default");
+    assert_eq!(registry.get_handle(&alice).unwrap().profile_name, "agent-smart");
+    assert_eq!(registry.len(), 2);
+
+    // List active.
+    let active = registry.list_active();
+    assert_eq!(active.len(), 2);
+}
+
+#[test]
+fn registry_remove_nonexistent_returns_none() {
+    let mut registry = SessionRegistry::default();
+    let result = registry.remove(&SessionOwner::Agent("Ghost".to_string()));
+    assert!(result.is_none());
+}
+
+// ===========================================================================
 // Claude NDJSON protocol parsing
 // ===========================================================================
 
@@ -748,6 +919,73 @@ fn supervisor_factory_functions_exist() {
         vec!["system".to_string()],
     );
     let _ = adapter;
+}
+
+#[test]
+fn factory_openai_agent_adapter_channels_none_before_start() {
+    // Structural test: before start(), channels don't exist yet.
+    // This is correct behavior — channels are created in start().
+    // The dead-wired bug was role code creating ITS OWN channels instead of
+    // using take_event_receiver() after start(). The fix routes through
+    // spawn_session() which calls start() then take_event_receiver() in order.
+    let mut adapter = server::llm::supervisor::create_openai_agent_adapter(
+        "Alice",
+        "uuid-alice",
+        "gpt-5.4",
+        "You are Alice.".to_string(),
+        vec!["game".to_string()],
+    );
+    // Before start(), no channels exist — take returns None.
+    let rx = adapter.take_event_receiver();
+    assert!(rx.is_none(), "No event receiver should exist before start()");
+    // send_command should fail before start().
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let err = rt.block_on(adapter.send_command(SessionCommand::SendUserTurn("test".into())));
+    assert!(err.is_err(), "send_command should fail before start()");
+}
+
+#[test]
+fn factory_openai_system_ai_adapter_created_correctly() {
+    let adapter = server::llm::supervisor::create_openai_system_ai_adapter(
+        "gpt-5.4",
+        "You are the system AI.".to_string(),
+        vec!["system".to_string()],
+    );
+    // Structural: the adapter exists as a Box<dyn SessionAdapter>.
+    // Can't call start() without API key, but the factory produces a valid object.
+    let _ = adapter;
+}
+
+#[test]
+fn spawn_session_rejects_unknown_profile() {
+    // spawn_session should return Err for a profile that doesn't exist.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let config = LlmConfig::from_file("../config/llm.toml").unwrap();
+    let params = server::llm::supervisor::SpawnParams {
+        profile_name: "nonexistent-profile".to_string(),
+        system_prompt: "test".to_string(),
+        agent_identity: None,
+        ws_port: 8080,
+        process_registry: Default::default(),
+        agent_relays: None,
+        system_relay: None,
+    };
+    let result = rt.block_on(server::llm::supervisor::spawn_session(&config, params));
+    match result {
+        Err(e) => assert!(e.contains("unknown profile"), "Expected 'unknown profile', got: {e}"),
+        Ok(_) => panic!("Expected error for nonexistent profile"),
+    }
+}
+
+#[test]
+fn run_oneshot_rejects_unknown_profile() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let config = LlmConfig::from_file("../config/llm.toml").unwrap();
+    let result = rt.block_on(server::llm::supervisor::run_oneshot(
+        &config, "nonexistent-profile", "hello",
+    ));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("unknown profile"));
 }
 
 // ===========================================================================

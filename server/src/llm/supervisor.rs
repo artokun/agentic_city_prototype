@@ -56,13 +56,340 @@ pub fn create_handle_channels(
 }
 
 // ---------------------------------------------------------------------------
-// Adapter factory — role code calls these instead of importing providers
+// Adapter factory — role code calls these instead of importing providers.
+//
+// Two patterns:
+//   1. `spawn_session()` — provider-neutral entry point for persistent sessions.
+//      Returns a SessionBridge with prompt_tx/response_rx/token_rx channels
+//      that look the same regardless of provider. Role code never matches on
+//      provider_type or imports from `crate::llm::providers::*`.
+//
+//   2. `run_oneshot()` — one-shot session for research etc. Sends a prompt,
+//      collects the full response text, returns it.
 // ---------------------------------------------------------------------------
 
+use std::sync::Arc;
+use crate::llm::config::LlmConfig;
+use crate::network::agent_relay::TokenUsageEvent;
+
+/// Handle returned to role code from `spawn_session`.
+/// Same shape regardless of provider — role code never knows what's underneath.
+pub struct SessionBridge {
+    pub prompt_tx: tokio::sync::mpsc::Sender<String>,
+    pub response_rx: tokio::sync::mpsc::Receiver<String>,
+    pub token_rx: tokio::sync::mpsc::Receiver<TokenUsageEvent>,
+    /// Notified when the provider session is ready to receive prompts.
+    /// For OpenAI this fires immediately; for Claude it fires on WebSocket connect.
+    pub connected: Arc<tokio::sync::Notify>,
+}
+
+/// Parameters for spawning a session.
+pub struct SpawnParams {
+    pub profile_name: String,
+    pub system_prompt: String,
+    /// Agent identity (name, uuid). None for system-AI.
+    pub agent_identity: Option<AgentIdentity>,
+    /// WebSocket port for Claude --sdk-url. Ignored by OpenAI.
+    pub ws_port: u16,
+    /// Process registry for Claude PID tracking. Ignored by OpenAI.
+    pub process_registry: ProcessRegistry,
+    /// Agent relay for Claude WebSocket relay registration. Required for Claude agents.
+    pub agent_relays: Option<crate::network::agent_relay::AgentRelays>,
+    /// System relay for Claude system-AI. Required for Claude system-AI.
+    pub system_relay: Option<crate::network::system_relay::SystemRelay>,
+}
+
+/// Spawn a session and return a provider-neutral bridge.
+/// Reads the profile from `LlmConfig`, creates the right adapter, wires channels.
+/// Role code calls this once and gets back prompt_tx/response_rx/token_rx.
+pub async fn spawn_session(
+    config: &LlmConfig,
+    params: SpawnParams,
+) -> Result<SessionBridge, String> {
+    let profile = config.profile(&params.profile_name)
+        .ok_or_else(|| format!("unknown profile: {}", params.profile_name))?;
+    let provider = config.provider(&profile.provider)
+        .ok_or_else(|| format!("unknown provider: {}", profile.provider))?;
+    let model = config.effective_model(profile)
+        .unwrap_or_else(|| provider.model.clone());
+
+    match provider.provider_type.as_str() {
+        "openai_responses" => spawn_openai_session(&model, profile, &params).await,
+        _ => spawn_claude_session(&model, &params).await,
+    }
+}
+
+/// Spawn an OpenAI session with properly wired channels.
+async fn spawn_openai_session(
+    model: &str,
+    profile: &super::config::SessionProfile,
+    params: &SpawnParams,
+) -> Result<SessionBridge, String> {
+    let is_system_ai = params.agent_identity.is_none() && params.system_relay.is_some();
+
+    let mut adapter: Box<dyn SessionAdapter> = if let Some(ref identity) = params.agent_identity {
+        Box::new(crate::llm::providers::openai::OpenAiAdapter::for_agent(
+            &identity.name,
+            &identity.uuid,
+            model,
+            params.system_prompt.clone(),
+            profile.tool_sets.clone(),
+        ))
+    } else {
+        Box::new(crate::llm::providers::openai::OpenAiAdapter::for_system_ai(
+            model,
+            params.system_prompt.clone(),
+            profile.tool_sets.clone(),
+        ))
+    };
+
+    adapter.start(profile, None).await.map_err(|e| e.to_string())?;
+
+    // Take the adapter's event receiver — this is the ONLY connected one.
+    let evt_rx = adapter.take_event_receiver()
+        .ok_or_else(|| "adapter did not produce event receiver".to_string())?;
+
+    // Build the bridge: prompt_tx (String) -> adapter.send_command (SessionCommand).
+    let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(32);
+    let adapter_arc: Arc<tokio::sync::Mutex<Box<dyn SessionAdapter>>> =
+        Arc::new(tokio::sync::Mutex::new(adapter));
+
+    let adapter_for_bridge = adapter_arc.clone();
+    tokio::spawn(async move {
+        while let Some(text) = prompt_rx.recv().await {
+            let cmd = if text == crate::llm::types::COMPACT_COMMAND {
+                SessionCommand::Compact
+            } else {
+                SessionCommand::SendUserTurn(text)
+            };
+            let adapter = adapter_for_bridge.lock().await;
+            if let Err(e) = adapter.send_command(cmd).await {
+                tracing::warn!("[openai-bridge] send_command failed: {}", e);
+                break;
+            }
+        }
+    });
+
+    // Bridge: evt_rx (SessionEvent) -> response_tx (String) + token_tx.
+    let (response_tx, response_rx) = mpsc::channel::<String>(64);
+    let (token_tx, token_rx) = mpsc::channel::<TokenUsageEvent>(64);
+    let label = if is_system_ai {
+        "system-ai".to_string()
+    } else {
+        params.agent_identity.as_ref().map(|i| i.name.clone()).unwrap_or_else(|| "unknown".to_string())
+    };
+
+    tokio::spawn(async move {
+        let mut evt_rx = evt_rx;
+        while let Some(event) = evt_rx.recv().await {
+            match event {
+                SessionEvent::TextDelta(text) => {
+                    let msg = format!("thought:{}", text);
+                    let _ = response_tx.send(msg).await;
+                }
+                SessionEvent::Usage(usage) => {
+                    let _ = token_tx
+                        .send(TokenUsageEvent {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cost_usd: usage.cost_usd,
+                        })
+                        .await;
+                }
+                SessionEvent::Error(msg) => {
+                    tracing::warn!("[openai:{}] session error: {}", label, msg);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // OpenAI is ready immediately (no WebSocket handshake).
+    let connected = Arc::new(tokio::sync::Notify::new());
+    connected.notify_waiters();
+
+    Ok(SessionBridge {
+        prompt_tx,
+        response_rx,
+        token_rx,
+        connected,
+    })
+}
+
+/// Spawn a Claude CLI session with relay-based channels.
+async fn spawn_claude_session(
+    model: &str,
+    params: &SpawnParams,
+) -> Result<SessionBridge, String> {
+    let is_system_ai = params.agent_identity.is_none();
+
+    if is_system_ai {
+        // System AI: use system relay.
+        let relay = params.system_relay.as_ref()
+            .ok_or("system_relay required for claude system-ai")?;
+        let handle = relay.register().await;
+
+        crate::llm::providers::claude::spawn_system_ai_process(
+            model,
+            &params.system_prompt,
+            params.ws_port,
+            &params.process_registry,
+        )
+        .await?;
+
+        // Bridge system relay handle -> SessionBridge.
+        let (token_tx, token_rx) = mpsc::channel::<TokenUsageEvent>(64);
+        let sys_token_rx = handle.token_rx;
+        // Forward token events.
+        tokio::spawn(async move {
+            let mut sys_token_rx = sys_token_rx;
+            while let Some(event) = sys_token_rx.recv().await {
+                let _ = token_tx.send(event).await;
+            }
+        });
+
+        // System relay doesn't have a response_rx in the same shape, create a dummy.
+        let (_response_tx, response_rx) = mpsc::channel::<String>(64);
+
+        Ok(SessionBridge {
+            prompt_tx: handle.prompt_tx,
+            response_rx,
+            token_rx,
+            connected: handle.connected,
+        })
+    } else {
+        // Agent: use agent relay.
+        let identity = params.agent_identity.as_ref()
+            .ok_or("agent_identity required for claude agent")?;
+        let relays = params.agent_relays.as_ref()
+            .ok_or("agent_relays required for claude agent")?;
+
+        let handle = relays.register(&identity.uuid).await;
+
+        crate::llm::providers::claude::spawn_agent_process(
+            identity,
+            model,
+            &params.system_prompt,
+            params.ws_port,
+            &params.process_registry,
+        )
+        .await?;
+
+        Ok(SessionBridge {
+            prompt_tx: handle.prompt_tx,
+            response_rx: handle.response_rx,
+            token_rx: handle.token_rx,
+            connected: handle.connected,
+        })
+    }
+}
+
+/// Run a one-shot LLM request through the session engine.
+/// Creates the right adapter from config, sends the prompt, collects the response.
+/// Used for research and other short-lived tasks.
+pub async fn run_oneshot(
+    config: &LlmConfig,
+    profile_name: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let profile = config.profile(profile_name)
+        .ok_or_else(|| format!("unknown profile: {profile_name}"))?;
+    let provider = config.provider(&profile.provider)
+        .ok_or_else(|| format!("unknown provider: {}", profile.provider))?;
+    let model = config.effective_model(profile)
+        .unwrap_or_else(|| provider.model.clone());
+
+    match provider.provider_type.as_str() {
+        "openai_responses" => run_oneshot_openai(prompt, &model).await,
+        _ => run_oneshot_claude(prompt, &model).await,
+    }
+}
+
+/// One-shot research via Claude CLI (`claude -p`).
+async fn run_oneshot_claude(prompt: &str, model: &str) -> Result<String, String> {
+    let result = tokio::process::Command::new("claude")
+        .args([
+            "-p", prompt,
+            "--output-format", "text",
+            "--model", model,
+            "--permission-mode", "bypassPermissions",
+        ])
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout).to_string();
+            if text.trim().is_empty() {
+                Ok("Research completed but no content was produced.".to_string())
+            } else {
+                Ok(text)
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Process failed: {}", stderr.chars().take(200).collect::<String>()))
+        }
+        Err(err) => Err(format!("Failed to spawn: {err}")),
+    }
+}
+
+/// One-shot research via OpenAI Responses API (non-streaming).
+async fn run_oneshot_openai(prompt: &str, model: &str) -> Result<String, String> {
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .map_err(|_| "OPENAI_API_KEY not set".to_string())?;
+    let api_base = std::env::var("OPENAI_API_BASE")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": model,
+        "input": [{"role": "user", "content": prompt}],
+        "stream": false,
+    });
+
+    let resp = client
+        .post(format!("{api_base}/responses"))
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP error: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(format!("API error {status}: {}", &body_text[..body_text.len().min(200)]));
+    }
+
+    let val: serde_json::Value = resp.json().await
+        .map_err(|e| format!("JSON parse error: {e}"))?;
+
+    Ok(val.get("output")
+        .and_then(|o| o.as_array())
+        .and_then(|arr| arr.iter().find_map(|item| {
+            if item.get("type")?.as_str()? == "message" {
+                item.get("content")?
+                    .as_array()?
+                    .iter()
+                    .find_map(|c| {
+                        if c.get("type")?.as_str()? == "output_text" {
+                            c.get("text")?.as_str().map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            }
+        }))
+        .unwrap_or_else(|| "Research completed but no content was extracted.".to_string()))
+}
+
+// Legacy factory functions kept for backwards compatibility during transition.
+
 /// Spawn a Claude CLI process for an agent session.
-/// The process connects back via WebSocket at `ws://127.0.0.1:{port}/agent/{uuid}/ws`.
-/// This is the provider-neutral entry point — role code should not import
-/// `crate::llm::providers::claude` directly.
 pub async fn spawn_agent_process(
     identity: &AgentIdentity,
     model: &str,
@@ -71,19 +398,11 @@ pub async fn spawn_agent_process(
     process_registry: &ProcessRegistry,
 ) -> Result<(), String> {
     crate::llm::providers::claude::spawn_agent_process(
-        identity,
-        model,
-        system_prompt,
-        ws_port,
-        process_registry,
-    )
-    .await
+        identity, model, system_prompt, ws_port, process_registry,
+    ).await
 }
 
-/// Spawn a Claude CLI process for the system-AI (Game Master) session.
-/// The process connects back via WebSocket at `ws://127.0.0.1:{port}/system/ws`.
-/// This is the provider-neutral entry point — role code should not import
-/// `crate::llm::providers::claude` directly.
+/// Spawn a Claude CLI process for the system-AI session.
 pub async fn spawn_system_ai_process(
     model: &str,
     system_prompt: &str,
@@ -91,16 +410,11 @@ pub async fn spawn_system_ai_process(
     process_registry: &ProcessRegistry,
 ) -> Result<(), String> {
     crate::llm::providers::claude::spawn_system_ai_process(
-        model,
-        system_prompt,
-        ws_port,
-        process_registry,
-    )
-    .await
+        model, system_prompt, ws_port, process_registry,
+    ).await
 }
 
 /// Create an OpenAI adapter for an agent session.
-/// Returns a boxed SessionAdapter ready to be started.
 pub fn create_openai_agent_adapter(
     agent_name: &str,
     agent_id: &str,
@@ -109,25 +423,18 @@ pub fn create_openai_agent_adapter(
     tool_sets: Vec<String>,
 ) -> Box<dyn SessionAdapter> {
     Box::new(crate::llm::providers::openai::OpenAiAdapter::for_agent(
-        agent_name,
-        agent_id,
-        model,
-        system_prompt,
-        tool_sets,
+        agent_name, agent_id, model, system_prompt, tool_sets,
     ))
 }
 
 /// Create an OpenAI adapter for the system-AI session.
-/// Returns a boxed SessionAdapter ready to be started.
 pub fn create_openai_system_ai_adapter(
     model: &str,
     system_prompt: String,
     tool_sets: Vec<String>,
 ) -> Box<dyn SessionAdapter> {
     Box::new(crate::llm::providers::openai::OpenAiAdapter::for_system_ai(
-        model,
-        system_prompt,
-        tool_sets,
+        model, system_prompt, tool_sets,
     ))
 }
 

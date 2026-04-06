@@ -43,12 +43,28 @@ fn test_app() -> App {
 
 #[test]
 fn bounty_injection_seeds_initial_bounties() {
+    // Write embedded test bounties to a temp file so the test doesn't depend
+    // on bounties.json existing at the project root.
+    let test_bounties = serde_json::json!([{
+        "title": "Test Bounty",
+        "instructions": "Do the thing",
+        "hidden_criteria": "GM: approve if done",
+        "objective": "WorkAtBuilding",
+        "reward": 10
+    }]);
+    let tmp = std::env::temp_dir().join("test_bounties.json");
+    std::fs::write(&tmp, test_bounties.to_string()).expect("write temp bounties");
+    std::env::set_var("BOUNTIES_FILE", &tmp);
+
     let mut app = test_app();
     app.init_resource::<server::world::bounty_injector::InjectorState>();
     app.add_systems(Update, bounty_injection_system);
 
     // Tick 0 seeds bounties.
     app.update();
+
+    // Clean up env var before any assertions so it doesn't leak on failure.
+    std::env::remove_var("BOUNTIES_FILE");
 
     // Find the board entity's BountyTokenStore component.
     let available = {
