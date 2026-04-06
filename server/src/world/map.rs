@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 pub const MAP_WIDTH: i32 = 40;
-pub const MAP_HEIGHT: i32 = 40;
+pub const MAP_HEIGHT: i32 = 200;
 
 pub struct MapPlugin;
 
@@ -30,7 +30,10 @@ pub enum TileType {
 
 impl TileType {
     pub fn is_walkable(&self) -> bool {
-        matches!(self, TileType::Street | TileType::Sidewalk | TileType::Park | TileType::Entrance)
+        matches!(
+            self,
+            TileType::Street | TileType::Sidewalk | TileType::Park | TileType::Entrance
+        )
     }
 }
 
@@ -65,7 +68,10 @@ impl TileInventory {
     }
 
     pub fn items_at(&self, x: i32, y: i32) -> &[String] {
-        self.items.get(&tile_key(x, y)).map(|v| v.as_slice()).unwrap_or(&[])
+        self.items
+            .get(&tile_key(x, y))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 }
 
@@ -125,19 +131,74 @@ impl BuildingDef {
 pub fn city_buildings() -> Vec<BuildingDef> {
     vec![
         // === Commercial Row (y: 2..6) ===
-        BuildingDef { name: "cafe",        x: 2,  y: 2,  w: 5, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "google",      x: 10, y: 2,  w: 6, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "market",      x: 20, y: 2,  w: 6, h: 4, entrance: EntranceSide::South },
-
+        BuildingDef {
+            name: "cafe",
+            x: 2,
+            y: 2,
+            w: 5,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
+        BuildingDef {
+            name: "google",
+            x: 10,
+            y: 2,
+            w: 6,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
+        BuildingDef {
+            name: "market",
+            x: 20,
+            y: 2,
+            w: 6,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
         // === Industrial Row (y: 12..16) ===
-        BuildingDef { name: "warehouse",   x: 2,  y: 12, w: 8, h: 4, entrance: EntranceSide::South },
-        BuildingDef { name: "hotel",       x: 14, y: 12, w: 5, h: 4, entrance: EntranceSide::South },
-
-        // === Residential (y: 22..26) ===
-        BuildingDef { name: "apartments",  x: 28, y: 22, w: 6, h: 5, entrance: EntranceSide::West },
-
+        BuildingDef {
+            name: "warehouse",
+            x: 2,
+            y: 12,
+            w: 8,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
+        BuildingDef {
+            name: "hotel",
+            x: 14,
+            y: 12,
+            w: 5,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
+        // === Residential — way down in the redwoods ===
+        BuildingDef {
+            name: "apartments",
+            x: 28,
+            y: 185,
+            w: 6,
+            h: 5,
+            entrance: EntranceSide::West,
+        },
         // === Medical (y: 22..26) ===
-        BuildingDef { name: "hospital",    x: 2,  y: 22, w: 5, h: 4, entrance: EntranceSide::South },
+        BuildingDef {
+            name: "hospital",
+            x: 2,
+            y: 22,
+            w: 5,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
+        // === Library (y: 22..26) ===
+        BuildingDef {
+            name: "library",
+            x: 14,
+            y: 22,
+            w: 5,
+            h: 4,
+            entrance: EntranceSide::South,
+        },
     ]
 }
 
@@ -206,16 +267,25 @@ pub fn init_map(mut commands: Commands) {
 
     match crate::agents::pathfinding::validate_navmesh(&map, &all_entrances) {
         Ok(()) => {
-            tracing::info!("NavMesh validated: all {} entrances are reachable", all_entrances.len());
+            tracing::info!(
+                "NavMesh validated: all {} entrances are reachable",
+                all_entrances.len()
+            );
         }
         Err(unreachable) => {
             for (from, to) in &unreachable {
                 tracing::error!(
                     "NAVMESH ERROR: ({},{}) cannot reach ({},{})",
-                    from.x, from.y, to.x, to.y,
+                    from.x,
+                    from.y,
+                    to.x,
+                    to.y,
                 );
             }
-            panic!("NavMesh validation failed: {} unreachable pairs", unreachable.len());
+            panic!(
+                "NavMesh validation failed: {} unreachable pairs",
+                unreachable.len()
+            );
         }
     }
 
@@ -262,7 +332,11 @@ mod tests {
 
         for bld in &buildings {
             let entrance = bld.entrance_pos();
-            if entrance.x >= 0 && entrance.x < MAP_WIDTH && entrance.y >= 0 && entrance.y < MAP_HEIGHT {
+            if entrance.x >= 0
+                && entrance.x < MAP_WIDTH
+                && entrance.y >= 0
+                && entrance.y < MAP_HEIGHT
+            {
                 tiles.insert(entrance, TileType::Entrance);
             }
         }
@@ -293,7 +367,9 @@ mod tests {
                     assert!(
                         !map.is_walkable(&pos),
                         "Building '{}' tile ({},{}) should not be walkable",
-                        bld.name, x, y,
+                        bld.name,
+                        x,
+                        y,
                     );
                 }
             }
@@ -308,7 +384,9 @@ mod tests {
             assert!(
                 map.is_walkable(&entrance),
                 "Entrance for '{}' at ({},{}) should be walkable",
-                bld.name, entrance.x, entrance.y,
+                bld.name,
+                entrance.x,
+                entrance.y,
             );
         }
     }
@@ -320,14 +398,15 @@ mod tests {
         let street_positions = vec![
             GridPos { x: 0, y: 0 },
             GridPos { x: 39, y: 0 },
-            GridPos { x: 0, y: 39 },
-            GridPos { x: 39, y: 39 },
+            GridPos { x: 0, y: 199 },
+            GridPos { x: 39, y: 199 },
         ];
         for pos in &street_positions {
             assert!(
                 map.is_walkable(pos),
                 "Street tile ({},{}) should be walkable",
-                pos.x, pos.y,
+                pos.x,
+                pos.y,
             );
         }
     }
@@ -345,6 +424,9 @@ mod tests {
     fn out_of_bounds_not_walkable() {
         let map = build_test_map();
         assert!(!map.is_walkable(&GridPos { x: -1, y: 0 }));
-        assert!(!map.is_walkable(&GridPos { x: 0, y: MAP_HEIGHT }));
+        assert!(!map.is_walkable(&GridPos {
+            x: 0,
+            y: MAP_HEIGHT
+        }));
     }
 }

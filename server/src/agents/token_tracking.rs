@@ -14,7 +14,7 @@ pub struct ContextWindow {
     pub tokens_used: u32,
     /// Token budget before energy hits 0. Models have 1M context,
     /// but we cap lower to save on input token costs.
-    /// Set via CONTEXT_LIMIT env var (default 150000).
+    /// Set via CONTEXT_LIMIT env var (default 50000).
     pub context_limit: u32,
 }
 
@@ -53,7 +53,9 @@ pub fn token_drain_system(
 ) {
     for (agent_id, mut ctx, mut cost, mut needs) in &mut agents {
         let uuid_str = agent_id.0.to_string();
-        let Some(rx_arc) = queue.receivers.get(&uuid_str) else { continue };
+        let Some(rx_arc) = queue.receivers.get(&uuid_str) else {
+            continue;
+        };
 
         let mut rx = rx_arc.lock().unwrap();
         while let Ok(event) = rx.try_recv() {
@@ -77,7 +79,11 @@ pub fn token_drain_system(
 
             tracing::debug!(
                 "[tokens:{}] used={}/{}, energy={:.1}, cost=${:.4}",
-                uuid_str, ctx.tokens_used, ctx.context_limit, needs.energy, cost.total_cost_usd
+                uuid_str,
+                ctx.tokens_used,
+                ctx.context_limit,
+                needs.energy,
+                cost.total_cost_usd
             );
         }
     }
@@ -91,7 +97,7 @@ mod tests {
     fn context_window_defaults() {
         let cw = ContextWindow::default();
         assert_eq!(cw.tokens_used, 0);
-        assert_eq!(cw.context_limit, 150_000);
+        assert_eq!(cw.context_limit, 50_000);
     }
 
     #[test]
@@ -104,7 +110,10 @@ mod tests {
     #[test]
     fn energy_at_half_usage() {
         let mut needs = Needs::default();
-        let ctx = ContextWindow { tokens_used: 75_000, context_limit: 150_000 };
+        let ctx = ContextWindow {
+            tokens_used: 75_000,
+            context_limit: 150_000,
+        };
         let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
         needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
         assert_eq!(needs.energy, 50.0);
@@ -113,7 +122,10 @@ mod tests {
     #[test]
     fn energy_at_limit() {
         let mut needs = Needs::default();
-        let ctx = ContextWindow { tokens_used: 150_000, context_limit: 150_000 };
+        let ctx = ContextWindow {
+            tokens_used: 150_000,
+            context_limit: 150_000,
+        };
         let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
         needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
         assert_eq!(needs.energy, 0.0);
@@ -122,7 +134,10 @@ mod tests {
     #[test]
     fn energy_over_limit_clamps() {
         let mut needs = Needs::default();
-        let ctx = ContextWindow { tokens_used: 200_000, context_limit: 150_000 };
+        let ctx = ContextWindow {
+            tokens_used: 200_000,
+            context_limit: 150_000,
+        };
         let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
         needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
         assert_eq!(needs.energy, 0.0);

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
-use crate::items::{Inventory, ItemType};
+use crate::items::{ContainedItems, DocumentInventory, Inventory, ItemType, RestrictedItems};
 use crate::world::bounty::*;
 use crate::world::economy::{GoldReserve, RetailConfig, StockItem, Warehouse};
 use crate::world::map::{city_buildings, GridPos};
@@ -45,6 +45,8 @@ fn spawn_structures(mut commands: Commands) {
             SpriteType(bld.name.into()),
             Entrance(entrance),
             Interactable,
+            ContainedItems::default(),
+            DocumentInventory::default(),
         ));
 
         match bld.name {
@@ -54,7 +56,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Muffin, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 100, // 1g per 150 ticks (~15 sec)
+                    ticks_per_gold: 120,
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
@@ -62,8 +64,18 @@ fn spawn_structures(mut commands: Commands) {
                 ecmds.insert(GoldReserve(100));
                 ecmds.insert(RetailConfig {
                     stock: vec![
-                        StockItem { item: ItemType::Coffee, max: 10, reorder_at: 2, reorder_qty: 10 },
-                        StockItem { item: ItemType::Muffin, max: 10, reorder_at: 2, reorder_qty: 5 },
+                        StockItem {
+                            item: ItemType::Coffee,
+                            max: 10,
+                            reorder_at: 2,
+                            reorder_qty: 10,
+                        },
+                        StockItem {
+                            item: ItemType::Muffin,
+                            max: 10,
+                            reorder_at: 2,
+                            reorder_qty: 5,
+                        },
                     ],
                 });
             }
@@ -75,7 +87,7 @@ fn spawn_structures(mut commands: Commands) {
                 inv.add(ItemType::Rations, 5);
                 ecmds.insert(inv);
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 100,
+                    ticks_per_gold: 120,
                     worker: None,
                     needs_worker: false,
                     food_perk: true,
@@ -83,10 +95,30 @@ fn spawn_structures(mut commands: Commands) {
                 ecmds.insert(GoldReserve(100));
                 ecmds.insert(RetailConfig {
                     stock: vec![
-                        StockItem { item: ItemType::Coffee, max: 10, reorder_at: 2, reorder_qty: 10 },
-                        StockItem { item: ItemType::Muffin, max: 10, reorder_at: 2, reorder_qty: 5 },
-                        StockItem { item: ItemType::Sandwich, max: 10, reorder_at: 2, reorder_qty: 5 },
-                        StockItem { item: ItemType::Rations, max: 10, reorder_at: 2, reorder_qty: 10 },
+                        StockItem {
+                            item: ItemType::Coffee,
+                            max: 10,
+                            reorder_at: 2,
+                            reorder_qty: 10,
+                        },
+                        StockItem {
+                            item: ItemType::Muffin,
+                            max: 10,
+                            reorder_at: 2,
+                            reorder_qty: 5,
+                        },
+                        StockItem {
+                            item: ItemType::Sandwich,
+                            max: 10,
+                            reorder_at: 2,
+                            reorder_qty: 5,
+                        },
+                        StockItem {
+                            item: ItemType::Rations,
+                            max: 10,
+                            reorder_at: 2,
+                            reorder_qty: 10,
+                        },
                     ],
                 });
             }
@@ -108,7 +140,7 @@ fn spawn_structures(mut commands: Commands) {
             "hotel" => {
                 ecmds.insert(Inventory::default());
                 ecmds.insert(Staffable {
-                    ticks_per_gold: 110,
+                    ticks_per_gold: 120,
                     worker: None,
                     needs_worker: false,
                     food_perk: false,
@@ -121,8 +153,11 @@ fn spawn_structures(mut commands: Commands) {
             }
             "apartments" => {
                 let mut inv = Inventory::default();
-                inv.add(ItemType::Rations, 999);
+                inv.add(ItemType::Rations, 1);
                 ecmds.insert(inv);
+            }
+            "library" => {
+                ecmds.insert(Inventory::default());
             }
             "hospital" => {
                 let mut inv = Inventory::default();
@@ -143,6 +178,19 @@ fn spawn_structures(mut commands: Commands) {
         SpriteType("bounty_board".into()),
         Entrance(GridPos { x: 20, y: 32 }),
         Interactable,
+        ContainedItems::default(),
+        RestrictedItems::only([
+            ItemType::BountyToken,
+            ItemType::Document,
+            ItemType::GoldEgg,
+            ItemType::Coffee,
+            ItemType::Muffin,
+            ItemType::Sandwich,
+            ItemType::Rations,
+            ItemType::Soup,
+            ItemType::GoldCoin,
+        ]),
+        DocumentInventory::default(),
         BountyBoard,
         BoardQueue::default(),
         Inventory::default(),
