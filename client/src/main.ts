@@ -225,6 +225,7 @@ function render(s: WorldSnapshot) {
     chatHtml += `<div class="chat-msg"><strong style="color:${agentColor(msg.speaker)}">${msg.speaker}</strong>: ${msg.text}</div>`;
   }
   chatLog.innerHTML = chatHtml || '<span class="muted">No conversations yet</span>';
+  if (chatHtml) chatLog.scrollTop = chatLog.scrollHeight;
 
   // Relationships
   let rh = "";
