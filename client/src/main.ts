@@ -23,8 +23,9 @@ const agentThoughts: Record<string, string[]> = {};
 const agentActions: Record<string, { tick: number; text: string }[]> = {};
 // Conversation history — persists even after conversations end.
 const conversationHistory: { speaker: string; text: string }[] = [];
+const seenMessages = new Set<string>(); // dedup across all ticks
 const MAX_HISTORY = 10;
-const MAX_CONVO_HISTORY = 30;
+const MAX_CONVO_HISTORY = 50;
 
 let messageCount = 0;
 setInterval(() => { msgRate.textContent = `${messageCount} msg/s`; messageCount = 0; }, 1000);
@@ -199,8 +200,9 @@ function render(s: WorldSnapshot) {
         const msg = a.activeChat(j)!;
         const speaker = msg.speaker() ?? "?";
         const text = msg.text() ?? "";
-        const last = conversationHistory.length > 0 ? conversationHistory[conversationHistory.length - 1] : null;
-        if (!last || last.speaker !== speaker || last.text !== text) {
+        const key = `${speaker}:${text}`;
+        if (!seenMessages.has(key)) {
+          seenMessages.add(key);
           conversationHistory.push({ speaker, text });
           if (conversationHistory.length > MAX_CONVO_HISTORY) conversationHistory.shift();
         }
@@ -213,8 +215,9 @@ function render(s: WorldSnapshot) {
     if (entry.kind() === "speech") {
       const agent = entry.agent() ?? "?";
       const text = entry.text() ?? "";
-      const last = conversationHistory.length > 0 ? conversationHistory[conversationHistory.length - 1] : null;
-      if (!last || last.speaker !== agent || last.text !== text) {
+      const key = `${agent}:${text}`;
+      if (!seenMessages.has(key)) {
+        seenMessages.add(key);
         conversationHistory.push({ speaker: agent, text });
         if (conversationHistory.length > MAX_CONVO_HISTORY) conversationHistory.shift();
       }
