@@ -6,6 +6,7 @@
 //!
 //! No OpenAI event names or wire-format details leak outside this module.
 
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::llm::config::SessionProfile;
@@ -14,7 +15,8 @@ use crate::llm::tools::catalog::tools_for_set;
 use crate::llm::tools::execute::{execute_game_action, execute_system_tool};
 use crate::llm::tools::schema::to_openai_functions;
 use crate::llm::types::{
-    AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, ToolCallRequest, UsageData,
+    AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, SessionOwner, ToolCallRequest,
+    UsageData,
 };
 
 /// Default OpenAI API base URL.
@@ -262,6 +264,7 @@ async fn stream_loop(
     event_tx: mpsc::Sender<SessionEvent>,
     config: StreamConfig,
     initial_previous_response_id: Option<String>,
+    shared_response_id: Arc<tokio::sync::Mutex<Option<String>>>,
 ) {
     let client = reqwest::Client::new();
     let tools = compile_tools(&config.tool_sets);
@@ -284,7 +287,8 @@ async fn stream_loop(
                 {
                     Ok(resp_id) => {
                         if !resp_id.is_empty() {
-                            previous_response_id = Some(resp_id);
+                            previous_response_id = Some(resp_id.clone());
+                            *shared_response_id.lock().await = Some(resp_id);
                         }
                     }
                     Err(e) => {
@@ -321,7 +325,8 @@ async fn stream_loop(
                 match stream_response(&client, &config, &body, &event_tx).await {
                     Ok(result) => {
                         if !result.response_id.is_empty() {
-                            previous_response_id = Some(result.response_id);
+                            previous_response_id = Some(result.response_id.clone());
+                            *shared_response_id.lock().await = Some(result.response_id);
                         }
                         let _ = event_tx.send(SessionEvent::CompactCompleted).await;
                     }
@@ -485,71 +490,85 @@ async fn stream_response(
         response_id: String::new(),
         tool_calls: Vec::new(),
     };
-    let text = resp.text().await.map_err(|e| format!("Read error: {e}"))?;
 
-    // SSE format: lines starting with "data: " contain JSON payloads.
-    // "data: [DONE]" signals end of stream.
-    for line in text.lines() {
-        let line = line.trim();
+    // True SSE streaming: read chunks as they arrive, split into lines,
+    // and process each "data: " line incrementally.
+    use futures_util::StreamExt;
+    let mut byte_stream = resp.bytes_stream();
+    let mut line_buf = String::new();
+    let mut done = false;
 
-        if line.is_empty() || line.starts_with(':') {
-            continue;
-        }
+    while let Some(chunk) = byte_stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream read error: {e}"))?;
+        line_buf.push_str(&String::from_utf8_lossy(&chunk));
 
-        if !line.starts_with("data: ") {
-            continue;
-        }
+        // Process all complete lines in the buffer.
+        while let Some(newline_pos) = line_buf.find('\n') {
+            let line: String = line_buf.drain(..=newline_pos).collect();
+            let line = line.trim();
 
-        let data = &line["data: ".len()..];
-
-        if data == "[DONE]" {
-            break;
-        }
-
-        match parse_sse_data(data) {
-            SseEvent::TextDelta(delta) => {
-                let _ = event_tx.send(SessionEvent::TextDelta(delta)).await;
+            if line.is_empty() || line.starts_with(':') {
+                continue;
             }
-            SseEvent::FunctionCall {
-                call_id,
-                name,
-                arguments,
-            } => {
-                let args: serde_json::Value =
-                    serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
-                tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, name, call_id);
-                result.tool_calls.push(CollectedToolCall {
+
+            if !line.starts_with("data: ") {
+                continue;
+            }
+
+            let data = &line["data: ".len()..];
+
+            if data == "[DONE]" {
+                done = true;
+                break;
+            }
+
+            match parse_sse_data(data) {
+                SseEvent::TextDelta(delta) => {
+                    let _ = event_tx.send(SessionEvent::TextDelta(delta)).await;
+                }
+                SseEvent::FunctionCall {
                     call_id,
                     name,
-                    arguments: args,
-                });
-            }
-            SseEvent::Completed { response_id: rid, usage } => {
-                result.response_id = rid;
-                if let Some(u) = usage {
-                    tracing::info!(
-                        "[{}] usage: in={}, out={}",
-                        config.label,
-                        u.input_tokens,
-                        u.output_tokens
-                    );
-                    let cost_usd = estimate_cost(u.input_tokens, u.output_tokens);
-                    let _ = event_tx
-                        .send(SessionEvent::Usage(UsageData {
-                            input_tokens: u.input_tokens,
-                            output_tokens: u.output_tokens,
-                            cost_usd,
-                        }))
-                        .await;
+                    arguments,
+                } => {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
+                    tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, name, call_id);
+                    result.tool_calls.push(CollectedToolCall {
+                        call_id,
+                        name,
+                        arguments: args,
+                    });
                 }
-                // Only emit Completed when there are no tool calls to process.
-                // If there are tool calls, the tool loop will handle completion.
+                SseEvent::Completed { response_id: rid, usage } => {
+                    result.response_id = rid;
+                    if let Some(u) = usage {
+                        tracing::info!(
+                            "[{}] usage: in={}, out={}",
+                            config.label,
+                            u.input_tokens,
+                            u.output_tokens
+                        );
+                        let cost_usd = estimate_cost(u.input_tokens, u.output_tokens);
+                        let _ = event_tx
+                            .send(SessionEvent::Usage(UsageData {
+                                input_tokens: u.input_tokens,
+                                output_tokens: u.output_tokens,
+                                cost_usd,
+                            }))
+                            .await;
+                    }
+                }
+                SseEvent::Error(msg) => {
+                    tracing::warn!("[{}] stream error: {}", config.label, msg);
+                    let _ = event_tx.send(SessionEvent::Error(msg)).await;
+                }
+                SseEvent::Ignored => {}
             }
-            SseEvent::Error(msg) => {
-                tracing::warn!("[{}] stream error: {}", config.label, msg);
-                let _ = event_tx.send(SessionEvent::Error(msg)).await;
-            }
-            SseEvent::Ignored => {}
+        }
+
+        if done {
+            break;
         }
     }
 
@@ -606,12 +625,14 @@ pub struct OpenAiAdapter {
     label: String,
     /// Handle to the background streaming task.
     stream_task: Option<tokio::task::JoinHandle<()>>,
-    /// Last known response ID for chain resumption.
-    last_response_id: Option<String>,
+    /// Shared response ID — updated by stream_loop, read at shutdown.
+    shared_response_id: Arc<tokio::sync::Mutex<Option<String>>>,
     /// API key (resolved at start time).
     api_key_env: String,
     /// Agent identity for tool execution (name, uuid). None for system-AI.
     agent_identity: Option<(String, String)>,
+    /// Session owner for checkpoint metadata.
+    session_owner: SessionOwner,
 }
 
 impl OpenAiAdapter {
@@ -633,9 +654,10 @@ impl OpenAiAdapter {
             tool_sets,
             label: format!("openai:{agent_name}"),
             stream_task: None,
-            last_response_id: None,
+            shared_response_id: Arc::new(tokio::sync::Mutex::new(None)),
             api_key_env: API_KEY_ENV.to_string(),
             agent_identity: Some((agent_name.to_string(), agent_id.to_string())),
+            session_owner: SessionOwner::Agent(agent_name.to_string()),
         }
     }
 
@@ -655,9 +677,10 @@ impl OpenAiAdapter {
             tool_sets,
             label: "openai:system-ai".to_string(),
             stream_task: None,
-            last_response_id: None,
+            shared_response_id: Arc::new(tokio::sync::Mutex::new(None)),
             api_key_env: API_KEY_ENV.to_string(),
             agent_identity: None,
+            session_owner: SessionOwner::SystemAi,
         }
     }
 
@@ -704,7 +727,10 @@ impl SessionAdapter for OpenAiAdapter {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             })
-            .or_else(|| self.last_response_id.clone());
+            .or_else(|| {
+                // Try to get from shared state (sync check).
+                self.shared_response_id.try_lock().ok().and_then(|g| g.clone())
+            });
 
         // Create channels.
         let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
@@ -723,8 +749,9 @@ impl SessionAdapter for OpenAiAdapter {
             agent_identity: self.agent_identity.clone(),
         };
 
-        // Spawn the streaming task.
-        let handle = tokio::spawn(stream_loop(cmd_rx, evt_tx, config, previous_response_id));
+        // Spawn the streaming task with shared response ID for shutdown access.
+        let shared_rid = self.shared_response_id.clone();
+        let handle = tokio::spawn(stream_loop(cmd_rx, evt_tx, config, previous_response_id, shared_rid));
         self.stream_task = Some(handle);
 
         tracing::info!(
@@ -762,14 +789,16 @@ impl SessionAdapter for OpenAiAdapter {
         self.command_tx = None;
         self.event_rx = None;
 
-        // Build a checkpoint with provider metadata containing the last response ID.
-        let metadata = self.last_response_id.as_ref().map(|rid| {
+        // Read the last response ID from shared state (updated by stream_loop).
+        let last_response_id = self.shared_response_id.lock().await.clone();
+
+        let metadata = last_response_id.as_ref().map(|rid| {
             serde_json::json!({ "previous_response_id": rid })
         });
 
         Ok(Some(SessionCheckpoint {
-            owner: crate::llm::types::SessionOwner::Agent("unknown".to_string()),
-            provider_id: self.last_response_id.clone(),
+            owner: self.session_owner.clone(),
+            provider_id: last_response_id,
             model: self.model.clone(),
             compact_threshold: 0,
             total_input_tokens: 0,

@@ -11,8 +11,11 @@ use crate::agents::perception::KnownLocations;
 use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
-use crate::llm::providers::claude::{self, AgentIdentity};
-use crate::llm::types::COMPACT_COMMAND;
+use crate::llm::config::LlmConfig;
+use crate::llm::providers::claude::AgentIdentity;
+use crate::llm::session_registry::SessionRegistry;
+use crate::llm::supervisor::SessionAdapter;
+use crate::llm::types::{SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
 use crate::network::agent_relay::AgentRelays;
 use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -24,6 +27,7 @@ use super::actions::ActionTimer;
 use super::personality::Personality;
 
 /// Bevy resource: tracks sessions per agent.
+/// Wraps the unified SessionRegistry with agent-specific state (decision tick, prompt).
 #[derive(Resource, Default)]
 pub struct AgentSessions {
     pub sessions: HashMap<Entity, SessionState>,
@@ -31,7 +35,7 @@ pub struct AgentSessions {
 
 impl AgentSessions {
     /// Send a compaction command to the agent's session.
-    /// Translates SessionCommand::Compact to the underlying transport.
+    /// Uses the unified SessionCommand::Compact via the registry channel.
     pub fn send_compact(&self, entity: &Entity) -> bool {
         if let Some(session) = self.sessions.get(entity) {
             session.prompt_tx.try_send(COMPACT_COMMAND.to_string()).is_ok()
@@ -54,33 +58,66 @@ pub struct AgentRelaysResource(pub AgentRelays);
 
 use crate::config;
 
-/// System: spawn Claude sessions via the adapter for agents.
-/// Delegates process spawning, MCP config, and relay setup to the Claude adapter.
+/// System: spawn LLM sessions for agents via the unified session engine.
+/// Reads each agent's `SessionProfileRef` to resolve provider and model from `LlmConfig`.
+/// For `claude_cli` providers: spawns process via Claude adapter + relay.
+/// For `openai_responses` providers: spawns self-contained streaming task.
+/// Registers all sessions in `SessionRegistry` for lifecycle tracking.
 pub fn spawn_sessions_system(
     runtime: ResMut<TokioTasksRuntime>,
     mut sessions: ResMut<AgentSessions>,
+    mut registry: ResMut<SessionRegistry>,
     relays: Res<AgentRelaysResource>,
-    agents: Query<(Entity, &AgentId, &AgentName, &Personality, &ClaudeModel)>,
+    llm_config: Res<LlmConfig>,
+    agents: Query<(
+        Entity,
+        &AgentId,
+        &AgentName,
+        &Personality,
+        &ClaudeModel,
+        &SessionProfileRef,
+    )>,
     server_port: Option<Res<crate::network::ws::ServerPort>>,
     proc_registry: Option<Res<crate::process_manager::ProcessRegistryRes>>,
 ) {
     let port = server_port.map(|p| p.0).unwrap_or(8080);
     let process_registry = proc_registry.map(|r| r.0.clone()).unwrap_or_default();
-    for (entity, agent_id, name, personality, claude_model) in &agents {
+    for (entity, agent_id, name, personality, claude_model, profile_ref) in &agents {
         if sessions.sessions.contains_key(&entity) {
             continue;
         }
 
         let agent_name = name.0.clone();
         let agent_uuid = agent_id.0.to_string();
-        let model_name = claude_model.0.clone();
         let system_prompt = super::personality::build_system_prompt(&name.0, personality);
-        let relays_clone = relays.0.clone();
+
+        // Resolve provider type from profile. Fall back to claude_cli.
+        let provider_type = llm_config
+            .profile(&profile_ref.0)
+            .and_then(|p| llm_config.provider(&p.provider))
+            .map(|p| p.provider_type.as_str())
+            .unwrap_or("claude_cli")
+            .to_string();
+
+        // Resolve effective model: profile override > component > provider default.
+        let model_name = llm_config
+            .profile(&profile_ref.0)
+            .and_then(|p| llm_config.effective_model(p))
+            .unwrap_or_else(|| claude_model.0.clone());
+
+        // Resolve tool sets from profile.
+        let tool_sets = llm_config
+            .profile(&profile_ref.0)
+            .map(|p| p.tool_sets.clone())
+            .unwrap_or_else(|| vec!["game".to_string()]);
 
         tracing::info!(
-            "Spawning Claude session for {} ({})",
+            "Spawning {} session for {} ({}) [profile={}, model={}]",
+            provider_type,
             agent_name,
-            agent_uuid
+            agent_uuid,
+            profile_ref.0,
+            model_name,
         );
 
         // Insert placeholder session — will be replaced with real channels on connect.
@@ -96,88 +133,240 @@ pub fn spawn_sessions_system(
             },
         );
 
+        // Register in SessionRegistry for lifecycle tracking.
+        let owner = SessionOwner::Agent(agent_name.clone());
+        let (reg_handle, _, _) =
+            crate::llm::supervisor::create_handle_channels(&profile_ref.0);
+        registry.register(owner, reg_handle);
+
         let entity_copy = entity;
         let process_registry = process_registry.clone();
         let sys_prompt_clone = system_prompt;
+        let relays_clone = relays.0.clone();
 
-        runtime.spawn_background_task(move |mut ctx| async move {
-            // Register relay for this agent.
-            let handle = relays_clone.register(&agent_uuid).await;
+        match provider_type.as_str() {
+            "openai_responses" => {
+                // OpenAI: self-contained adapter with HTTP SSE, no relay needed.
+                let model = model_name.clone();
+                let agent_name_clone = agent_name.clone();
+                let agent_uuid_clone = agent_uuid.clone();
 
-            // Spawn Claude process via the adapter.
-            let identity = AgentIdentity {
-                name: agent_name.clone(),
-                uuid: agent_uuid.clone(),
-            };
-            if let Err(e) = claude::spawn_agent_process(
-                &identity,
-                &model_name,
-                &sys_prompt_clone,
-                port,
-                &process_registry,
-            )
-            .await
-            {
-                tracing::error!("Failed to spawn claude for {}: {}", agent_name, e);
-                ctx.run_on_main_thread(move |main_ctx| {
-                    let world = main_ctx.world;
-                    let mut sessions = world.resource_mut::<AgentSessions>();
-                    sessions.sessions.remove(&entity_copy);
-                })
-                .await;
-                return;
-            }
+                runtime.spawn_background_task(move |mut ctx| async move {
+                    // Create command/event channels for the gameplay interface.
+                    let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
+                    let (evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
 
-            // Wait for Claude to connect via WebSocket.
-            tracing::info!("Waiting for Claude to connect for {}...", agent_name);
-            let connected = handle.connected.clone();
-            tokio::select! {
-                _ = connected.notified() => {
-                    tracing::info!("Claude connected via --sdk-url for {}", agent_name);
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
-                    tracing::error!("Claude connection timeout for {} (90s)", agent_name);
+                    // Create a bridge: prompt_tx (String) -> cmd_tx (SessionCommand).
+                    let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(32);
+                    let cmd_tx_bridge = cmd_tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(text) = prompt_rx.recv().await {
+                            if text == COMPACT_COMMAND {
+                                let _ = cmd_tx_bridge.send(SessionCommand::Compact).await;
+                            } else {
+                                let _ = cmd_tx_bridge
+                                    .send(SessionCommand::SendUserTurn(text))
+                                    .await;
+                            }
+                        }
+                    });
+
+                    // Create a bridge: evt_rx (SessionEvent) -> response_tx (String) + token_tx.
+                    let (response_tx, response_rx) = mpsc::channel::<String>(64);
+                    let (token_tx, token_rx) =
+                        mpsc::channel::<crate::network::agent_relay::TokenUsageEvent>(64);
+                    let agent_label = agent_name_clone.clone();
+                    tokio::spawn(async move {
+                        let mut evt_rx = evt_rx;
+                        while let Some(event) = evt_rx.recv().await {
+                            match event {
+                                SessionEvent::TextDelta(text) => {
+                                    let msg = format!("thought:{}", text);
+                                    let _ = response_tx.send(msg).await;
+                                }
+                                SessionEvent::Usage(usage) => {
+                                    let _ = token_tx
+                                        .send(
+                                            crate::network::agent_relay::TokenUsageEvent {
+                                                input_tokens: usage.input_tokens,
+                                                output_tokens: usage.output_tokens,
+                                                cost_usd: usage.cost_usd,
+                                            },
+                                        )
+                                        .await;
+                                }
+                                SessionEvent::Error(msg) => {
+                                    tracing::warn!(
+                                        "[openai:{}] session error: {}",
+                                        agent_label,
+                                        msg
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+
+                    // Start the OpenAI adapter streaming task.
+                    let mut adapter =
+                        crate::llm::providers::openai::OpenAiAdapter::for_agent(
+                            &agent_name_clone,
+                            &agent_uuid_clone,
+                            &model,
+                            sys_prompt_clone.clone(),
+                            tool_sets,
+                        );
+
+                    let profile = crate::llm::config::SessionProfile {
+                        provider: "openai".to_string(),
+                        model: Some(model.clone()),
+                        system_prompt_file: None,
+                        compact_threshold: 50_000,
+                        tool_sets: vec!["game".to_string()],
+                    };
+
+                    if let Err(e) = adapter.start(&profile, None).await {
+                        tracing::error!(
+                            "[openai:{}] failed to start: {}",
+                            agent_name_clone,
+                            e
+                        );
+                        ctx.run_on_main_thread(move |main_ctx| {
+                            let world = main_ctx.world;
+                            let mut sessions =
+                                world.resource_mut::<AgentSessions>();
+                            sessions.sessions.remove(&entity_copy);
+                        })
+                        .await;
+                        return;
+                    }
+
+                    // Send intro message via command channel.
+                    let intro = build_intro_message(&agent_name_clone);
+                    let _ = cmd_tx.send(SessionCommand::SendUserTurn(intro)).await;
+
+                    let ptx_clone = prompt_tx.clone();
+                    let rrx_clone = Arc::new(Mutex::new(response_rx));
+                    let token_rx_clone = Arc::new(Mutex::new(token_rx));
+                    let uuid_for_main = agent_uuid_clone.clone();
+
                     ctx.run_on_main_thread(move |main_ctx| {
                         let world = main_ctx.world;
-                        let mut sessions = world.resource_mut::<AgentSessions>();
-                        sessions.sessions.remove(&entity_copy);
-                        tracing::info!("Cleared session placeholder for {} — will retry", agent_name);
-                    }).await;
-                    return;
-                }
+                        let mut sessions =
+                            world.resource_mut::<AgentSessions>();
+                        if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
+                            s.prompt_tx = ptx_clone;
+                            s.response_rx = rrx_clone;
+                            tracing::info!(
+                                "[openai] Session channels updated for {:?}",
+                                entity_copy
+                            );
+                        }
+                        let mut token_queue =
+                            world.resource_mut::<TokenEventQueue>();
+                        token_queue
+                            .receivers
+                            .insert(uuid_for_main, token_rx_clone);
+                    })
+                    .await;
+                });
             }
 
-            // Wire relay channels into the session state.
-            let ptx = handle.prompt_tx;
-            let rrx = Arc::new(Mutex::new(handle.response_rx));
-            let token_rx = Arc::new(Mutex::new(handle.token_rx));
+            // Default: claude_cli — uses relay + process spawning.
+            _ => {
+                let model_name = model_name.clone();
+                runtime.spawn_background_task(move |mut ctx| async move {
+                    // Register relay for this agent.
+                    let handle = relays_clone.register(&agent_uuid).await;
 
-            // Send the intro message.
-            let intro = build_intro_message(&agent_name);
-            let _ = ptx.send(intro).await;
+                    // Spawn Claude process via the adapter.
+                    let identity = AgentIdentity {
+                        name: agent_name.clone(),
+                        uuid: agent_uuid.clone(),
+                    };
+                    if let Err(e) =
+                        crate::llm::providers::claude::spawn_agent_process(
+                            &identity,
+                            &model_name,
+                            &sys_prompt_clone,
+                            port,
+                            &process_registry,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to spawn claude for {}: {}",
+                            agent_name,
+                            e
+                        );
+                        ctx.run_on_main_thread(move |main_ctx| {
+                            let world = main_ctx.world;
+                            let mut sessions =
+                                world.resource_mut::<AgentSessions>();
+                            sessions.sessions.remove(&entity_copy);
+                        })
+                        .await;
+                        return;
+                    }
 
-            let ptx_clone = ptx.clone();
-            let rrx_clone = rrx.clone();
-            let token_rx_clone = token_rx.clone();
-            let agent_uuid_for_main = agent_uuid.clone();
+                    // Wait for Claude to connect via WebSocket.
+                    tracing::info!(
+                        "Waiting for Claude to connect for {}...",
+                        agent_name
+                    );
+                    let connected = handle.connected.clone();
+                    tokio::select! {
+                        _ = connected.notified() => {
+                            tracing::info!("Claude connected via --sdk-url for {}", agent_name);
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
+                            tracing::error!("Claude connection timeout for {} (90s)", agent_name);
+                            ctx.run_on_main_thread(move |main_ctx| {
+                                let world = main_ctx.world;
+                                let mut sessions = world.resource_mut::<AgentSessions>();
+                                sessions.sessions.remove(&entity_copy);
+                                tracing::info!("Cleared session placeholder for {} — will retry", agent_name);
+                            }).await;
+                            return;
+                        }
+                    }
 
-            ctx.run_on_main_thread(move |main_ctx| {
-                let world = main_ctx.world;
-                let mut sessions = world.resource_mut::<AgentSessions>();
-                if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
-                    s.prompt_tx = ptx_clone;
-                    s.response_rx = rrx_clone;
-                    tracing::info!("Session channels updated for entity {:?}", entity_copy);
-                }
-                let mut token_queue = world.resource_mut::<TokenEventQueue>();
-                token_queue
-                    .receivers
-                    .insert(agent_uuid_for_main, token_rx_clone);
-            })
-            .await;
+                    // Wire relay channels into the session state.
+                    let ptx = handle.prompt_tx;
+                    let rrx = Arc::new(Mutex::new(handle.response_rx));
+                    let token_rx = Arc::new(Mutex::new(handle.token_rx));
 
-            // The adapter's background task handles process lifecycle and cleanup.
-        });
+                    // Send the intro message.
+                    let intro = build_intro_message(&agent_name);
+                    let _ = ptx.send(intro).await;
+
+                    let ptx_clone = ptx.clone();
+                    let rrx_clone = rrx.clone();
+                    let token_rx_clone = token_rx.clone();
+                    let agent_uuid_for_main = agent_uuid.clone();
+
+                    ctx.run_on_main_thread(move |main_ctx| {
+                        let world = main_ctx.world;
+                        let mut sessions =
+                            world.resource_mut::<AgentSessions>();
+                        if let Some(s) = sessions.sessions.get_mut(&entity_copy) {
+                            s.prompt_tx = ptx_clone;
+                            s.response_rx = rrx_clone;
+                            tracing::info!(
+                                "Session channels updated for entity {:?}",
+                                entity_copy
+                            );
+                        }
+                        let mut token_queue =
+                            world.resource_mut::<TokenEventQueue>();
+                        token_queue
+                            .receivers
+                            .insert(agent_uuid_for_main, token_rx_clone);
+                    })
+                    .await;
+                });
+            }
+        }
     }
 }
 

@@ -1,5 +1,12 @@
 //! WebSocket relay for the persistent System AI Claude --sdk-url session.
-//! Unlike agent relays, assistant thinking stays internal and is never forwarded.
+//!
+//! This is Claude-specific transport infrastructure. Like `agent_relay.rs`,
+//! it exists because Claude CLI connects via WebSocket. The OpenAI adapter
+//! uses outbound HTTP and does not need a relay.
+//!
+//! NDJSON protocol handling is delegated to `crate::llm::providers::claude`
+//! which owns the canonical implementation. This module only translates
+//! relay events into System AI-specific channels (token tracking, GM log).
 
 use axum::{
     extract::{
@@ -12,7 +19,7 @@ use bevy::prelude::Resource;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, Notify};
 
-use crate::llm::providers::claude as claude_ndjson;
+use crate::llm::providers::claude::{claude_format_user_message, process_ndjson_line, RelayEvent};
 use crate::network::agent_relay::TokenUsageEvent;
 
 #[derive(Clone, Default)]
@@ -85,7 +92,12 @@ async fn handle_system_ws(mut socket: WebSocket, relay: SystemRelay) {
             tracing::warn!("[system-relay] Already connected");
             return;
         };
-        (prompt_rx, state.token_tx.clone(), state.gm_log_tx.clone(), state.connected.clone())
+        (
+            prompt_rx,
+            state.token_tx.clone(),
+            state.gm_log_tx.clone(),
+            state.connected.clone(),
+        )
     };
 
     tracing::info!("[system-relay] Claude WebSocket connected");
@@ -94,7 +106,7 @@ async fn handle_system_ws(mut socket: WebSocket, relay: SystemRelay) {
     loop {
         tokio::select! {
             Some(prompt) = prompt_rx.recv() => {
-                let ndjson = claude_ndjson::claude_format_user_message(&prompt);
+                let ndjson = claude_format_user_message(&prompt);
                 if socket.send(Message::Text(ndjson.into())).await.is_err() {
                     tracing::warn!("[system-relay] WebSocket send failed");
                     break;
@@ -105,123 +117,20 @@ async fn handle_system_ws(mut socket: WebSocket, relay: SystemRelay) {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         for line in text.lines() {
-                            if line.trim().is_empty() {
-                                continue;
-                            }
-
-                            let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-                                continue;
-                            };
-
-                            match val.get("type").and_then(|t| t.as_str()).unwrap_or("?") {
-                                "control_request" => {
-                                    let request_id = val.get("request_id")
-                                        .and_then(|r| r.as_str())
-                                        .unwrap_or("");
-                                    let tool_use_id = val.get("request")
-                                        .and_then(|r| r.get("tool_use_id"))
-                                        .and_then(|t| t.as_str());
-                                    let input = val.get("request")
-                                        .and_then(|r| r.get("input"));
-
-                                    let response = claude_ndjson::claude_format_control_response(
-                                        request_id,
-                                        tool_use_id,
-                                        input,
-                                    );
-
-                                    if socket.send(Message::Text(response.into())).await.is_err() {
-                                        tracing::warn!("[system-relay] Failed to send control response");
-                                        break;
-                                    }
-                                }
-                                "result" => {
-                                    let input_tokens = val.get("usage")
-                                        .and_then(|u| u.get("input_tokens"))
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as u32;
-                                    let output_tokens = val.get("usage")
-                                        .and_then(|u| u.get("output_tokens"))
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as u32;
-                                    let cost_usd = val.get("total_cost_usd")
-                                        .and_then(|v| v.as_f64())
-                                        .unwrap_or(0.0);
-
-                                    if input_tokens > 0 || output_tokens > 0 {
-                                        let _ = token_tx.send(TokenUsageEvent {
-                                            input_tokens,
-                                            output_tokens,
-                                            cost_usd,
-                                        }).await;
-                                    }
-                                }
-                                "assistant" => {
-                                    // Capture GM thinking/responses.
-                                    if let Some(msg) = val.get("message") {
-                                        // Extract text content from the message.
-                                        if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-                                            for block in content {
-                                                let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                                                match block_type {
-                                                    "thinking" => {
-                                                        if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
-                                                            let _ = gm_log_tx.try_send(GmLogEntry {
-                                                                kind: "thinking",
-                                                                text: text.to_string(),
-                                                            });
-                                                        }
-                                                    }
-                                                    "text" => {
-                                                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                                            let _ = gm_log_tx.try_send(GmLogEntry {
-                                                                kind: "response",
-                                                                text: text.to_string(),
-                                                            });
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                "system" => {}
-                                other => {
-                                    tracing::debug!("[system-relay] {} message", other);
-                                }
+                            if let Err(()) = process_system_line(
+                                line, &token_tx, &gm_log_tx, &mut socket,
+                            ).await {
+                                return;
                             }
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         if let Ok(text) = String::from_utf8(bytes.to_vec()) {
                             for line in text.lines() {
-                                if line.trim().is_empty() {
-                                    continue;
-                                }
-                                let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-                                    continue;
-                                };
-                                if val.get("type").and_then(|t| t.as_str()) == Some("result") {
-                                    let input_tokens = val.get("usage")
-                                        .and_then(|u| u.get("input_tokens"))
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as u32;
-                                    let output_tokens = val.get("usage")
-                                        .and_then(|u| u.get("output_tokens"))
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as u32;
-                                    let cost_usd = val.get("total_cost_usd")
-                                        .and_then(|v| v.as_f64())
-                                        .unwrap_or(0.0);
-
-                                    if input_tokens > 0 || output_tokens > 0 {
-                                        let _ = token_tx.send(TokenUsageEvent {
-                                            input_tokens,
-                                            output_tokens,
-                                            cost_usd,
-                                        }).await;
-                                    }
+                                if let Err(()) = process_system_line(
+                                    line, &token_tx, &gm_log_tx, &mut socket,
+                                ).await {
+                                    return;
                                 }
                             }
                         }
@@ -235,4 +144,65 @@ async fn handle_system_ws(mut socket: WebSocket, relay: SystemRelay) {
             }
         }
     }
+}
+
+/// Process a single NDJSON line for the system relay.
+/// Uses the shared protocol handler and translates events to System AI channels.
+/// Returns Err(()) if the WebSocket connection should be closed.
+async fn process_system_line(
+    line: &str,
+    token_tx: &mpsc::Sender<TokenUsageEvent>,
+    gm_log_tx: &mpsc::Sender<GmLogEntry>,
+    socket: &mut WebSocket,
+) -> Result<(), ()> {
+    let events = process_ndjson_line(line);
+
+    for event in events {
+        match event {
+            RelayEvent::ControlRequest { response_ndjson } => {
+                if socket
+                    .send(Message::Text(response_ndjson.into()))
+                    .await
+                    .is_err()
+                {
+                    return Err(());
+                }
+            }
+
+            RelayEvent::Result { usage, .. } => {
+                if let Some(usage) = usage {
+                    let _ = token_tx
+                        .send(TokenUsageEvent {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cost_usd: usage.cost_usd,
+                        })
+                        .await;
+                }
+                // System AI result text is not forwarded — verdicts come via MCP tools.
+            }
+
+            RelayEvent::AssistantText(text) => {
+                // Capture as GM response log.
+                let _ = gm_log_tx.try_send(GmLogEntry {
+                    kind: "response",
+                    text,
+                });
+            }
+
+            RelayEvent::ToolUse(tool) => {
+                tracing::info!("[system-relay] TOOL_USE: {}", tool);
+            }
+
+            RelayEvent::ThinkingBlock(text) => {
+                // Capture GM thinking.
+                let _ = gm_log_tx.try_send(GmLogEntry {
+                    kind: "thinking",
+                    text,
+                });
+            }
+        }
+    }
+
+    Ok(())
 }

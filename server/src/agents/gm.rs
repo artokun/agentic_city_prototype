@@ -1,8 +1,10 @@
 //! System AI session management and research agent spawning.
-//! Bounty reviews are handled by a persistent Claude `--sdk-url` session
-//! that receives each review as a user message and resolves it via MCP tools.
+//! Bounty reviews are handled by a persistent LLM session that receives
+//! each review as a user message and resolves it via MCP tools.
 //!
-//! Process spawning is delegated to the Claude adapter.
+//! Provider selection is driven by the `system-ai` profile in `config/llm.toml`.
+//! For `claude_cli`: spawns process via Claude adapter + relay.
+//! For `openai_responses`: uses self-contained streaming task.
 //! This module is role-focused: it manages review queues, dispatching, and
 //! token tracking — not provider-specific details.
 
@@ -14,13 +16,16 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config;
-use crate::llm::providers::claude;
-use crate::llm::types::COMPACT_COMMAND;
+use crate::llm::config::LlmConfig;
+use crate::llm::session_registry::SessionRegistry;
+use crate::llm::supervisor::SessionAdapter;
+use crate::llm::types::{SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
 use crate::network::agent_relay::TokenUsageEvent;
 use crate::network::system_relay::SystemRelayResource;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
 
-const SYSTEM_AI_MODEL: &str = "opus";
+/// Default model when no profile is configured.
+const DEFAULT_SYSTEM_AI_MODEL: &str = "opus";
 
 /// Marker component: this agent has a bounty pending System AI review.
 #[derive(Component)]
@@ -110,11 +115,16 @@ impl SystemAiState {
 }
 
 /// System: ensure the persistent System AI session exists.
-/// Delegates process spawning to the Claude adapter.
+/// Resolves provider from the `system-ai` profile in `config/llm.toml`.
+/// For `claude_cli`: spawns process via Claude adapter + relay.
+/// For `openai_responses`: uses self-contained streaming task.
+/// Registers in `SessionRegistry` for lifecycle tracking.
 pub fn spawn_system_ai_session_system(
     runtime: ResMut<TokioTasksRuntime>,
     mut system_ai: ResMut<SystemAiState>,
+    mut registry: ResMut<SessionRegistry>,
     relays: Res<SystemRelayResource>,
+    llm_config: Res<LlmConfig>,
     server_port: Option<Res<crate::network::ws::ServerPort>>,
     proc_registry: Option<Res<crate::process_manager::ProcessRegistryRes>>,
 ) {
@@ -129,77 +139,216 @@ pub fn spawn_system_ai_session_system(
     let process_registry = proc_registry.map(|r| r.0.clone()).unwrap_or_default();
     let system_prompt = build_system_ai_prompt();
 
-    runtime.spawn_background_task(move |mut ctx| async move {
-        let handle = relays.register().await;
+    // Resolve provider type and model from profile.
+    let provider_type = llm_config
+        .profile("system-ai")
+        .and_then(|p| llm_config.provider(&p.provider))
+        .map(|p| p.provider_type.clone())
+        .unwrap_or_else(|| "claude_cli".to_string());
 
-        // Spawn Claude process via the adapter.
-        if let Err(e) = claude::spawn_system_ai_process(
-            SYSTEM_AI_MODEL,
-            &system_prompt,
-            port,
-            &process_registry,
-        )
-        .await
-        {
-            tracing::error!("[SystemAI] Failed to spawn: {}", e);
-            ctx.run_on_main_thread(|main_ctx| {
-                let world = main_ctx.world;
-                let mut system_ai = world.resource_mut::<SystemAiState>();
-                system_ai.spawning = false;
-            })
-            .await;
-            return;
+    let model = llm_config
+        .profile("system-ai")
+        .and_then(|p| llm_config.effective_model(p))
+        .unwrap_or_else(|| DEFAULT_SYSTEM_AI_MODEL.to_string());
+
+    let tool_sets = llm_config
+        .profile("system-ai")
+        .map(|p| p.tool_sets.clone())
+        .unwrap_or_else(|| vec!["system".to_string()]);
+
+    tracing::info!(
+        "[SystemAI] Spawning via {} (model={}, tools={:?})",
+        provider_type,
+        model,
+        tool_sets,
+    );
+
+    // Register in SessionRegistry for lifecycle tracking.
+    let owner = SessionOwner::SystemAi;
+    let (reg_handle, _, _) =
+        crate::llm::supervisor::create_handle_channels("system-ai");
+    registry.register(owner, reg_handle);
+
+    match provider_type.as_str() {
+        "openai_responses" => {
+            let system_prompt_clone = system_prompt.clone();
+            runtime.spawn_background_task(move |mut ctx| async move {
+                // Create bridged channels for gameplay interface.
+                let (cmd_tx, _cmd_rx) = mpsc::channel::<SessionCommand>(64);
+                let (_evt_tx, mut evt_rx) = mpsc::channel::<SessionEvent>(256);
+
+                let (prompt_tx, mut prompt_bridge_rx) = mpsc::channel::<String>(32);
+                let cmd_tx_bridge = cmd_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(text) = prompt_bridge_rx.recv().await {
+                        if text == COMPACT_COMMAND {
+                            let _ = cmd_tx_bridge.send(SessionCommand::Compact).await;
+                        } else {
+                            let _ = cmd_tx_bridge
+                                .send(SessionCommand::SendUserTurn(text))
+                                .await;
+                        }
+                    }
+                });
+
+                // Bridge events to token tracking.
+                let (token_tx, token_rx) = mpsc::channel::<TokenUsageEvent>(64);
+                let (gm_log_tx, gm_log_rx) =
+                    mpsc::channel::<crate::network::system_relay::GmLogEntry>(64);
+                tokio::spawn(async move {
+                    while let Some(event) = evt_rx.recv().await {
+                        match event {
+                            SessionEvent::TextDelta(text) => {
+                                let _ = gm_log_tx.try_send(
+                                    crate::network::system_relay::GmLogEntry {
+                                        kind: "response",
+                                        text,
+                                    },
+                                );
+                            }
+                            SessionEvent::Usage(usage) => {
+                                let _ = token_tx
+                                    .send(TokenUsageEvent {
+                                        input_tokens: usage.input_tokens,
+                                        output_tokens: usage.output_tokens,
+                                        cost_usd: usage.cost_usd,
+                                    })
+                                    .await;
+                            }
+                            SessionEvent::Error(msg) => {
+                                tracing::warn!("[openai:system-ai] error: {}", msg);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+
+                // Start the OpenAI adapter.
+                let mut adapter =
+                    crate::llm::providers::openai::OpenAiAdapter::for_system_ai(
+                        &model,
+                        system_prompt_clone,
+                        tool_sets,
+                    );
+
+                let profile = crate::llm::config::SessionProfile {
+                    provider: "openai".to_string(),
+                    model: Some(model.clone()),
+                    system_prompt_file: None,
+                    compact_threshold: 15_000,
+                    tool_sets: vec!["system".to_string()],
+                };
+
+                if let Err(e) = adapter.start(&profile, None).await {
+                    tracing::error!("[openai:system-ai] failed to start: {}", e);
+                    ctx.run_on_main_thread(|main_ctx| {
+                        let world = main_ctx.world;
+                        let mut system_ai = world.resource_mut::<SystemAiState>();
+                        system_ai.spawning = false;
+                    })
+                    .await;
+                    return;
+                }
+
+                let prompt_tx_for_main = prompt_tx.clone();
+                let token_rx_for_main = Arc::new(Mutex::new(token_rx));
+                let gm_log_rx_for_main = Arc::new(Mutex::new(gm_log_rx));
+
+                ctx.run_on_main_thread(move |main_ctx| {
+                    let world = main_ctx.world;
+                    let mut system_ai = world.resource_mut::<SystemAiState>();
+                    system_ai.prompt_tx = Some(prompt_tx_for_main);
+                    system_ai.response_rx = None;
+                    system_ai.token_rx = Some(token_rx_for_main);
+                    system_ai.gm_log_rx = Some(gm_log_rx_for_main);
+                    system_ai.spawning = false;
+                    system_ai.tokens_since_compact = 0;
+                })
+                .await;
+
+                let _ = prompt_tx
+                    .send(
+                        "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
+                            .to_string(),
+                    )
+                    .await;
+            });
         }
 
-        // Wait for Claude to connect via WebSocket.
-        let connected = handle.connected.clone();
-        let connected_ok = tokio::select! {
-            _ = connected.notified() => true,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => false,
-        };
+        // Default: claude_cli — uses relay + process spawning.
+        _ => {
+            runtime.spawn_background_task(move |mut ctx| async move {
+                let handle = relays.register().await;
 
-        if !connected_ok {
-            tracing::error!("[SystemAI] Claude connection timeout (90s)");
-            ctx.run_on_main_thread(|main_ctx| {
-                let world = main_ctx.world;
-                let mut system_ai = world.resource_mut::<SystemAiState>();
-                system_ai.spawning = false;
-            })
-            .await;
-            return;
+                // Spawn Claude process via the adapter.
+                if let Err(e) =
+                    crate::llm::providers::claude::spawn_system_ai_process(
+                        &model,
+                        &system_prompt,
+                        port,
+                        &process_registry,
+                    )
+                    .await
+                {
+                    tracing::error!("[SystemAI] Failed to spawn: {}", e);
+                    ctx.run_on_main_thread(|main_ctx| {
+                        let world = main_ctx.world;
+                        let mut system_ai = world.resource_mut::<SystemAiState>();
+                        system_ai.spawning = false;
+                    })
+                    .await;
+                    return;
+                }
+
+                // Wait for Claude to connect via WebSocket.
+                let connected = handle.connected.clone();
+                let connected_ok = tokio::select! {
+                    _ = connected.notified() => true,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => false,
+                };
+
+                if !connected_ok {
+                    tracing::error!("[SystemAI] Claude connection timeout (90s)");
+                    ctx.run_on_main_thread(|main_ctx| {
+                        let world = main_ctx.world;
+                        let mut system_ai = world.resource_mut::<SystemAiState>();
+                        system_ai.spawning = false;
+                    })
+                    .await;
+                    return;
+                }
+
+                tracing::info!("[SystemAI] Claude connected via --sdk-url");
+
+                let prompt_tx = handle.prompt_tx;
+                let token_rx = Arc::new(Mutex::new(handle.token_rx));
+                let gm_log_rx = Arc::new(Mutex::new(handle.gm_log_rx));
+
+                let prompt_tx_for_main = prompt_tx.clone();
+                let token_rx_for_main = token_rx.clone();
+                let gm_log_rx_for_main = gm_log_rx.clone();
+
+                ctx.run_on_main_thread(move |main_ctx| {
+                    let world = main_ctx.world;
+                    let mut system_ai = world.resource_mut::<SystemAiState>();
+                    system_ai.prompt_tx = Some(prompt_tx_for_main);
+                    system_ai.response_rx = None;
+                    system_ai.token_rx = Some(token_rx_for_main);
+                    system_ai.gm_log_rx = Some(gm_log_rx_for_main);
+                    system_ai.spawning = false;
+                    system_ai.tokens_since_compact = 0;
+                })
+                .await;
+
+                let _ = prompt_tx
+                    .send(
+                        "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
+                            .to_string(),
+                    )
+                    .await;
+            });
         }
-
-        tracing::info!("[SystemAI] Claude connected via --sdk-url");
-
-        let prompt_tx = handle.prompt_tx;
-        let token_rx = Arc::new(Mutex::new(handle.token_rx));
-        let gm_log_rx = Arc::new(Mutex::new(handle.gm_log_rx));
-
-        let prompt_tx_for_main = prompt_tx.clone();
-        let token_rx_for_main = token_rx.clone();
-        let gm_log_rx_for_main = gm_log_rx.clone();
-
-        ctx.run_on_main_thread(move |main_ctx| {
-            let world = main_ctx.world;
-            let mut system_ai = world.resource_mut::<SystemAiState>();
-            system_ai.prompt_tx = Some(prompt_tx_for_main);
-            system_ai.response_rx = None;
-            system_ai.token_rx = Some(token_rx_for_main);
-            system_ai.gm_log_rx = Some(gm_log_rx_for_main);
-            system_ai.spawning = false;
-            system_ai.tokens_since_compact = 0;
-        })
-        .await;
-
-        let _ = prompt_tx
-            .send(
-                "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
-                    .to_string(),
-            )
-            .await;
-
-        // The adapter's background task handles process lifecycle and cleanup.
-    });
+    }
 }
 
 /// System: move pending bounty review markers into the persistent System AI queue.
@@ -313,10 +462,12 @@ pub fn system_ai_token_drain_system(mut system_ai: ResMut<SystemAiState>) {
 }
 
 /// System: spawn a research agent for agents using search_internet.
-/// Produces a real document via Claude web search.
+/// Produces a real document via the configured LLM provider.
+/// Provider selection flows through the `agent-default` profile.
 pub fn spawn_research_system(
     mut commands: Commands,
     runtime: ResMut<TokioTasksRuntime>,
+    llm_config: Res<LlmConfig>,
     pending: Query<(
         Entity,
         &super::components::AgentName,
@@ -329,20 +480,43 @@ pub fn spawn_research_system(
         let topic = research.topic.clone();
         let agent_uuid = agent_id.0.to_string();
 
+        // Resolve provider from agent-default profile (research uses light model).
+        let provider_type = llm_config
+            .profile("agent-default")
+            .and_then(|p| llm_config.provider(&p.provider))
+            .map(|p| p.provider_type.clone())
+            .unwrap_or_else(|| "claude_cli".to_string());
+
+        let model = llm_config
+            .profile("agent-default")
+            .and_then(|p| llm_config.effective_model(p))
+            .unwrap_or_else(|| "haiku".to_string());
+
         tracing::info!(
-            "[Research] Spawning research agent for {} — topic: {}",
+            "[Research] Spawning {} research agent for {} — topic: {} (model={})",
+            provider_type,
             name,
-            topic
+            topic,
+            model,
         );
         commands.entity(entity).remove::<PendingResearch>();
 
+        let provider = provider_type.clone();
+        let model_clone = model.clone();
         runtime.spawn_background_task(move |_ctx| async move {
-            spawn_research_agent(&name, &agent_uuid, &topic).await;
+            spawn_research_agent(&name, &agent_uuid, &topic, &provider, &model_clone)
+                .await;
         });
     }
 }
 
-async fn spawn_research_agent(agent_name: &str, agent_id: &str, topic: &str) {
+async fn spawn_research_agent(
+    agent_name: &str,
+    agent_id: &str,
+    topic: &str,
+    provider_type: &str,
+    model: &str,
+) {
     let prompt = format!(
         r#"You are a research assistant. Do a brief web search on the following topic and write a short markdown research document (3-5 paragraphs).
 
@@ -353,26 +527,54 @@ Output ONLY the markdown document, nothing else."#
     );
 
     tracing::info!(
-        "[Research] Launching claude -p for {} (agent: {})",
+        "[Research] Launching {} research for {} (agent: {})",
+        provider_type,
         topic,
         agent_name
     );
 
+    let doc_content = match provider_type {
+        "openai_responses" => run_openai_research(&prompt, model).await,
+        _ => run_claude_research(&prompt, model).await,
+    };
+
+    let title = format!("research_{}.md", &agent_id[..6]);
+    tracing::info!(
+        "[Research] {} produced document '{}' ({} chars)",
+        agent_name,
+        title,
+        doc_content.len()
+    );
+
+    let client = reqwest::Client::new();
+    let _ = client
+        .post("http://127.0.0.1:8080/api/gm/document")
+        .json(&serde_json::json!({
+            "agent_name": agent_name,
+            "title": title,
+            "content": doc_content,
+        }))
+        .send()
+        .await;
+}
+
+/// Run research via Claude CLI one-shot (`claude -p`).
+async fn run_claude_research(prompt: &str, model: &str) -> String {
     let result = tokio::process::Command::new("claude")
         .args([
             "-p",
-            &prompt,
+            prompt,
             "--output-format",
             "text",
             "--model",
-            "haiku",
+            model,
             "--permission-mode",
             "bypassPermissions",
         ])
         .output()
         .await;
 
-    let doc_content = match result {
+    match result {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout).to_string();
             if text.trim().is_empty() {
@@ -396,26 +598,82 @@ Output ONLY the markdown document, nothing else."#
             tracing::error!("[Research] Failed to spawn: {}", err);
             format!("Research error: {}", err)
         }
-    };
+    }
+}
 
-    let title = format!("research_{}.md", &agent_id[..6]);
-    tracing::info!(
-        "[Research] {} produced document '{}' ({} chars)",
-        agent_name,
-        title,
-        doc_content.len()
-    );
+/// Run research via OpenAI Responses API as a one-shot request.
+async fn run_openai_research(prompt: &str, model: &str) -> String {
+    let api_key = match std::env::var("OPENAI_API_KEY") {
+        Ok(k) => k,
+        Err(_) => return "Research failed: OPENAI_API_KEY not set".to_string(),
+    };
+    let api_base = std::env::var("OPENAI_API_BASE")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
     let client = reqwest::Client::new();
-    let _ = client
-        .post("http://127.0.0.1:8080/api/gm/document")
-        .json(&serde_json::json!({
-            "agent_name": agent_name,
-            "title": title,
-            "content": doc_content,
-        }))
+    let body = serde_json::json!({
+        "model": model,
+        "input": [{
+            "role": "user",
+            "content": prompt,
+        }],
+        "stream": false,
+    });
+
+    match client
+        .post(format!("{api_base}/responses"))
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
         .send()
-        .await;
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(val) => {
+                    // Extract text from response output.
+                    val.get("output")
+                        .and_then(|o| o.as_array())
+                        .and_then(|arr| {
+                            arr.iter().find_map(|item| {
+                                if item.get("type")?.as_str()? == "message" {
+                                    item.get("content")?
+                                        .as_array()?
+                                        .iter()
+                                        .find_map(|c| {
+                                            if c.get("type")?.as_str()? == "output_text" {
+                                                c.get("text")?.as_str().map(|s| s.to_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .unwrap_or_else(|| {
+                            "Research completed but no content was extracted.".to_string()
+                        })
+                }
+                Err(e) => format!("Research failed: JSON parse error: {e}"),
+            }
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(
+                "[Research:openai] API error {}: {}",
+                status,
+                &body[..body.len().min(200)]
+            );
+            format!("Research failed: API error {status}")
+        }
+        Err(e) => {
+            tracing::error!("[Research:openai] HTTP error: {}", e);
+            format!("Research error: {e}")
+        }
+    }
 }
 
 fn build_system_ai_prompt() -> String {

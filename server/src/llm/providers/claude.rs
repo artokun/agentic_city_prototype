@@ -9,7 +9,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::mpsc;
 
 use crate::llm::config::SessionProfile;
 use crate::llm::supervisor::SessionAdapter;
@@ -151,205 +151,6 @@ fn write_system_mcp_config() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Relay event translation
-// ---------------------------------------------------------------------------
-
-/// Configuration for how the relay loop should behave for different session roles.
-#[derive(Clone)]
-pub struct RelayConfig {
-    /// Human-readable label for log lines.
-    pub label: String,
-    /// Whether to forward assistant thinking text as SessionEvent::TextDelta.
-    pub forward_thoughts: bool,
-}
-
-/// Run the relay loop: bridges a WebSocket connection to SessionEvent/SessionCommand channels.
-///
-/// Reads commands from `command_rx`, formats them as NDJSON, sends over the socket.
-/// Reads NDJSON from the socket, translates to SessionEvent, sends via `event_tx`.
-async fn relay_loop(
-    mut socket: axum::extract::ws::WebSocket,
-    mut command_rx: mpsc::Receiver<SessionCommand>,
-    event_tx: mpsc::Sender<SessionEvent>,
-    config: RelayConfig,
-) {
-    use axum::extract::ws::Message;
-
-    loop {
-        tokio::select! {
-            Some(cmd) = command_rx.recv() => {
-                match cmd {
-                    SessionCommand::SendUserTurn(text) => {
-                        let ndjson = format_user_message(&text);
-                        tracing::debug!("[{}] -> Claude: user message ({}b)", config.label, ndjson.len());
-                        if socket.send(Message::Text(ndjson.into())).await.is_err() {
-                            tracing::warn!("[{}] WebSocket send failed", config.label);
-                            break;
-                        }
-                    }
-                    SessionCommand::Compact => {
-                        let ndjson = format_user_message("/compact");
-                        tracing::info!("[{}] -> Claude: /compact", config.label);
-                        if socket.send(Message::Text(ndjson.into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    SessionCommand::Shutdown => {
-                        tracing::info!("[{}] shutdown requested", config.label);
-                        let _ = event_tx.send(SessionEvent::Completed).await;
-                        break;
-                    }
-                    SessionCommand::SendToolResult(_) => {
-                        // Tool results are handled by the MCP binary, not the relay.
-                    }
-                }
-            }
-
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        process_ndjson_lines(&text, &event_tx, &config, &mut socket).await;
-                    }
-                    Some(Ok(Message::Binary(bytes))) => {
-                        if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                            process_ndjson_lines(&text, &event_tx, &config, &mut socket).await;
-                        }
-                    }
-                    Some(Ok(_)) => {} // ping/pong
-                    _ => {
-                        tracing::info!("[{}] Claude disconnected", config.label);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    let _ = event_tx.send(SessionEvent::Error("session disconnected".into())).await;
-}
-
-/// Process NDJSON lines from Claude, translate to SessionEvent values.
-async fn process_ndjson_lines(
-    text: &str,
-    event_tx: &mpsc::Sender<SessionEvent>,
-    config: &RelayConfig,
-    socket: &mut axum::extract::ws::WebSocket,
-) {
-    use axum::extract::ws::Message;
-
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-
-        let msg_type = val
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("?");
-
-        match msg_type {
-            "control_request" => {
-                let request_id = val
-                    .get("request_id")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("");
-                let tool_use_id = val
-                    .get("request")
-                    .and_then(|r| r.get("tool_use_id"))
-                    .and_then(|t| t.as_str());
-                let input = val
-                    .get("request")
-                    .and_then(|r| r.get("input"));
-
-                let response = format_control_response(request_id, tool_use_id, input);
-                if socket.send(Message::Text(response.into())).await.is_err() {
-                    return;
-                }
-            }
-
-            "result" => {
-                // Extract token usage.
-                let input_tokens = val
-                    .get("usage")
-                    .and_then(|u| u.get("input_tokens"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let output_tokens = val
-                    .get("usage")
-                    .and_then(|u| u.get("output_tokens"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let cost_usd = val
-                    .get("total_cost_usd")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-
-                if input_tokens > 0 || output_tokens > 0 {
-                    tracing::info!(
-                        "[{}] tokens: in={}, out={}, cost=${:.4}",
-                        config.label,
-                        input_tokens,
-                        output_tokens,
-                        cost_usd
-                    );
-                    let _ = event_tx
-                        .send(SessionEvent::Usage(UsageData {
-                            input_tokens,
-                            output_tokens,
-                            cost_usd,
-                        }))
-                        .await;
-                }
-
-                // Extract result text.
-                if let Some(text) = extract_result_text(&val) {
-                    let preview: String = text.chars().take(80).collect();
-                    tracing::info!("[{}] response: {}...", config.label, preview);
-                    let _ = event_tx.send(SessionEvent::Completed).await;
-                }
-            }
-
-            "assistant" => {
-                if config.forward_thoughts {
-                    if let Some(text) = extract_result_text(&val) {
-                        if !text.is_empty() {
-                            let preview: String = text.chars().take(100).collect();
-                            tracing::info!("[{}] THOUGHT: {}", config.label, preview);
-                            let _ = event_tx
-                                .send(SessionEvent::TextDelta(format!("thought:{}", text)))
-                                .await;
-                        }
-                    }
-                }
-
-                // Log tool use calls.
-                let content = val
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .or_else(|| val.get("content"));
-                if let Some(arr) = content.and_then(|c| c.as_array()) {
-                    for block in arr {
-                        let btype = block.get("type").and_then(|t| t.as_str()).unwrap_or("?");
-                        if btype == "tool_use" {
-                            let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                            tracing::info!("[{}] TOOL_USE: {}", config.label, tool);
-                        }
-                    }
-                }
-            }
-
-            "system" => {} // skip silently
-            _ => {
-                tracing::debug!("[{}] {} message", config.label, msg_type);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ClaudeAdapter
 // ---------------------------------------------------------------------------
 
@@ -378,10 +179,6 @@ pub struct ClaudeAdapter {
     is_system_ai: bool,
     /// System prompt content.
     system_prompt: String,
-    /// Whether to forward assistant thinking as TextDelta events.
-    forward_thoughts: bool,
-    /// Connection notification.
-    connected: Option<Arc<Notify>>,
     /// Label for logging.
     label: String,
 }
@@ -413,8 +210,6 @@ impl ClaudeAdapter {
             agent_identity: Some(identity.clone()),
             is_system_ai: false,
             system_prompt,
-            forward_thoughts: true,
-            connected: None,
             label: format!("claude:{}", identity.name),
         }
     }
@@ -437,8 +232,6 @@ impl ClaudeAdapter {
             agent_identity: None,
             is_system_ai: true,
             system_prompt,
-            forward_thoughts: false,
-            connected: None,
             label: "claude:system-ai".to_string(),
         }
     }
@@ -757,28 +550,152 @@ pub async fn spawn_system_ai_process(
         .map_err(|e| e.to_string())
 }
 
-// Re-export NDJSON helpers for relay modules that still need them during transition.
-// These are the canonical implementations — agent_relay.rs and system_relay.rs
-// import from here instead of agents/claude.rs.
-pub use self::ndjson::*;
+// ---------------------------------------------------------------------------
+// Shared relay protocol — used by agent_relay.rs and system_relay.rs
+// ---------------------------------------------------------------------------
 
-mod ndjson {
-    /// Format a user message in the Claude NDJSON protocol.
-    pub fn claude_format_user_message(text: &str) -> String {
-        super::format_user_message(text)
+/// Format a user message for the Claude NDJSON protocol.
+/// Used by relay modules to send prompts to Claude via WebSocket.
+pub fn claude_format_user_message(text: &str) -> String {
+    format_user_message(text)
+}
+
+/// Token usage data extracted from Claude result messages.
+/// Shared between agent and system relays.
+#[derive(Debug, Clone)]
+pub struct RelayTokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cost_usd: f64,
+}
+
+/// Event emitted by the shared NDJSON line processor.
+/// Relay handlers translate these into their role-specific channel sends.
+#[derive(Debug)]
+pub enum RelayEvent {
+    /// A control request that needs an approval response sent back.
+    ControlRequest {
+        response_ndjson: String,
+    },
+    /// A result message with optional token usage and text.
+    Result {
+        text: Option<String>,
+        usage: Option<RelayTokenUsage>,
+    },
+    /// Assistant thinking text.
+    AssistantText(String),
+    /// Assistant tool use call (for logging).
+    ToolUse(String),
+    /// Assistant thinking block (extended thinking, e.g. from Opus).
+    ThinkingBlock(String),
+}
+
+/// Process a single NDJSON line from Claude and return relay events.
+/// This is the canonical NDJSON protocol handler — both relay modules use it
+/// instead of duplicating the parsing logic.
+pub fn process_ndjson_line(line: &str) -> Vec<RelayEvent> {
+    let mut events = Vec::new();
+
+    if line.trim().is_empty() {
+        return events;
     }
 
-    /// Format a control_response to approve a tool use request.
-    pub fn claude_format_control_response(
-        request_id: &str,
-        tool_use_id: Option<&str>,
-        input: Option<&serde_json::Value>,
-    ) -> String {
-        super::format_control_response(request_id, tool_use_id, input)
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+        return events;
+    };
+
+    let msg_type = val
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("?");
+
+    match msg_type {
+        "control_request" => {
+            let request_id = val
+                .get("request_id")
+                .and_then(|r| r.as_str())
+                .unwrap_or("");
+            let tool_use_id = val
+                .get("request")
+                .and_then(|r| r.get("tool_use_id"))
+                .and_then(|t| t.as_str());
+            let input = val.get("request").and_then(|r| r.get("input"));
+
+            let response = format_control_response(request_id, tool_use_id, input);
+            events.push(RelayEvent::ControlRequest {
+                response_ndjson: response,
+            });
+        }
+
+        "result" => {
+            // Extract token usage.
+            let input_tokens = val
+                .get("usage")
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let output_tokens = val
+                .get("usage")
+                .and_then(|u| u.get("output_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let cost_usd = val
+                .get("total_cost_usd")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+
+            let usage = if input_tokens > 0 || output_tokens > 0 {
+                Some(RelayTokenUsage {
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                })
+            } else {
+                None
+            };
+
+            let text = extract_result_text(&val);
+
+            events.push(RelayEvent::Result { text, usage });
+        }
+
+        "assistant" => {
+            // Extract content blocks.
+            let content = val
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .or_else(|| val.get("content"));
+
+            if let Some(arr) = content.and_then(|c| c.as_array()) {
+                for block in arr {
+                    let btype = block.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                    match btype {
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                if !text.is_empty() {
+                                    events.push(RelayEvent::AssistantText(text.to_string()));
+                                }
+                            }
+                        }
+                        "tool_use" => {
+                            if let Some(tool) = block.get("name").and_then(|n| n.as_str()) {
+                                events.push(RelayEvent::ToolUse(tool.to_string()));
+                            }
+                        }
+                        "thinking" => {
+                            if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
+                                events.push(RelayEvent::ThinkingBlock(text.to_string()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        "system" => {} // skip silently
+        _ => {}
     }
 
-    /// Extract text from a result or assistant NDJSON message.
-    pub fn claude_extract_result_text(msg: &serde_json::Value) -> Option<String> {
-        super::extract_result_text(msg)
-    }
+    events
 }
