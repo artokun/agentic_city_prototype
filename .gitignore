@@ -10,3 +10,6 @@ client/.vite
 .dolt/
 *.db
 documents/
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
