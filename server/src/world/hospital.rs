@@ -155,13 +155,11 @@ pub fn hospital_recovery_system(
         needs.hunger = (needs.hunger + 0.2).min(60.0);
 
         if recovery.ticks_remaining == 0 {
-            // Send /compact to trigger real context compaction.
-            if let Some(session) = sessions.sessions.get(&entity) {
-                let _ = session.prompt_tx.try_send("/compact".to_string());
-            }
+            // Send compaction command via the session abstraction.
+            sessions.send_compact(&entity);
             ctx_window.tokens_used = 0;
             tracing::info!(
-                "[HOSPITAL COMPACT] {} — /compact sent, tokens reset",
+                "[HOSPITAL COMPACT] {} — compact sent, tokens reset",
                 name.0
             );
 

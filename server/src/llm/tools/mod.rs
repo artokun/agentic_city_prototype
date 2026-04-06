@@ -3,4 +3,5 @@
 
 pub mod catalog;
 pub mod execute;
+pub mod policy;
 pub mod schema;

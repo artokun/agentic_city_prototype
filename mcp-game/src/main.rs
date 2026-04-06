@@ -124,7 +124,8 @@ fn handle_tool_call(
         "jsonrpc": "2.0",
         "id": id,
         "result": {
-            "content": [{ "type": "text", "text": result.output }]
+            "content": [{ "type": "text", "text": result.output }],
+            "isError": result.is_error,
         }
     })
 }

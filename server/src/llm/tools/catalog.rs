@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::sync::LazyLock;
 
 /// A parameter on a tool.
 #[derive(Debug, Clone, Serialize)]
@@ -122,10 +123,9 @@ pub fn tools_for_set(tool_set: &str) -> Vec<ToolDef> {
     }
 }
 
-/// Game-agent tool set: a single `game_action` tool with action enum.
-fn game_tools() -> Vec<ToolDef> {
+/// Lazily computed game_action description string (avoids Box::leak).
+static GAME_ACTION_DESCRIPTION: LazyLock<String> = LazyLock::new(|| {
     let actions = game_action_catalog();
-    let action_names: Vec<&'static str> = actions.iter().map(|a| a.name).collect();
     let action_desc: String = actions
         .iter()
         .map(|a| {
@@ -137,16 +137,21 @@ fn game_tools() -> Vec<ToolDef> {
         })
         .collect::<Vec<_>>()
         .join("; ");
+    format!(
+        "Perform an action in the game world. This is your ONLY way to interact. Actions: {}",
+        action_desc
+    )
+});
+
+/// Game-agent tool set: a single `game_action` tool with action enum.
+fn game_tools() -> Vec<ToolDef> {
+    let actions = game_action_catalog();
+    let action_names: Vec<&'static str> = actions.iter().map(|a| a.name).collect();
 
     vec![ToolDef {
         name: "game_action",
-        description: Box::leak(
-            format!(
-                "Perform an action in the game world. This is your ONLY way to interact. Actions: {}",
-                action_desc
-            )
-            .into_boxed_str(),
-        ),
+        // LazyLock is 'static, so .as_str() yields &'static str.
+        description: GAME_ACTION_DESCRIPTION.as_str(),
         params: vec![
             ParamDef {
                 name: "action",

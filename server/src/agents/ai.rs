@@ -1,9 +1,7 @@
 use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::agents::components::*;
@@ -13,10 +11,11 @@ use crate::agents::perception::KnownLocations;
 use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
+use crate::llm::providers::claude::{self, AgentIdentity};
 use crate::network::agent_relay::AgentRelays;
 use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
-use crate::world::map::{GridPos, WorldMap};
+use crate::world::map::GridPos;
 use crate::world::shifts::ShiftWorker;
 use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
 
@@ -27,6 +26,19 @@ use super::personality::Personality;
 #[derive(Resource, Default)]
 pub struct AgentSessions {
     pub sessions: HashMap<Entity, SessionState>,
+}
+
+impl AgentSessions {
+    /// Send a compaction command to the agent's session.
+    /// Translates SessionCommand::Compact to the underlying transport.
+    pub fn send_compact(&self, entity: &Entity) -> bool {
+        if let Some(session) = self.sessions.get(entity) {
+            // The relay translates "/compact" to the actual compaction command.
+            session.prompt_tx.try_send("/compact".to_string()).is_ok()
+        } else {
+            false
+        }
+    }
 }
 
 pub struct SessionState {
@@ -42,7 +54,8 @@ pub struct AgentRelaysResource(pub AgentRelays);
 
 use crate::config;
 
-/// System: spawn Claude sessions via --sdk-url for agents.
+/// System: spawn Claude sessions via the adapter for agents.
+/// Delegates process spawning, MCP config, and relay setup to the Claude adapter.
 pub fn spawn_sessions_system(
     runtime: ResMut<TokioTasksRuntime>,
     mut sessions: ResMut<AgentSessions>,
@@ -63,14 +76,14 @@ pub fn spawn_sessions_system(
         let model_name = claude_model.0.clone();
         let system_prompt = super::personality::build_system_prompt(&name.0, personality);
         let relays_clone = relays.0.clone();
-        let sys_prompt_clone = system_prompt.clone();
 
         tracing::info!(
-            "Spawning Claude --sdk-url session for {} ({})",
+            "Spawning Claude session for {} ({})",
             agent_name,
             agent_uuid
         );
 
+        // Insert placeholder session — will be replaced with real channels on connect.
         let (placeholder_tx, _) = mpsc::channel(1);
         let (_, placeholder_rx) = mpsc::channel(1);
         sessions.sessions.insert(
@@ -85,137 +98,37 @@ pub fn spawn_sessions_system(
 
         let entity_copy = entity;
         let process_registry = process_registry.clone();
+        let sys_prompt_clone = system_prompt;
 
         runtime.spawn_background_task(move |mut ctx| async move {
+            // Register relay for this agent.
             let handle = relays_clone.register(&agent_uuid).await;
 
-            let prompt_file = format!("/tmp/agent-{}.md", agent_uuid);
-            if let Err(e) = tokio::fs::write(&prompt_file, &sys_prompt_clone).await {
-                tracing::error!("Failed to write prompt file: {}", e);
+            // Spawn Claude process via the adapter.
+            let identity = AgentIdentity {
+                name: agent_name.clone(),
+                uuid: agent_uuid.clone(),
+            };
+            if let Err(e) = claude::spawn_agent_process(
+                &identity,
+                &model_name,
+                &sys_prompt_clone,
+                port,
+                &process_registry,
+            )
+            .await
+            {
+                tracing::error!("Failed to spawn claude for {}: {}", agent_name, e);
+                ctx.run_on_main_thread(move |main_ctx| {
+                    let world = main_ctx.world;
+                    let mut sessions = world.resource_mut::<AgentSessions>();
+                    sessions.sessions.remove(&entity_copy);
+                })
+                .await;
                 return;
             }
 
-            // Per-agent MCP config with identity baked in.
-            // Use absolute path based on the binary's own location, not cwd.
-            let mcp_binary = std::env::current_exe()
-                .map(|exe| {
-                    // Try current dir first, then parent (handles test binaries in deps/)
-                    let dir = exe.parent().unwrap();
-                    let candidate = dir.join("mcp-game");
-                    if candidate.exists() {
-                        candidate.to_string_lossy().to_string()
-                    } else if let Some(parent) = dir.parent() {
-                        parent.join("mcp-game").to_string_lossy().to_string()
-                    } else {
-                        candidate.to_string_lossy().to_string()
-                    }
-                })
-                .unwrap_or_else(|_| "mcp-game".into());
-            let mcp_config_path = format!("/tmp/mcp-{}.json", agent_uuid);
-            let mcp_config_content = serde_json::json!({
-                "mcpServers": {
-                    "game-engine": {
-                        "command": mcp_binary,
-                        "args": [agent_name.clone(), agent_uuid.clone()],
-                        "env": {
-                            "AGENT_NAME": agent_name.clone(),
-                            "AGENT_ID": agent_uuid.clone(),
-                        }
-                    }
-                }
-            });
-            let _ = std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&mcp_config_content).unwrap());
-
-            let sdk_url = format!("ws://127.0.0.1:{}/agent/{}/ws", port, agent_uuid);
-            let mut env: HashMap<String, String> = std::env::vars().collect();
-            env.remove("ANTHROPIC_API_KEY");
-
-            let child = tokio::process::Command::new("claude")
-                .args([
-                    "--sdk-url", &sdk_url,
-                    "--output-format", "stream-json",
-                    "--input-format", "stream-json",
-                    "--permission-mode", "bypassPermissions",
-                    "--model", &model_name,
-                    "--append-system-prompt-file", &prompt_file,
-                    "--mcp-config", &mcp_config_path,
-                    "--verbose",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .envs(&env)
-                .kill_on_drop(true)
-                .spawn();
-
-            let mut child = match child {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("Failed to spawn claude for {}: {}", agent_name, e);
-                    return;
-                }
-            };
-
-            // Register the PID for clean shutdown.
-            let child_pid = child.id().unwrap_or(0);
-            if child_pid > 0 {
-                process_registry.register(child_pid);
-            }
-            tracing::info!("Claude spawned for {} → {} (model: {}, pid: {})", agent_name, sdk_url, model_name, child_pid);
-
-            // Capture stdout NDJSON — may contain assistant messages with thinking.
-            let name_out = agent_name.clone();
-            let ptx_stdout = handle.prompt_tx.clone();
-            if let Some(stdout) = child.stdout.take() {
-                let response_tx_clone = {
-                    // We need a way to send thoughts to the game.
-                    // The relay's response_tx is used for this.
-                    // But we don't have it here. Use the relay handle's channel isn't possible
-                    // since it's moved. Let's just log for now.
-                    tokio::spawn(async move {
-                        let reader = BufReader::new(stdout);
-                        let mut lines = reader.lines();
-                        while let Ok(Some(line)) = lines.next_line().await {
-                            if line.trim().is_empty() { continue; }
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                                let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("?");
-                                if msg_type == "assistant" {
-                                    // Extract thinking text from assistant content blocks.
-                                    let content = val.get("message")
-                                        .and_then(|m| m.get("content"))
-                                        .or_else(|| val.get("content"));
-                                    if let Some(arr) = content.and_then(|c| c.as_array()) {
-                                        for block in arr {
-                                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                                    if !text.is_empty() {
-                                                        let preview: String = text.chars().take(200).collect();
-                                                        tracing::info!("[stdout:{}] THOUGHT: {}", name_out, preview);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    })
-                };
-            }
-
-            let name_err = agent_name.clone();
-            if let Some(stderr) = child.stderr.take() {
-                tokio::spawn(async move {
-                    let reader = BufReader::new(stderr);
-                    let mut lines = reader.lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        if !line.is_empty() && !line.contains("debugger") {
-                            tracing::debug!("[claude:{}:stderr] {}", name_err, line);
-                        }
-                    }
-                });
-            }
-
+            // Wait for Claude to connect via WebSocket.
             tracing::info!("Waiting for Claude to connect for {}...", agent_name);
             let connected = handle.connected.clone();
             tokio::select! {
@@ -224,7 +137,6 @@ pub fn spawn_sessions_system(
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
                     tracing::error!("Claude connection timeout for {} (90s)", agent_name);
-                    // Remove placeholder session so spawn_sessions_system retries next tick.
                     ctx.run_on_main_thread(move |main_ctx| {
                         let world = main_ctx.world;
                         let mut sessions = world.resource_mut::<AgentSessions>();
@@ -235,11 +147,12 @@ pub fn spawn_sessions_system(
                 }
             }
 
+            // Wire relay channels into the session state.
             let ptx = handle.prompt_tx;
             let rrx = Arc::new(Mutex::new(handle.response_rx));
             let token_rx = Arc::new(Mutex::new(handle.token_rx));
 
-            // Send the intro message — Dungeon Crawler Carl style.
+            // Send the intro message.
             let intro = build_intro_message(&agent_name);
             let _ = ptx.send(intro).await;
 
@@ -256,16 +169,14 @@ pub fn spawn_sessions_system(
                     s.response_rx = rrx_clone;
                     tracing::info!("Session channels updated for entity {:?}", entity_copy);
                 }
-                // Store token_rx in the TokenEventQueue keyed by agent UUID.
                 let mut token_queue = world.resource_mut::<TokenEventQueue>();
-                token_queue.receivers.insert(agent_uuid_for_main, token_rx_clone);
-            }).await;
+                token_queue
+                    .receivers
+                    .insert(agent_uuid_for_main, token_rx_clone);
+            })
+            .await;
 
-            let _ = child.wait().await;
-            if child_pid > 0 { process_registry.remove(child_pid); }
-            tracing::warn!("Claude process exited for {} (pid: {}) — this should not happen during normal gameplay", agent_name, child_pid);
-            let _ = tokio::fs::remove_file(&prompt_file).await;
-            let _ = tokio::fs::remove_file(&mcp_config_path).await;
+            // The adapter's background task handles process lifecycle and cleanup.
         });
     }
 }
@@ -313,8 +224,8 @@ pub fn ai_thought_drain_system(
     }
 }
 
-/// System: send context updates to Claude sessions.
-/// Claude acts via the MCP game_action tool — we do NOT parse responses.
+/// System: send context updates to LLM sessions.
+/// The LLM acts via the MCP game_action tool — we do NOT parse responses.
 /// This system only provides situational awareness.
 pub fn ai_context_system(
     tick: Res<TickCount>,
@@ -366,7 +277,6 @@ pub fn ai_context_system(
         }
 
         // Don't prompt incapacitated agents — they're passed out.
-        // (Checked via goal since Incapacitated isn't in this query.)
         if matches!(goal, AgentGoal::Idle) && needs.energy <= 0.0 {
             continue;
         }
@@ -385,13 +295,11 @@ pub fn ai_context_system(
         }
 
         // Only send context when agent can act.
-        // PerformingAction is NOT included — let the action timer finish first.
         if matches!(goal, AgentGoal::PerformingAction) {
             continue;
         }
 
         // Bounty visibility: MUST be physically at the bounty board to see bounties.
-        // Only exception: your own active bounty is always visible (you know what you're working on).
         let at_board = known_locs
             .locations
             .values()
@@ -402,12 +310,10 @@ pub fn ai_context_system(
             .tokens
             .values()
             .filter(|b| {
-                // Always show your own active bounty.
                 let is_mine = b.claimed_by == Some(entity);
                 if is_mine {
                     return true;
                 }
-                // Only show available bounties if physically at the board entrance.
                 at_board && b.state == crate::world::bounty::BountyState::Available
             })
             .map(|b| {
@@ -420,9 +326,7 @@ pub fn ai_context_system(
                     crate::world::bounty::BountyState::Claimed => "(taken)",
                     _ => "(available)",
                 };
-                // Show instructions only for the agent's own active bounty.
                 let instructions = if is_mine {
-                    // Extract agent-facing instructions (before the GM criteria).
                     let agent_instructions = b
                         .hidden_criteria
                         .split("\n\nGM:")
@@ -500,7 +404,6 @@ pub fn ai_context_system(
                 }
             }
         }
-        // At the bounty board (even without InsideBuilding component).
         if matches!(goal, AgentGoal::InteractingWithBoard) {
             if !location_tools.contains(&"claim_bounty") {
                 location_tools.push("claim_bounty");
@@ -516,7 +419,6 @@ pub fn ai_context_system(
             location_tools.push("complete_bounty");
         }
 
-        // Get active bounty description.
         let active_bounty_desc = match goal {
             AgentGoal::ExecutingBounty(bid) => {
                 bounty_registry.get(*bid).map(|b| b.description.clone())
@@ -541,7 +443,7 @@ pub fn ai_context_system(
             business_cards,
         );
 
-        // Send context as a user message. Claude will think and call game_action tool.
+        // Send context as a user message. The LLM will think and call game_action tool.
         if let Err(e) = session.prompt_tx.try_send(context) {
             tracing::debug!("[AI:{}] context send failed: {}", name.0, e);
             continue;
@@ -552,12 +454,11 @@ pub fn ai_context_system(
 }
 
 /// Build the intro message sent to agents when they first spawn.
-/// Inspired by Dungeon Crawler Carl — dramatic, immersive, sets the stakes.
 fn build_intro_message(agent_name: &str) -> String {
     let others = match agent_name {
-        "Alice" => "Bob and Carol",
-        "Bob" => "Alice and Carol",
-        "Carol" => "Alice and Bob",
+        "Alice" | "Alice Haiku" => "Bob and Carol",
+        "Bob" | "Bob Sonnet" => "Alice and Carol",
+        "Carol" | "Carol Opus" => "Alice and Bob",
         _ => "the other contestants",
     };
 

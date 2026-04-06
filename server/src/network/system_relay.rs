@@ -12,7 +12,7 @@ use bevy::prelude::Resource;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, Notify};
 
-use crate::agents::claude;
+use crate::llm::providers::claude as claude_ndjson;
 use crate::network::agent_relay::TokenUsageEvent;
 
 #[derive(Clone, Default)]
@@ -94,7 +94,7 @@ async fn handle_system_ws(mut socket: WebSocket, relay: SystemRelay) {
     loop {
         tokio::select! {
             Some(prompt) = prompt_rx.recv() => {
-                let ndjson = claude::format_user_message(&prompt);
+                let ndjson = claude_ndjson::claude_format_user_message(&prompt);
                 if socket.send(Message::Text(ndjson.into())).await.is_err() {
                     tracing::warn!("[system-relay] WebSocket send failed");
                     break;
@@ -124,7 +124,7 @@ async fn handle_system_ws(mut socket: WebSocket, relay: SystemRelay) {
                                     let input = val.get("request")
                                         .and_then(|r| r.get("input"));
 
-                                    let response = claude::format_control_response(
+                                    let response = claude_ndjson::claude_format_control_response(
                                         request_id,
                                         tool_use_id,
                                         input,

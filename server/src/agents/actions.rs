@@ -145,16 +145,14 @@ pub fn action_timer_system(
             // Sleep actions trigger context compaction.
             let is_sleep = timer.action_name.contains("sleep");
             if is_sleep {
-                // Send /compact to trigger real context compaction.
-                if let Some(session) = sessions.sessions.get(&entity) {
-                    let _ = session.prompt_tx.try_send("/compact".to_string());
-                }
+                // Send compaction command via the session abstraction.
+                sessions.send_compact(&entity);
                 // Reset token counter and limit (coffee boosts expire on sleep).
                 let old = ctx_window.tokens_used;
                 ctx_window.tokens_used = 0;
                 ctx_window.context_limit = crate::config::context_limit();
                 tracing::info!(
-                    "[COMPACT] {} slept → /compact sent, tokens {} → 0",
+                    "[COMPACT] {} slept → compact sent, tokens {} → 0",
                     name.0,
                     old,
                 );

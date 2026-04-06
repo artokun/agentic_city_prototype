@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, Notify};
 
-use crate::agents::claude;
+use crate::llm::providers::claude as claude_ndjson;
 
 /// Token usage data extracted from Claude result messages.
 #[derive(Debug, Clone)]
@@ -115,7 +115,7 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
         tokio::select! {
             // Game → Claude: send user messages as NDJSON.
             Some(prompt) = prompt_rx.recv() => {
-                let ndjson = claude::format_user_message(&prompt);
+                let ndjson = claude_ndjson::claude_format_user_message(&prompt);
                 tracing::debug!("[relay:{}] → Claude: user message ({}b)", agent_id, ndjson.len());
                 if socket.send(Message::Text(ndjson.into())).await.is_err() {
                     tracing::warn!("[relay:{}] WebSocket send failed", agent_id);
@@ -192,7 +192,7 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
 
                                     tracing::debug!("[relay:{}] control_request: {} ({})", agent_id, subtype, request_id);
 
-                                    let response = claude::format_control_response(
+                                    let response = claude_ndjson::claude_format_control_response(
                                         request_id, tool_use_id, input,
                                     );
 
@@ -203,7 +203,7 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
 
                                 // Extract text from result messages only (skip assistant to avoid duplicates).
                                 "result" => {
-                                    if let Some(text) = claude::extract_result_text(&val) {
+                                    if let Some(text) = claude_ndjson::claude_extract_result_text(&val) {
                                         let preview: String = text.chars().take(80).collect();
                                         tracing::info!("[relay:{}] response: {}...", agent_id, preview);
                                         let _ = response_tx.send(text).await;
@@ -236,7 +236,7 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
                                 }
                                 // Capture assistant thinking as dialogue.
                                 "assistant" => {
-                                    if let Some(text) = claude::extract_result_text(&val) {
+                                    if let Some(text) = claude_ndjson::claude_extract_result_text(&val) {
                                         if !text.is_empty() {
                                             let msg = format!("thought:{}", text);
                                             match response_tx.send(msg.clone()).await {
@@ -261,7 +261,7 @@ async fn handle_agent_ws(mut socket: WebSocket, agent_id: String, relays: AgentR
                             // Re-process as text (same handler).
                             for line in text.lines() {
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                                    if let Some(text) = claude::extract_result_text(&val) {
+                                    if let Some(text) = claude_ndjson::claude_extract_result_text(&val) {
                                         let _ = response_tx.send(text).await;
                                     }
                                 }

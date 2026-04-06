@@ -1,17 +1,20 @@
 //! System AI session management and research agent spawning.
 //! Bounty reviews are handled by a persistent Claude `--sdk-url` session
 //! that receives each review as a user message and resolves it via MCP tools.
+//!
+//! Process spawning is delegated to the Claude adapter.
+//! This module is role-focused: it manages review queues, dispatching, and
+//! token tracking — not provider-specific details.
 
 use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
-use std::collections::{HashMap, VecDeque};
-use std::process::Stdio;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::config;
+use crate::llm::providers::claude;
 use crate::network::agent_relay::TokenUsageEvent;
 use crate::network::system_relay::SystemRelayResource;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -39,7 +42,7 @@ pub struct SystemReviewRequest {
     pub reward_gold: u32,
 }
 
-/// Shared state for the persistent System AI Claude session.
+/// Shared state for the persistent System AI session.
 #[derive(Resource, Default)]
 pub struct SystemAiState {
     pub prompt_tx: Option<mpsc::Sender<String>>,
@@ -94,9 +97,19 @@ impl SystemAiState {
         self.spawning = false;
         self.tokens_since_compact = 0;
     }
+
+    /// Send a compaction command to the System AI session.
+    pub fn send_compact(&self) -> bool {
+        if let Some(ref prompt_tx) = self.prompt_tx {
+            prompt_tx.try_send("/compact".to_string()).is_ok()
+        } else {
+            false
+        }
+    }
 }
 
-/// System: ensure the persistent System AI Claude session exists.
+/// System: ensure the persistent System AI session exists.
+/// Delegates process spawning to the Claude adapter.
 pub fn spawn_system_ai_session_system(
     runtime: ResMut<TokioTasksRuntime>,
     mut system_ai: ResMut<SystemAiState>,
@@ -118,152 +131,26 @@ pub fn spawn_system_ai_session_system(
     runtime.spawn_background_task(move |mut ctx| async move {
         let handle = relays.register().await;
 
-        let prompt_file = "/tmp/system-ai-prompt.md".to_string();
-        let settings_path = "/tmp/system-ai-settings.json".to_string();
-        if let Err(err) = tokio::fs::write(&prompt_file, &system_prompt).await {
-            tracing::error!("[SystemAI] Failed to write prompt file: {}", err);
-            ctx.run_on_main_thread(|main_ctx| {
-                let world = main_ctx.world;
-                let mut system_ai = world.resource_mut::<SystemAiState>();
-                system_ai.spawning = false;
-            })
-            .await;
-            return;
-        }
-
-        let settings = serde_json::json!({
-            "autoCompactWindow": config::system_ai_compact_limit(),
-        });
-        if let Err(err) = tokio::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&settings).unwrap(),
-        )
-        .await
-        {
-            tracing::error!("[SystemAI] Failed to write settings file: {}", err);
-            ctx.run_on_main_thread(|main_ctx| {
-                let world = main_ctx.world;
-                let mut system_ai = world.resource_mut::<SystemAiState>();
-                system_ai.spawning = false;
-            })
-            .await;
-            let _ = tokio::fs::remove_file(&prompt_file).await;
-            return;
-        }
-
-        let mcp_binary = resolve_sibling_binary("mcp-gm");
-        let mcp_config_path = "/tmp/mcp-system-ai.json".to_string();
-        let mcp_config = serde_json::json!({
-            "mcpServers": {
-                "system-ai": {
-                    "command": mcp_binary,
-                    "args": [],
-                }
-            }
-        });
-
-        if let Err(err) = tokio::fs::write(
-            &mcp_config_path,
-            serde_json::to_string_pretty(&mcp_config).unwrap(),
-        )
-        .await
-        {
-            tracing::error!("[SystemAI] Failed to write MCP config: {}", err);
-            ctx.run_on_main_thread(|main_ctx| {
-                let world = main_ctx.world;
-                let mut system_ai = world.resource_mut::<SystemAiState>();
-                system_ai.spawning = false;
-            })
-            .await;
-            let _ = tokio::fs::remove_file(&prompt_file).await;
-            let _ = tokio::fs::remove_file(&settings_path).await;
-            return;
-        }
-
-        let sdk_url = format!("ws://127.0.0.1:{}/system/ws", port);
-        let mut env: HashMap<String, String> = std::env::vars().collect();
-        env.remove("ANTHROPIC_API_KEY");
-
-        let child = tokio::process::Command::new("claude")
-            .args([
-                "--sdk-url",
-                &sdk_url,
-                "--output-format",
-                "stream-json",
-                "--input-format",
-                "stream-json",
-                "--permission-mode",
-                "bypassPermissions",
-                "--model",
-                SYSTEM_AI_MODEL,
-                "--append-system-prompt-file",
-                &prompt_file,
-                "--settings",
-                &settings_path,
-                "--mcp-config",
-                &mcp_config_path,
-                "--verbose",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .envs(&env)
-            .kill_on_drop(true)
-            .spawn();
-
-        let mut child = match child {
-            Ok(child) => child,
-            Err(err) => {
-                tracing::error!("[SystemAI] Failed to spawn Claude: {}", err);
-                ctx.run_on_main_thread(|main_ctx| {
-                    let world = main_ctx.world;
-                    let mut system_ai = world.resource_mut::<SystemAiState>();
-                    system_ai.spawning = false;
-                })
-                .await;
-                let _ = tokio::fs::remove_file(&prompt_file).await;
-                let _ = tokio::fs::remove_file(&settings_path).await;
-                let _ = tokio::fs::remove_file(&mcp_config_path).await;
-                return;
-            }
-        };
-
-        let child_pid = child.id().unwrap_or(0);
-        if child_pid > 0 {
-            process_registry.register(child_pid);
-        }
-
-        tracing::info!(
-            "[SystemAI] Claude spawned → {} (model: {}, pid: {})",
-            sdk_url,
+        // Spawn Claude process via the adapter.
+        if let Err(e) = claude::spawn_system_ai_process(
             SYSTEM_AI_MODEL,
-            child_pid
-        );
-
-        if let Some(stdout) = child.stdout.take() {
-            tokio::spawn(async move {
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if !line.trim().is_empty() {
-                        tracing::debug!("[SystemAI:stdout] {}", line);
-                    }
-                }
-            });
+            &system_prompt,
+            port,
+            &process_registry,
+        )
+        .await
+        {
+            tracing::error!("[SystemAI] Failed to spawn: {}", e);
+            ctx.run_on_main_thread(|main_ctx| {
+                let world = main_ctx.world;
+                let mut system_ai = world.resource_mut::<SystemAiState>();
+                system_ai.spawning = false;
+            })
+            .await;
+            return;
         }
 
-        if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if !line.trim().is_empty() && !line.contains("debugger") {
-                        tracing::debug!("[SystemAI:stderr] {}", line);
-                    }
-                }
-            });
-        }
-
+        // Wait for Claude to connect via WebSocket.
         let connected = handle.connected.clone();
         let connected_ok = tokio::select! {
             _ = connected.notified() => true,
@@ -272,19 +159,12 @@ pub fn spawn_system_ai_session_system(
 
         if !connected_ok {
             tracing::error!("[SystemAI] Claude connection timeout (90s)");
-            if child_pid > 0 {
-                let _ = child.kill().await;
-                process_registry.remove(child_pid);
-            }
             ctx.run_on_main_thread(|main_ctx| {
                 let world = main_ctx.world;
                 let mut system_ai = world.resource_mut::<SystemAiState>();
                 system_ai.spawning = false;
             })
             .await;
-            let _ = tokio::fs::remove_file(&prompt_file).await;
-            let _ = tokio::fs::remove_file(&settings_path).await;
-            let _ = tokio::fs::remove_file(&mcp_config_path).await;
             return;
         }
 
@@ -317,23 +197,7 @@ pub fn spawn_system_ai_session_system(
             )
             .await;
 
-        let _ = child.wait().await;
-        if child_pid > 0 {
-            process_registry.remove(child_pid);
-        }
-        tracing::warn!("[SystemAI] Claude process exited (pid: {})", child_pid);
-
-        ctx.run_on_main_thread(|main_ctx| {
-            let world = main_ctx.world;
-            let mut system_ai = world.resource_mut::<SystemAiState>();
-            system_ai.requeue_current_review();
-            system_ai.clear_session_channels();
-        })
-        .await;
-
-        let _ = tokio::fs::remove_file(&prompt_file).await;
-        let _ = tokio::fs::remove_file(&settings_path).await;
-        let _ = tokio::fs::remove_file(&mcp_config_path).await;
+        // The adapter's background task handles process lifecycle and cleanup.
     });
 }
 
@@ -421,7 +285,7 @@ pub fn system_ai_response_drain_system(mut system_ai: ResMut<SystemAiState>) {
     }
 }
 
-/// System: track System AI token usage and trigger `/compact` at 15k tokens.
+/// System: track System AI token usage and trigger compaction.
 pub fn system_ai_token_drain_system(mut system_ai: ResMut<SystemAiState>) {
     let Some(token_rx) = system_ai.token_rx.as_ref().cloned() else {
         return;
@@ -434,20 +298,14 @@ pub fn system_ai_token_drain_system(mut system_ai: ResMut<SystemAiState>) {
             system_ai.tokens_since_compact.saturating_add(total_tokens);
 
         if system_ai.tokens_since_compact >= config::system_ai_compact_limit() {
-            if let Some(prompt_tx) = system_ai.prompt_tx.clone() {
-                match prompt_tx.try_send("/compact".to_string()) {
-                    Ok(()) => {
-                        tracing::info!(
-                            "[SystemAI] /compact sent after {} tokens",
-                            system_ai.tokens_since_compact
-                        );
-                        system_ai.tokens_since_compact = 0;
-                    }
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                        system_ai.clear_session_channels();
-                    }
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
-                }
+            if system_ai.send_compact() {
+                tracing::info!(
+                    "[SystemAI] compaction sent after {} tokens",
+                    system_ai.tokens_since_compact
+                );
+                system_ai.tokens_since_compact = 0;
+            } else if system_ai.prompt_tx.is_none() {
+                system_ai.clear_session_channels();
             }
         }
     }
@@ -630,20 +488,4 @@ Optional tool when rules explicitly authorize extra compensation:
         reward_gold = review.reward_gold,
         hidden_criteria = review.hidden_criteria,
     )
-}
-
-fn resolve_sibling_binary(binary_name: &str) -> String {
-    std::env::current_exe()
-        .map(|exe| {
-            let dir = exe.parent().unwrap();
-            let candidate = dir.join(binary_name);
-            if candidate.exists() {
-                candidate.to_string_lossy().to_string()
-            } else if let Some(parent) = dir.parent() {
-                parent.join(binary_name).to_string_lossy().to_string()
-            } else {
-                candidate.to_string_lossy().to_string()
-            }
-        })
-        .unwrap_or_else(|_| binary_name.to_string())
 }
