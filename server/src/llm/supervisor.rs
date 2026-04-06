@@ -78,9 +78,10 @@ pub struct SessionBridge {
     pub prompt_tx: tokio::sync::mpsc::Sender<String>,
     pub response_rx: tokio::sync::mpsc::Receiver<String>,
     pub token_rx: tokio::sync::mpsc::Receiver<TokenUsageEvent>,
-    /// Notified when the provider session is ready to receive prompts.
-    /// For OpenAI this fires immediately; for Claude it fires on WebSocket connect.
-    pub connected: Arc<tokio::sync::Notify>,
+    /// Receives `true` when the provider session is ready to receive prompts.
+    /// Uses `watch` instead of `Notify` so the signal is retained even if
+    /// the receiver isn't registered yet (fixes OpenAI race condition).
+    pub connected: tokio::sync::watch::Receiver<bool>,
 }
 
 /// Parameters for spawning a session.
@@ -205,14 +206,15 @@ async fn spawn_openai_session(
     });
 
     // OpenAI is ready immediately (no WebSocket handshake).
-    let connected = Arc::new(tokio::sync::Notify::new());
-    connected.notify_waiters();
+    // Send `true` via watch channel — retained even if receiver not yet registered.
+    let (connected_tx, connected_rx) = tokio::sync::watch::channel(true);
+    drop(connected_tx); // sender not needed — value is already set
 
     Ok(SessionBridge {
         prompt_tx,
         response_rx,
         token_rx,
-        connected,
+        connected: connected_rx,
     })
 }
 
@@ -251,11 +253,14 @@ async fn spawn_claude_session(
         // System relay doesn't have a response_rx in the same shape, create a dummy.
         let (_response_tx, response_rx) = mpsc::channel::<String>(64);
 
+        // Bridge Notify -> watch<bool> for unified SessionBridge API.
+        let connected_rx = notify_to_watch(handle.connected);
+
         Ok(SessionBridge {
             prompt_tx: handle.prompt_tx,
             response_rx,
             token_rx,
-            connected: handle.connected,
+            connected: connected_rx,
         })
     } else {
         // Agent: use agent relay.
@@ -275,13 +280,26 @@ async fn spawn_claude_session(
         )
         .await?;
 
+        let connected_rx = notify_to_watch(handle.connected);
+
         Ok(SessionBridge {
             prompt_tx: handle.prompt_tx,
             response_rx: handle.response_rx,
             token_rx: handle.token_rx,
-            connected: handle.connected,
+            connected: connected_rx,
         })
     }
+}
+
+/// Bridge a `Notify` (from relay) into a `watch<bool>` (for SessionBridge).
+/// Spawns a task that waits for the notification and sends `true`.
+fn notify_to_watch(notify: Arc<tokio::sync::Notify>) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        notify.notified().await;
+        let _ = tx.send(true);
+    });
+    rx
 }
 
 /// Run a one-shot LLM request through the session engine.

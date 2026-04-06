@@ -181,7 +181,7 @@ pub fn spawn_system_ai_session_system(
             system_relay: Some(relays.clone()),
         };
 
-        let bridge = match crate::llm::supervisor::spawn_session(
+        let mut bridge = match crate::llm::supervisor::spawn_session(
             &llm_config_clone, spawn_params,
         ).await {
             Ok(b) => b,
@@ -196,15 +196,9 @@ pub fn spawn_system_ai_session_system(
             }
         };
 
-        // Wait for provider to be ready.
-        let connected = bridge.connected.clone();
-        let connected_ok = tokio::select! {
-            _ = connected.notified() => true,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => false,
-        };
-
-        if !connected_ok {
-            tracing::error!("[SystemAI] Connection timeout (90s)");
+        // Wait for provider to be ready (watch channel: true = connected).
+        let mut connected_rx = bridge.connected.clone();
+        if !crate::agents::ai::wait_for_connected(&mut connected_rx, "SystemAI", 90).await {
             ctx.run_on_main_thread(|main_ctx| {
                 let world = main_ctx.world;
                 let mut system_ai = world.resource_mut::<SystemAiState>();
@@ -212,8 +206,6 @@ pub fn spawn_system_ai_session_system(
             }).await;
             return;
         }
-
-        tracing::info!("[SystemAI] Session connected");
 
         let prompt_tx_for_main = bridge.prompt_tx.clone();
         let token_rx_for_main = Arc::new(Mutex::new(bridge.token_rx));

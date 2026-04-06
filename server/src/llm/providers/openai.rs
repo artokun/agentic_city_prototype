@@ -269,6 +269,8 @@ async fn stream_loop(
     let client = reqwest::Client::new();
     let tools = compile_tools(&config.tool_sets);
     let mut previous_response_id = initial_previous_response_id;
+    // Session-scoped document inspection tracking for System AI policy enforcement.
+    let mut inspected_docs = std::collections::HashSet::new();
 
     while let Some(cmd) = command_rx.recv().await {
         match cmd {
@@ -282,6 +284,7 @@ async fn stream_loop(
                     Some(&config.system_prompt),
                     previous_response_id.as_deref(),
                     &event_tx,
+                    &mut inspected_docs,
                 )
                 .await
                 {
@@ -358,6 +361,7 @@ async fn run_with_tool_loop(
     system_prompt: Option<&str>,
     initial_prev_id: Option<&str>,
     event_tx: &mpsc::Sender<SessionEvent>,
+    inspected_docs: &mut std::collections::HashSet<String>,
 ) -> Result<String, String> {
     let mut current_input = initial_input.clone();
     let mut prev_id = initial_prev_id.map(|s| s.to_string());
@@ -406,6 +410,7 @@ async fn run_with_tool_loop(
                 &tc.name,
                 &tc.arguments,
                 config.agent_identity.as_ref(),
+                Some(inspected_docs),
             );
 
             tracing::info!(
@@ -437,6 +442,7 @@ fn execute_tool_call(
     tool_name: &str,
     arguments: &serde_json::Value,
     agent_identity: Option<&(String, String)>,
+    inspected_docs: Option<&mut std::collections::HashSet<String>>,
 ) -> crate::llm::types::ToolCallResult {
     match tool_name {
         "game_action" => {
@@ -446,8 +452,8 @@ fn execute_tool_call(
             execute_game_action(arguments, name, id)
         }
         _ => {
-            // System tools or unknown tools.
-            execute_system_tool(tool_name, arguments)
+            // System tools — pass inspection tracking for policy enforcement.
+            execute_system_tool(tool_name, arguments, inspected_docs)
         }
     }
 }

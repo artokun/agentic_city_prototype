@@ -95,7 +95,7 @@ fn handle_tool_call(msg: &Value, id: &Option<Value>) -> Value {
             {
                 Some(content) => (content, false),
                 None => {
-                    let r = execute_system_tool(tool_name, &arguments);
+                    let r = execute_system_tool(tool_name, &arguments, None);
                     (r.output, r.is_error)
                 }
             };
@@ -126,14 +126,14 @@ fn handle_tool_call(msg: &Value, id: &Option<Value>) -> Value {
                 return tool_result(id, &err, true);
             }
 
-            let r = execute_system_tool(tool_name, &arguments);
+            let r = execute_system_tool(tool_name, &arguments, None);
             if !r.is_error {
                 clear_document_inspection(&keys_to_clear);
             }
             (r.output, r.is_error)
         }
         "query_world_state" | "grant_gold" => {
-            let r = execute_system_tool(tool_name, &arguments);
+            let r = execute_system_tool(tool_name, &arguments, None);
             (r.output, r.is_error)
         }
         _ => (format!("Unknown tool: {}", tool_name), true),

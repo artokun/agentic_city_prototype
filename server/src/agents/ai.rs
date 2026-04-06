@@ -160,7 +160,7 @@ pub fn spawn_sessions_system(
                 system_relay: None,
             };
 
-            let bridge = match crate::llm::supervisor::spawn_session(
+            let mut bridge = match crate::llm::supervisor::spawn_session(
                 &llm_config_clone, spawn_params,
             ).await {
                 Ok(b) => b,
@@ -175,21 +175,14 @@ pub fn spawn_sessions_system(
                 }
             };
 
-            // Wait for provider to be ready.
-            let connected = bridge.connected.clone();
-            tokio::select! {
-                _ = connected.notified() => {
-                    tracing::info!("Session connected for {}", agent_name);
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
-                    tracing::error!("Session connection timeout for {} (90s)", agent_name);
-                    ctx.run_on_main_thread(move |main_ctx| {
-                        let world = main_ctx.world;
-                        let mut sessions = world.resource_mut::<AgentSessions>();
-                        sessions.sessions.remove(&entity_copy);
-                    }).await;
-                    return;
-                }
+            // Wait for provider to be ready (watch channel: true = connected).
+            if !wait_for_connected(&mut bridge.connected, &agent_name, 90).await {
+                ctx.run_on_main_thread(move |main_ctx| {
+                    let world = main_ctx.world;
+                    let mut sessions = world.resource_mut::<AgentSessions>();
+                    sessions.sessions.remove(&entity_copy);
+                }).await;
+                return;
             }
 
             // Send the intro message.
@@ -525,4 +518,34 @@ You have been placed near the bounty board. That is not a coincidence. Your firs
 Good luck, {agent_name}. The clock is ticking.
 "#
     )
+}
+
+/// Wait for a session to signal readiness via a watch channel.
+/// Returns true if connected, false on timeout.
+pub async fn wait_for_connected(
+    rx: &mut tokio::sync::watch::Receiver<bool>,
+    label: &str,
+    timeout_secs: u64,
+) -> bool {
+    // Already ready (e.g. OpenAI signals immediately at construction).
+    if *rx.borrow() {
+        tracing::info!("Session connected for {} (immediate)", label);
+        return true;
+    }
+    // Wait for the value to change to true.
+    tokio::select! {
+        result = rx.changed() => {
+            if result.is_ok() && *rx.borrow() {
+                tracing::info!("Session connected for {}", label);
+                true
+            } else {
+                tracing::error!("Session connect signal lost for {}", label);
+                false
+            }
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+            tracing::error!("Session connection timeout for {} ({}s)", label, timeout_secs);
+            false
+        }
+    }
 }

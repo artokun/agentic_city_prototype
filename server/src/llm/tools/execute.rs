@@ -39,7 +39,13 @@ pub fn execute_game_action(
 }
 
 /// Execute a system-AI tool call by name.
-pub fn execute_system_tool(tool_name: &str, arguments: &Value) -> ToolCallResult {
+/// `inspected_docs` tracks which documents have been read — must be non-None to enforce
+/// the same document-inspection policy as mcp-gm (must read all docs before approve/reject).
+pub fn execute_system_tool(
+    tool_name: &str,
+    arguments: &Value,
+    mut inspected_docs: Option<&mut std::collections::HashSet<String>>,
+) -> ToolCallResult {
     let base = game_server_url();
     let result = match tool_name {
         "query_world_state" => {
@@ -58,9 +64,18 @@ pub fn execute_system_tool(tool_name: &str, arguments: &Value) -> ToolCallResult
                 .get("title")
                 .and_then(|t| t.as_str())
                 .unwrap_or("");
-            execute_read_document(agent_name, title, &base)
+            let result = execute_read_document(agent_name, title, &base);
+            // Track inspection if successful.
+            if let Ok(ref content) = result {
+                if let Some(ref mut docs) = inspected_docs {
+                    let key = super::policy::document_key(agent_name, title, content.len());
+                    docs.insert(key);
+                }
+            }
+            result
         }
-        "approve" => {
+        "approve" | "reject" => {
+            let approved = tool_name == "approve";
             let bounty_id = arguments
                 .get("bounty_id")
                 .and_then(|b| b.as_str())
@@ -68,19 +83,28 @@ pub fn execute_system_tool(tool_name: &str, arguments: &Value) -> ToolCallResult
             let message = arguments
                 .get("message")
                 .and_then(|m| m.as_str())
-                .unwrap_or("approved");
-            execute_verdict(bounty_id, true, message, &base)
-        }
-        "reject" => {
-            let bounty_id = arguments
-                .get("bounty_id")
-                .and_then(|b| b.as_str())
-                .unwrap_or("");
-            let message = arguments
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("rejected");
-            execute_verdict(bounty_id, false, message, &base)
+                .unwrap_or(if approved { "approved" } else { "rejected" });
+
+            // Enforce document inspection policy before allowing verdict.
+            if let Some(docs) = inspected_docs {
+                match super::policy::required_document_keys(bounty_id) {
+                    Ok(required) => {
+                        if let Err(msg) = super::policy::validate_document_inspection(&required, docs) {
+                            return ToolCallResult {
+                                id: String::new(),
+                                output: format!("BLOCKED: {}. Read all submitted documents before issuing a verdict.", msg),
+                                is_error: true,
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[system-tool] Could not check doc inspection for {}: {}", bounty_id, e);
+                        // Allow verdict if we can't determine required docs (e.g. no docs submitted).
+                    }
+                }
+            }
+
+            execute_verdict(bounty_id, approved, message, &base)
         }
         "grant_gold" => {
             let body = json!({

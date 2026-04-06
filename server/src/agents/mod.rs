@@ -116,11 +116,12 @@ fn spawn_agents(
             .map(|(n, s, m)| (n.as_str(), *s, m.as_str()))
             .collect();
     } else {
-        // Default: each agent gets a different Claude model to test speed vs intelligence.
+        // Default: each agent gets a profile from config/llm.toml.
+        // The profile determines both the provider and model.
         agents_config = vec![
-            ("Alice Haiku", 2.0, "haiku"),  // bubbly socialite
-            ("Bob Sonnet", 1.5, "sonnet"),  // no-nonsense ex-military
-            ("Carol Opus", 3.0, "opus"),    // hacker gamer girl
+            ("Alice Haiku", 2.0, "agent-default"),  // bubbly socialite
+            ("Bob Sonnet", 1.5, "agent-default"),    // no-nonsense ex-military
+            ("Carol Opus", 3.0, "agent-smart"),      // hacker gamer girl
         ];
     }
 
@@ -173,12 +174,10 @@ fn spawn_agents(
 
         // Generate unique personality.
         let personality = personality::generate_personality(name);
-        let profile_ref = match *model {
-            "opus" => components::SessionProfileRef("agent-smart".into()),
-            _ => components::SessionProfileRef("agent-default".into()),
-        };
+        // model is now a profile name from config/llm.toml.
+        let profile_ref = components::SessionProfileRef(model.to_string());
         tracing::info!(
-            "spawned {name} at ({}, {}), speed={speed}, model={model}, profile={}\n{}",
+            "spawned {name} at ({}, {}), speed={speed}, profile={}\n{}",
             start.x,
             start.y,
             profile_ref.0,
