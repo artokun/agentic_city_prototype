@@ -49,6 +49,8 @@ pub struct SessionState {
     pub prompt_tx: mpsc::Sender<String>,
     pub response_rx: Arc<Mutex<mpsc::Receiver<String>>>,
     pub last_decision_tick: u64,
+    /// Stored for potential checkpoint/resume use.
+    #[allow(dead_code)]
     pub system_prompt: String,
 }
 
@@ -153,8 +155,8 @@ pub fn spawn_sessions_system(
 
                 runtime.spawn_background_task(move |mut ctx| async move {
                     // Create command/event channels for the gameplay interface.
-                    let (cmd_tx, cmd_rx) = mpsc::channel::<SessionCommand>(64);
-                    let (evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
+                    let (cmd_tx, _cmd_rx) = mpsc::channel::<SessionCommand>(64);
+                    let (_evt_tx, evt_rx) = mpsc::channel::<SessionEvent>(256);
 
                     // Create a bridge: prompt_tx (String) -> cmd_tx (SessionCommand).
                     let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(32);

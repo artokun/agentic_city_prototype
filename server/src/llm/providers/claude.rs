@@ -6,15 +6,13 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
-
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::llm::config::SessionProfile;
 use crate::llm::supervisor::SessionAdapter;
 use crate::llm::types::{
-    AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, UsageData,
+    AdapterError, SessionCheckpoint, SessionCommand, SessionEvent,
 };
 use crate::process_manager::ProcessRegistry;
 
