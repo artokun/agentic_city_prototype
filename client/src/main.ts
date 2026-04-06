@@ -225,7 +225,8 @@ function render(s: WorldSnapshot) {
     chatHtml += `<div class="chat-msg"><strong style="color:${agentColor(msg.speaker)}">${msg.speaker}</strong>: ${msg.text}</div>`;
   }
   chatLog.innerHTML = chatHtml || '<span class="muted">No conversations yet</span>';
-  if (chatHtml) chatLog.scrollTop = chatLog.scrollHeight;
+  const chatAutoScroll = document.getElementById("chat-autoscroll") as HTMLInputElement;
+  if (chatHtml && chatAutoScroll?.checked) chatLog.scrollTop = chatLog.scrollHeight;
 
   // Relationships
   let rh = "";
@@ -294,7 +295,8 @@ function render(s: WorldSnapshot) {
   }
   if (logHtml) {
     logEl.innerHTML = logHtml;
-    logPanel.scrollTop = logPanel.scrollHeight;
+    const logAutoScroll = document.getElementById("log-autoscroll") as HTMLInputElement;
+    if (logAutoScroll?.checked) logPanel.scrollTop = logPanel.scrollHeight;
   }
 
   const q = s.boardQueue();
