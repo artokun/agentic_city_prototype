@@ -1,0 +1,37 @@
+# LLM provider and session profile configuration.
+# Profiles map session roles to providers + model + tuning.
+
+[providers.claude]
+type = "claude_cli"
+model = "opus"
+
+[providers.openai]
+type = "openai_responses"
+model = "gpt-5.4"
+api_key_env = "OPENAI_API_KEY"
+
+# --- Session profiles ---
+
+[profiles.agent-default]
+provider = "claude"
+model = "haiku"
+compact_threshold = 50000
+tool_sets = ["game"]
+
+[profiles.agent-smart]
+provider = "claude"
+model = "opus"
+compact_threshold = 50000
+tool_sets = ["game"]
+
+[profiles.system-ai]
+provider = "claude"
+model = "opus"
+compact_threshold = 15000
+tool_sets = ["system"]
+
+[profiles.agent-openai]
+provider = "openai"
+model = "gpt-5.4"
+compact_threshold = 50000
+tool_sets = ["game"]

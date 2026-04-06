@@ -1,6 +1,7 @@
 mod agents;
 pub mod config;
 mod items;
+mod llm;
 mod network;
 mod process_manager;
 mod scenario;
@@ -15,6 +16,32 @@ use std::time::Duration;
 fn main() {
     tracing_subscriber::fmt::init();
 
+    // Load LLM config from TOML.
+    let llm_config = match llm::config::LlmConfig::from_file("config/llm.toml") {
+        Ok(cfg) => {
+            tracing::info!(
+                "[LLM] Loaded config: {} providers, {} profiles",
+                cfg.providers.len(),
+                cfg.profiles.len()
+            );
+            for (name, p) in &cfg.providers {
+                tracing::info!("[LLM]   provider '{}': type={}, model={}", name, p.provider_type, p.model);
+            }
+            for (name, p) in &cfg.profiles {
+                let model = p.model.as_deref().unwrap_or("(provider default)");
+                tracing::info!("[LLM]   profile '{}': provider={}, model={}, compact={}", name, p.provider, model, p.compact_threshold);
+            }
+            cfg
+        }
+        Err(e) => {
+            tracing::warn!("[LLM] Could not load config/llm.toml: {e}; using empty config");
+            llm::config::LlmConfig {
+                providers: Default::default(),
+                profiles: Default::default(),
+            }
+        }
+    };
+
     let registry = process_manager::ProcessRegistry::default();
     process_manager::install_signal_handler(registry.clone());
 
@@ -26,6 +53,8 @@ fn main() {
         )
         .add_plugins(TokioTasksPlugin::default())
         .insert_resource(process_manager::ProcessRegistryRes(registry))
+        .insert_resource(llm_config)
+        .init_resource::<llm::session_registry::SessionRegistry>()
         .add_plugins(tick::GameTickPlugin)
         .add_plugins(world::WorldPlugin)
         .add_plugins(agents::AgentPlugin)

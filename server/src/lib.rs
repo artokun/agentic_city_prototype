@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod config;
 pub mod items;
+pub mod llm;
 pub mod network;
 pub mod process_manager;
 pub mod scenario;

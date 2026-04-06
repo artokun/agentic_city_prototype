@@ -175,14 +175,19 @@ fn spawn_agents(
         // Generate unique personality.
         let personality = personality::generate_personality(name);
         let claude_model = components::ClaudeModel(model.to_string());
+        let profile_ref = match *model {
+            "opus" => components::SessionProfileRef("agent-smart".into()),
+            _ => components::SessionProfileRef("agent-default".into()),
+        };
         tracing::info!(
-            "spawned {name} at ({}, {}), speed={speed}, model={model}\n{}",
+            "spawned {name} at ({}, {}), speed={speed}, model={model}, profile={}\n{}",
             start.x,
             start.y,
+            profile_ref.0,
             personality.traits
         );
 
-        commands.spawn((bundle, personality, claude_model));
+        commands.spawn((bundle, personality, claude_model, profile_ref));
     }
 }
 

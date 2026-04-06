@@ -35,6 +35,10 @@ pub struct AgentId(pub Uuid);
 #[derive(Component, Clone)]
 pub struct ClaudeModel(pub String);
 
+/// References a named session profile from `config/llm.toml`.
+#[derive(Component, Clone, Debug)]
+pub struct SessionProfileRef(pub String);
+
 #[derive(Component)]
 pub struct AgentName(pub String);
 
