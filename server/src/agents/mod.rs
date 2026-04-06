@@ -122,6 +122,7 @@ fn spawn_agents(
             ("Alice Haiku", 2.0, "agent-default"),  // bubbly socialite
             ("Bob Sonnet", 1.5, "agent-default"),    // no-nonsense ex-military
             ("Carol Opus", 3.0, "agent-smart"),      // hacker gamer girl
+            ("Dave GPT", 2.0, "agent-openai"),       // meek, apologetic
         ];
     }
 

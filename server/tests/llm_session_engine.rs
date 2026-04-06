@@ -421,8 +421,9 @@ fn openai_schema_system_tools_all_have_function_type() {
 
     for func in &funcs {
         assert_eq!(func["type"], "function");
-        assert!(func["function"]["name"].as_str().is_some());
-        assert_eq!(func["function"]["parameters"]["type"], "object");
+        // Responses API: name at top level, not nested under "function"
+        assert!(func["name"].as_str().is_some());
+        assert_eq!(func["parameters"]["type"], "object");
     }
 }
 

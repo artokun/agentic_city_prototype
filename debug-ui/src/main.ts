@@ -343,6 +343,7 @@ const AGENT_COLORS: Record<string, string> = {
   "Alice Haiku": "#ff6b6b",
   "Bob Sonnet": "#4ecdc4",
   "Carol Opus": "#ffe66d",
+  "Dave GPT": "#a8e6cf",
   "SYSTEM": "#635bff",
 };
 function agentColor(name: string): string {

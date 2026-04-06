@@ -40,7 +40,9 @@ pub fn to_openai_functions(tools: &[ToolDef]) -> Vec<Value> {
     tools.iter().map(|t| to_openai_function(t)).collect()
 }
 
-/// Compile a single tool into OpenAI function-calling format.
+/// Compile a single tool into OpenAI Responses API format.
+/// Note: Responses API uses `{"type": "function", "name": ..., "parameters": ...}`
+/// (flat), NOT the Chat Completions format which nests under `"function": {...}`.
 fn to_openai_function(tool: &ToolDef) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
@@ -54,14 +56,12 @@ fn to_openai_function(tool: &ToolDef) -> Value {
 
     json!({
         "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            }
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
         }
     })
 }
@@ -158,8 +158,9 @@ mod tests {
         let funcs = to_openai_functions(&tools);
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0]["type"], "function");
-        assert_eq!(funcs[0]["function"]["name"], "game_action");
-        assert!(funcs[0]["function"]["parameters"]["properties"]
+        // Responses API: name at top level, not nested under "function"
+        assert_eq!(funcs[0]["name"], "game_action");
+        assert!(funcs[0]["parameters"]["properties"]
             .as_object()
             .unwrap()
             .contains_key("action"));
@@ -172,8 +173,8 @@ mod tests {
         assert_eq!(funcs.len(), 5);
         for func in &funcs {
             assert_eq!(func["type"], "function");
-            assert!(func["function"]["name"].as_str().is_some());
-            assert!(func["function"]["parameters"]["type"] == "object");
+            assert!(func["name"].as_str().is_some());
+            assert!(func["parameters"]["type"] == "object");
         }
     }
 }

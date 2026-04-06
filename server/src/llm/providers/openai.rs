@@ -34,7 +34,13 @@ const API_KEY_ENV: &str = "OPENAI_API_KEY";
 enum SseEvent {
     /// `response.output_text.delta` — incremental text.
     TextDelta(String),
-    /// `response.function_call_arguments.done` — complete function call.
+    /// `response.output_item.added` with type=function_call — captures name + IDs.
+    FunctionCallStarted {
+        call_id: String,
+        item_id: String,
+        name: String,
+    },
+    /// `response.function_call_arguments.done` — complete function call arguments.
     FunctionCall {
         call_id: String,
         name: String,
@@ -88,12 +94,23 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
         }
 
         "response.function_call_arguments.done" => {
+            // The call_id from output_item.added (e.g. "call_XYZ") and the item_id here
+            // (e.g. "fc_ABC") are different. We need to find the right pending function name.
+            // Use call_id if present, otherwise item_id.
             let call_id = val
                 .get("call_id")
-                .or_else(|| val.get("item_id"))
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
+            let item_id = val
+                .get("item_id")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            // The call_id for the tool result submission is the call_id from output_item.added.
+            // But fn_args_done only has item_id. We need a mapping.
+            // For now, use the call_id if available, otherwise item_id.
+            let effective_id = if !call_id.is_empty() { call_id } else { item_id };
             let name = val
                 .get("name")
                 .and_then(|n| n.as_str())
@@ -105,7 +122,7 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
                 .unwrap_or("{}")
                 .to_string();
             SseEvent::FunctionCall {
-                call_id,
+                call_id: effective_id,
                 name,
                 arguments,
             }
@@ -149,10 +166,34 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
             SseEvent::Error(format!("{event_type}: {reason}"))
         }
 
+        // Function call item added — captures the function name + call_id.
+        "response.output_item.added" => {
+            let item = val.get("item").unwrap_or(&val);
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if item_type == "function_call" {
+                // output_item.added has both "id" (item_id like fc_...) and "call_id" (like call_...).
+                // fn_args_done uses "item_id" which matches "id" here.
+                let item_id = item.get("id")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let call_id = item.get("call_id")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or(&item_id)
+                    .to_string();
+                let name = item.get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                SseEvent::FunctionCallStarted { call_id, item_id, name }
+            } else {
+                SseEvent::Ignored
+            }
+        }
+
         // Output item events we can ignore.
         "response.created"
         | "response.in_progress"
-        | "response.output_item.added"
         | "response.output_item.done"
         | "response.content_part.added"
         | "response.content_part.done"
@@ -503,6 +544,12 @@ async fn stream_response(
     let mut byte_stream = resp.bytes_stream();
     let mut line_buf = String::new();
     let mut done = false;
+    // Track function names from output_item.added events (name arrives before arguments).
+    let mut pending_function_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    // Map item_id → call_id (fn_args_done has item_id, tool result needs call_id).
+    let mut item_to_call_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     while let Some(chunk) = byte_stream.next().await {
         let chunk = chunk.map_err(|e| format!("Stream read error: {e}"))?;
@@ -532,17 +579,40 @@ async fn stream_response(
                 SseEvent::TextDelta(delta) => {
                     let _ = event_tx.send(SessionEvent::TextDelta(delta)).await;
                 }
+                SseEvent::FunctionCallStarted { call_id, item_id, name } => {
+                    tracing::info!("[{}] FN_START: name={} call_id={} item_id={}", config.label, name, call_id, item_id);
+                    if !name.is_empty() {
+                        pending_function_names.insert(call_id.clone(), name.clone());
+                        if !item_id.is_empty() && item_id != call_id {
+                            pending_function_names.insert(item_id.clone(), name);
+                            item_to_call_id.insert(item_id, call_id);
+                        }
+                    }
+                }
                 SseEvent::FunctionCall {
-                    call_id,
+                    call_id: raw_id,
                     name,
                     arguments,
                 } => {
+                    // fn_args_done gives us item_id, but tool results need call_id.
+                    // Resolve the real call_id via our mapping.
+                    let call_id = item_to_call_id.remove(&raw_id).unwrap_or(raw_id.clone());
+                    // Use the name from the started event if the done event doesn't have it.
+                    let resolved_name = if name.is_empty() {
+                        pending_function_names.remove(&call_id)
+                            .or_else(|| pending_function_names.remove(&raw_id))
+                            .unwrap_or_default()
+                    } else {
+                        pending_function_names.remove(&call_id);
+                        pending_function_names.remove(&raw_id);
+                        name
+                    };
                     let args: serde_json::Value =
                         serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
-                    tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, name, call_id);
+                    tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, resolved_name, call_id);
                     result.tool_calls.push(CollectedToolCall {
                         call_id,
-                        name,
+                        name: resolved_name,
                         arguments: args,
                     });
                 }
@@ -933,7 +1003,7 @@ mod tests {
 
     #[test]
     fn build_request_includes_tools_and_system() {
-        let tools = vec![serde_json::json!({"type": "function", "function": {"name": "test"}})];
+        let tools = vec![serde_json::json!({"type": "function", "name": "test", "parameters": {}})];
         let input = user_message_input("hello");
         let body = build_request_body("gpt-5.4", &input, &tools, Some("You are helpful"), None);
 
@@ -966,7 +1036,7 @@ mod tests {
         let tools = compile_tools(&["game".to_string()]);
         assert!(!tools.is_empty());
         assert_eq!(tools[0]["type"], "function");
-        assert_eq!(tools[0]["function"]["name"], "game_action");
+        assert_eq!(tools[0]["name"], "game_action");
     }
 
     #[test]
@@ -975,7 +1045,7 @@ mod tests {
         assert_eq!(tools.len(), 5);
         let names: Vec<&str> = tools
             .iter()
-            .filter_map(|t| t["function"]["name"].as_str())
+            .filter_map(|t| t["name"].as_str())
             .collect();
         assert!(names.contains(&"query_world_state"));
         assert!(names.contains(&"approve"));
