@@ -56,29 +56,70 @@ Research produces real markdown documents stored on disk at `./documents/{agent}
 ## How to Run
 
 ```bash
-cargo build                              # build everything
-cargo run --bin server                   # start game server
-cd client && npm run dev                 # start web UI (Vite)
+cargo build                              # build everything (server + mcp-game + mcp-gm)
+cargo run --bin server                   # start game server (port 8080)
+cd client && npm run dev                 # start web UI (Vite, port 5173)
 cargo test                               # unit + integration tests
 cargo test --test scenarios -- --ignored  # real API scenario tests
+```
+
+### Running with the debug UI
+
+```bash
+# Terminal 1: game server
+cargo run --bin server
+
+# Terminal 2: web UI (Vite dev server with hot reload)
+cd client && npm run dev
+# Open http://localhost:5173 in browser
+```
+
+### Debug endpoints
+
+```bash
+# Full debug feed (all events, newest first)
+curl http://localhost:8080/api/debug | python3 -m json.tool
+
+# Filter by agent
+curl 'http://localhost:8080/api/debug?agent=Carol&limit=20'
+
+# Filter by event type (thought, action, speech, system, decision, feedback, gm_verdict, gm_thinking, gm_response)
+curl 'http://localhost:8080/api/debug?kind=gm_verdict,gm_thinking'
+
+# Text search
+curl 'http://localhost:8080/api/debug?q=exploit&agent=Carol'
+
+# Combine filters
+curl 'http://localhost:8080/api/debug?agent=Bob&kind=thought,action&since=100&limit=50'
+
+# Library catalog
+curl http://localhost:8080/api/library
+
+# Agent documents
+curl http://localhost:8080/api/documents
 ```
 
 ## Environment Variables
 
 All in `server/src/config.rs`. Key ones:
-- `TICK_MS=500` — tick rate
-- `CONTEXT_LIMIT=150000` — token budget per agent
+- `TICK_MS=1000` — tick rate (1Hz)
+- `CONTEXT_LIMIT=50000` — token budget per agent
+- `STATUS_INTERVAL=30` — ticks between status updates
+- `HUNGER_DECAY=0.333` — hunger drain per tick (~5min to empty)
 - `DOCUMENTS_DIR=./documents` — research output dir
+- `BOUNTIES_FILE=bounties.json` — initial bounty definitions
 
 ## Common Tasks
 
-### Adding a new bounty type
-1. Add template to `server/src/world/bounty_injector.rs` in `initial_bounties()`
-2. Include `hidden_criteria` with agent instructions + GM verification rules
+### Adding a new bounty
+1. Edit `bounties.json` at project root — parsed at startup
+2. Format: `{ "title", "instructions", "hidden_criteria", "objective", "reward", "claim_items" }`
+3. Objectives: `"WorkAtBuilding"`, `"HideItem(gold_egg)"`, `"FindItem(gold_egg)"`
 
 ### Adding a new action
-1. Add to `valid_actions` in `server/src/network/ws.rs`
-2. Add to MCP tool enum in `mcp-game/src/main.rs`
+1. Add entry to `action_catalog()` in `mcp-game/src/main.rs` — this is the single source of truth
+2. Add handler in `server/src/network/action_handler.rs`
+3. The MCP schema, game manual, and server whitelist all derive from the catalog automatically
 3. Add handler in `server/src/network/action_handler.rs`
 4. If deferred, create a Pending component + processing system
 

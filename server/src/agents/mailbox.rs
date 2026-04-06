@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use crate::agents::ai::AgentSessions;
 use crate::agents::components::*;
+use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::tick::TickCount;
 use crate::world::map::GridPos;
 
@@ -50,6 +51,7 @@ pub fn process_outgoing_mail_system(
     tick: Res<TickCount>,
     senders: Query<(Entity, &AgentName, &GridPos, &WantsToSendMessage)>,
     mut recipients: Query<(&AgentName, &GridPos, &mut Mailbox)>,
+    mut event_log: ResMut<AgentEventLog>,
 ) {
     for (sender_entity, sender_name, sender_pos, wants) in &senders {
         let mut delivered = false;
@@ -82,6 +84,12 @@ pub fn process_outgoing_mail_system(
                 wants.recipient_name,
                 wants.text,
             );
+            event_log.push(LogEvent {
+                tick: tick.0,
+                agent: sender_name.0.clone(),
+                kind: LogKind::Speech,
+                text: format!("[msg to {}] {}", wants.recipient_name, wants.text),
+            });
             delivered = true;
             break;
         }
@@ -94,7 +102,9 @@ pub fn process_outgoing_mail_system(
             );
         }
 
-        commands.entity(sender_entity).remove::<WantsToSendMessage>();
+        commands
+            .entity(sender_entity)
+            .remove::<WantsToSendMessage>();
     }
 }
 
@@ -118,24 +128,21 @@ pub fn deliver_mail_system(
 
         let mut lines: Vec<String> = Vec::new();
         for msg in mailbox.messages.iter() {
-            lines.push(format!(
-                "Message from {}: \"{}\"",
-                msg.sender, msg.text,
-            ));
+            lines.push(format!("Message from {}: \"{}\"", msg.sender, msg.text,));
         }
 
         let combined = lines.join("\n");
         if let Err(e) = session.prompt_tx.try_send(combined.clone()) {
-            tracing::debug!(
-                "[Mailbox:{}] failed to deliver mail: {}",
-                name.0,
-                e,
-            );
+            tracing::debug!("[Mailbox:{}] failed to deliver mail: {}", name.0, e,);
             // Keep messages for retry next tick.
             continue;
         }
 
-        tracing::debug!("[Mailbox:{}] delivered {} message(s)", name.0, mailbox.messages.len());
+        tracing::debug!(
+            "[Mailbox:{}] delivered {} message(s)",
+            name.0,
+            mailbox.messages.len()
+        );
         mailbox.messages.clear();
     }
 }

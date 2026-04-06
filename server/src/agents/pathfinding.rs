@@ -1,5 +1,5 @@
-use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 
 use crate::world::map::{GridPos, WorldMap};
 
@@ -14,8 +14,8 @@ const CARDINAL_COST: u32 = 100;
 #[derive(Clone, Eq, PartialEq)]
 struct Node {
     pos: GridPos,
-    cost: u32,      // g-cost: actual distance from start
-    estimate: u32,   // f-cost: g + heuristic
+    cost: u32,     // g-cost: actual distance from start
+    estimate: u32, // f-cost: g + heuristic
 }
 
 impl Ord for Node {
@@ -83,17 +83,43 @@ pub fn astar(map: &WorldMap, from: GridPos, to: GridPos) -> Option<VecDeque<Grid
 
         // Try all 8 neighbors.
         for &(dx, dy) in CARDINAL.iter() {
-            try_neighbor(map, &current.pos, dx, dy, CARDINAL_COST, current_g,
-                         &to, &mut open, &mut came_from, &mut g_cost);
+            try_neighbor(
+                map,
+                &current.pos,
+                dx,
+                dy,
+                CARDINAL_COST,
+                current_g,
+                &to,
+                &mut open,
+                &mut came_from,
+                &mut g_cost,
+            );
         }
         for &(dx, dy) in DIAGONAL.iter() {
             // For diagonal movement, both adjacent cardinal tiles must be walkable
             // to prevent cutting through wall corners.
-            let adj1 = GridPos { x: current.pos.x + dx, y: current.pos.y };
-            let adj2 = GridPos { x: current.pos.x, y: current.pos.y + dy };
+            let adj1 = GridPos {
+                x: current.pos.x + dx,
+                y: current.pos.y,
+            };
+            let adj2 = GridPos {
+                x: current.pos.x,
+                y: current.pos.y + dy,
+            };
             if map.is_walkable(&adj1) && map.is_walkable(&adj2) {
-                try_neighbor(map, &current.pos, dx, dy, DIAGONAL_COST, current_g,
-                             &to, &mut open, &mut came_from, &mut g_cost);
+                try_neighbor(
+                    map,
+                    &current.pos,
+                    dx,
+                    dy,
+                    DIAGONAL_COST,
+                    current_g,
+                    &to,
+                    &mut open,
+                    &mut came_from,
+                    &mut g_cost,
+                );
             }
         }
     }
@@ -104,7 +130,8 @@ pub fn astar(map: &WorldMap, from: GridPos, to: GridPos) -> Option<VecDeque<Grid
 fn try_neighbor(
     map: &WorldMap,
     current: &GridPos,
-    dx: i32, dy: i32,
+    dx: i32,
+    dy: i32,
     step_cost: u32,
     current_g: u32,
     target: &GridPos,
@@ -112,7 +139,10 @@ fn try_neighbor(
     came_from: &mut HashMap<GridPos, GridPos>,
     g_cost: &mut HashMap<GridPos, u32>,
 ) {
-    let next = GridPos { x: current.x + dx, y: current.y + dy };
+    let next = GridPos {
+        x: current.x + dx,
+        y: current.y + dy,
+    };
     if !map.is_walkable(&next) {
         return;
     }
@@ -136,7 +166,10 @@ pub fn bfs(map: &WorldMap, from: GridPos, to: GridPos) -> Option<VecDeque<GridPo
 
 /// Validate that all building entrances are reachable from each other.
 /// Call this at startup to catch map generation bugs.
-pub fn validate_navmesh(map: &WorldMap, entrances: &[GridPos]) -> Result<(), Vec<(GridPos, GridPos)>> {
+pub fn validate_navmesh(
+    map: &WorldMap,
+    entrances: &[GridPos],
+) -> Result<(), Vec<(GridPos, GridPos)>> {
     let mut unreachable = Vec::new();
 
     for (i, &from) in entrances.iter().enumerate() {

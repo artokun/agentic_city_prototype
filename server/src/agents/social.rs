@@ -75,20 +75,33 @@ pub fn social_matchmaking_system(
                 && needs.boredom < 50.0
                 && matches!(
                     goal,
-                    AgentGoal::Idle | AgentGoal::Wandering | AgentGoal::WaitingAtBoard
+                    AgentGoal::Idle
+                        | AgentGoal::Wandering
+                        | AgentGoal::WaitingAtBoard
                         | AgentGoal::WorkingShift { .. }
                 )
         })
         .map(|(e, name, pos, goal, needs, inv, _, _)| {
-            (e, name.0.clone(), *pos, format!("{:?}", goal), inv.count(ItemType::GoldCoin), needs.clone())
+            (
+                e,
+                name.0.clone(),
+                *pos,
+                format!("{:?}", goal),
+                inv.count(ItemType::GoldCoin),
+                needs.clone(),
+            )
         })
         .collect();
 
     let mut matched = std::collections::HashSet::new();
     for i in 0..available.len() {
-        if matched.contains(&i) { continue; }
+        if matched.contains(&i) {
+            continue;
+        }
         for j in (i + 1)..available.len() {
-            if matched.contains(&j) { continue; }
+            if matched.contains(&j) {
+                continue;
+            }
             let dist = (available[i].2.x - available[j].2.x).abs()
                 + (available[i].2.y - available[j].2.y).abs();
 
@@ -104,11 +117,18 @@ pub fn social_matchmaking_system(
                 // Start chat — Claude will generate the actual dialogue.
                 // Messages start empty; the AI system fills them in.
                 commands.entity(*e_a).insert((
-                    ChattingWith { partner: *e_b, messages: vec![], needs_response: true },
+                    ChattingWith {
+                        partner: *e_b,
+                        messages: vec![],
+                        needs_response: true,
+                    },
                     ActionTimer {
                         action_name: format!("chatting with {}", name_b),
                         remaining_ticks: CHAT_DURATION,
-                        effects: ServiceEffects { boredom: CHAT_BOREDOM_BOOST, ..Default::default() },
+                        effects: ServiceEffects {
+                            boredom: CHAT_BOREDOM_BOOST,
+                            ..Default::default()
+                        },
                         gold_cost: 0,
                         paid: true,
                         consumes_item: None,
@@ -117,11 +137,18 @@ pub fn social_matchmaking_system(
                 ));
 
                 commands.entity(*e_b).insert((
-                    ChattingWith { partner: *e_a, messages: vec![], needs_response: true },
+                    ChattingWith {
+                        partner: *e_a,
+                        messages: vec![],
+                        needs_response: true,
+                    },
                     ActionTimer {
                         action_name: format!("chatting with {}", name_a),
                         remaining_ticks: CHAT_DURATION,
-                        effects: ServiceEffects { boredom: CHAT_BOREDOM_BOOST, ..Default::default() },
+                        effects: ServiceEffects {
+                            boredom: CHAT_BOREDOM_BOOST,
+                            ..Default::default()
+                        },
                         gold_cost: 0,
                         paid: true,
                         consumes_item: None,
@@ -134,7 +161,6 @@ pub fn social_matchmaking_system(
         }
     }
 }
-
 
 /// System: update relationships from active conversations.
 /// Runs every tick — updates relationship data while agents are chatting.
@@ -154,15 +180,27 @@ pub fn social_memory_system(
     let pairs: Vec<_> = agents
         .iter()
         .filter_map(|(e, name, pos, goal, inv, _, convo)| {
-            convo.map(|c| (e, name.0.clone(), *pos, format!("{:?}", goal),
-                inv.count(ItemType::GoldCoin), c.partner, c.partner_name.clone()))
+            convo.map(|c| {
+                (
+                    e,
+                    name.0.clone(),
+                    *pos,
+                    format!("{:?}", goal),
+                    inv.count(ItemType::GoldCoin),
+                    c.partner,
+                    c.partner_name.clone(),
+                )
+            })
         })
         .collect();
 
     for (entity, _self_name, _pos, _goal, _gold, partner, partner_name) in &pairs {
-        let partner_info = agents.get(*partner).ok().map(|(_, _, pos, goal, inv, _, _)| {
-            (*pos, format!("{:?}", goal), inv.count(ItemType::GoldCoin))
-        });
+        let partner_info = agents
+            .get(*partner)
+            .ok()
+            .map(|(_, _, pos, goal, inv, _, _)| {
+                (*pos, format!("{:?}", goal), inv.count(ItemType::GoldCoin))
+            });
 
         if let Some((partner_pos, partner_goal, partner_gold)) = partner_info {
             if let Ok((_, self_name, _, _, _, mut rels, _)) = agents.get_mut(*entity) {
@@ -180,8 +218,12 @@ pub fn social_memory_system(
                 // Only bump friendship once per conversation (check tick gap).
                 if tick.0.saturating_sub(memory.last_seen_tick) > 10 {
                     memory.friendship += 1;
-                    tracing::info!("{} relationship with {} → friendship {}",
-                        self_name.0, partner_name, memory.friendship);
+                    tracing::info!(
+                        "{} relationship with {} → friendship {}",
+                        self_name.0,
+                        partner_name,
+                        memory.friendship
+                    );
                 }
                 memory.last_seen_tick = tick.0;
                 memory.last_seen_pos = partner_pos;

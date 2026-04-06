@@ -1,14 +1,18 @@
 use bevy::prelude::*;
 
+use super::action_log::{ActionEvent, ActionLog};
 use super::components::*;
 use super::conversation::ActiveConversation;
+use crate::tick::TickCount;
 use crate::world::map::GridPos;
+use crate::world::structures::{Entrance, SpriteType, StructureId};
 
 /// Advances agents along their path based on speed.
 /// Each tick of the MoveTimer, the agent moves one tile.
 /// Agents in an active conversation do not move.
 pub fn movement_system(
     time: Res<Time>,
+    tick: Res<TickCount>,
     mut agents: Query<(
         &AgentName,
         &mut GridPos,
@@ -16,9 +20,13 @@ pub fn movement_system(
         &mut MoveTimer,
         Option<&mut Path>,
         Option<&ActiveConversation>,
+        &mut ActionLog,
     )>,
+    structures: Query<(&SpriteType, &Entrance), With<StructureId>>,
 ) {
-    for (name, mut pos, mut anim, mut move_timer, path, active_convo) in &mut agents {
+    for (_name, mut pos, mut anim, mut move_timer, path, active_convo, mut action_log) in
+        &mut agents
+    {
         // Agents in a conversation don't move.
         if active_convo.is_some() {
             if anim.0 == AnimState::Walking {
@@ -44,10 +52,34 @@ pub fn movement_system(
         }
 
         // Move one tile each time the timer fires
+        let mut moved = false;
         for _ in 0..move_timer.0.times_finished_this_tick() {
             if let Some(next) = path.0.pop_front() {
                 *pos = next;
                 anim.0 = AnimState::Walking;
+                moved = true;
+            }
+        }
+
+        if moved {
+            for (sprite, entrance) in &structures {
+                if *pos == entrance.0 {
+                    let already_logged = action_log.entries.last().is_some_and(|entry| {
+                        entry.tick == tick.0
+                            && matches!(
+                                &entry.event,
+                                ActionEvent::EnteredBuilding { building } if building == &sprite.0
+                            )
+                    });
+                    if !already_logged {
+                        action_log.log(
+                            tick.0,
+                            ActionEvent::EnteredBuilding {
+                                building: sprite.0.clone(),
+                            },
+                        );
+                    }
+                }
             }
         }
     }

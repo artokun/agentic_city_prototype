@@ -152,7 +152,16 @@ pub fn look_around_system(
     mut commands: Commands,
     tick: Res<TickCount>,
     tile_inventory: Res<crate::world::map::TileInventory>,
-    mut lookers: Query<(Entity, &AgentName, &GridPos, &mut Vision, &mut KnownLocations), With<WantsToLook>>,
+    mut lookers: Query<
+        (
+            Entity,
+            &AgentName,
+            &GridPos,
+            &mut Vision,
+            &mut KnownLocations,
+        ),
+        With<WantsToLook>,
+    >,
     agents: Query<(Entity, &AgentName, &GridPos), Without<WantsToLook>>,
     structures: Query<(Entity, &SpriteType, &GridPos, &Entrance), With<StructureId>>,
 ) {
@@ -185,14 +194,21 @@ pub fn look_around_system(
 
                 // Discover this location if new.
                 if !known.locations.contains_key(&entity) {
-                    known.locations.insert(entity, KnownPlace {
-                        name: sprite.0.clone(),
-                        pos: *pos,
-                        entrance: entrance.0,
-                        discovered_tick: tick.0,
-                        source: DiscoverySource::Spotted,
-                    });
-                    tracing::info!("{} discovered {} by looking around", looker_name.0, sprite.0);
+                    known.locations.insert(
+                        entity,
+                        KnownPlace {
+                            name: sprite.0.clone(),
+                            pos: *pos,
+                            entrance: entrance.0,
+                            discovered_tick: tick.0,
+                            source: DiscoverySource::Spotted,
+                        },
+                    );
+                    tracing::info!(
+                        "{} discovered {} by looking around",
+                        looker_name.0,
+                        sprite.0
+                    );
                 }
             }
         }
@@ -223,7 +239,9 @@ pub fn look_around_system(
 
         tracing::info!(
             "{} scanned: {} entities visible, {} locations known",
-            looker_name.0, visible.len(), known.locations.len(),
+            looker_name.0,
+            visible.len(),
+            known.locations.len(),
         );
 
         vision.visible = visible;
@@ -246,13 +264,16 @@ pub fn passive_discovery_system(
             }
             let dist = manhattan(agent_pos, pos);
             if dist <= 3 {
-                known.locations.insert(entity, KnownPlace {
-                    name: sprite.0.clone(),
-                    pos: *pos,
-                    entrance: entrance.0,
-                    discovered_tick: tick.0,
-                    source: DiscoverySource::Visited,
-                });
+                known.locations.insert(
+                    entity,
+                    KnownPlace {
+                        name: sprite.0.clone(),
+                        pos: *pos,
+                        entrance: entrance.0,
+                        discovered_tick: tick.0,
+                        source: DiscoverySource::Visited,
+                    },
+                );
                 tracing::info!("{} discovered {} while passing by", name.0, sprite.0);
             }
         }
@@ -290,20 +311,26 @@ pub fn start_tracking_system(
         let target = wants.0;
 
         if let Ok((name, pos)) = agents.get(target) {
-            tracking.targets.insert(target, TrackedTarget {
-                name: name.0.clone(),
-                last_known_pos: *pos,
-                in_range: true,
-                kind: EntityKind::Agent,
-            });
+            tracking.targets.insert(
+                target,
+                TrackedTarget {
+                    name: name.0.clone(),
+                    last_known_pos: *pos,
+                    in_range: true,
+                    kind: EntityKind::Agent,
+                },
+            );
             tracing::info!("Now tracking agent {}", name.0);
         } else if let Ok((sprite, pos)) = structures.get(target) {
-            tracking.targets.insert(target, TrackedTarget {
-                name: sprite.0.clone(),
-                last_known_pos: *pos,
-                in_range: true,
-                kind: EntityKind::Structure,
-            });
+            tracking.targets.insert(
+                target,
+                TrackedTarget {
+                    name: sprite.0.clone(),
+                    last_known_pos: *pos,
+                    in_range: true,
+                    kind: EntityKind::Structure,
+                },
+            );
             tracing::info!("Now tracking structure {}", sprite.0);
         }
 
@@ -317,7 +344,10 @@ pub fn inspect_system(
     tick: Res<TickCount>,
     mut inspectors: Query<(Entity, &GridPos, &mut InspectionLog, &WantsToInspect)>,
     agent_data: Query<(&AgentName, &GridPos, &Inventory, &AgentGoal, &Needs)>,
-    structure_data: Query<(&SpriteType, &GridPos, &Inventory, Option<&Entrance>), With<StructureId>>,
+    structure_data: Query<
+        (&SpriteType, &GridPos, &Inventory, Option<&Entrance>),
+        With<StructureId>,
+    >,
 ) {
     for (inspector, inspector_pos, mut log, wants) in &mut inspectors {
         let target = wants.0;
@@ -325,9 +355,7 @@ pub fn inspect_system(
         // Try as agent.
         if let Ok((name, pos, inv, goal, needs)) = agent_data.get(target) {
             if manhattan(inspector_pos, pos) <= INSPECT_RANGE {
-                let items: Vec<_> = inv.items.iter()
-                    .map(|(t, c)| (t.to_string(), *c))
-                    .collect();
+                let items: Vec<_> = inv.items.iter().map(|(t, c)| (t.to_string(), *c)).collect();
 
                 log.inspections.push(Inspection {
                     target,
@@ -350,9 +378,7 @@ pub fn inspect_system(
         if let Ok((sprite, pos, inv, entrance)) = structure_data.get(target) {
             if manhattan(inspector_pos, pos) <= INSPECT_RANGE + 5 {
                 // Structures are bigger, allow slightly more range.
-                let items: Vec<_> = inv.items.iter()
-                    .map(|(t, c)| (t.to_string(), *c))
-                    .collect();
+                let items: Vec<_> = inv.items.iter().map(|(t, c)| (t.to_string(), *c)).collect();
 
                 log.inspections.push(Inspection {
                     target,

@@ -28,7 +28,11 @@ pub fn format_user_message(text: &str) -> String {
 }
 
 /// Format a control_response to approve a tool use request.
-pub fn format_control_response(request_id: &str, tool_use_id: Option<&str>, input: Option<&serde_json::Value>) -> String {
+pub fn format_control_response(
+    request_id: &str,
+    tool_use_id: Option<&str>,
+    input: Option<&serde_json::Value>,
+) -> String {
     let mut response = serde_json::json!({
         "subtype": "success",
         "request_id": request_id,
@@ -58,12 +62,14 @@ pub fn extract_result_text(msg: &serde_json::Value) -> Option<String> {
     let msg_type = msg.get("type")?.as_str()?;
 
     match msg_type {
-        "result" => {
-            msg.get("result").and_then(|r| r.as_str()).map(|s| s.to_string())
-        }
+        "result" => msg
+            .get("result")
+            .and_then(|r| r.as_str())
+            .map(|s| s.to_string()),
         "assistant" => {
             // Look for text content blocks in the message.
-            let content = msg.get("message")
+            let content = msg
+                .get("message")
                 .and_then(|m| m.get("content"))
                 .or_else(|| msg.get("content"))?;
 

@@ -70,8 +70,13 @@ fn agent_claims_and_completes_bounty() {
             for agent in &snap.agents {
                 println!(
                     "  Agent {}: gold={}, debt={}, pos={:?}, goal={}, energy={:.0}, hunger={:.0}",
-                    agent.name, agent.gold, agent.gold_debt, agent.position, agent.goal,
-                    agent.energy, agent.hunger,
+                    agent.name,
+                    agent.gold,
+                    agent.gold_debt,
+                    agent.position,
+                    agent.goal,
+                    agent.energy,
+                    agent.hunger,
                 );
             }
             for bounty in &snap.bounties {
@@ -140,7 +145,12 @@ fn scenario_bounties_override_defaults() {
         .expect("Bounties never appeared");
 
     // Should have exactly 1 bounty (our custom one), not the 9 defaults.
-    assert_eq!(snap.bounties.len(), 1, "Expected 1 scenario bounty, got {}", snap.bounties.len());
+    assert_eq!(
+        snap.bounties.len(),
+        1,
+        "Expected 1 scenario bounty, got {}",
+        snap.bounties.len()
+    );
     assert_eq!(snap.bounties[0].description, "Custom test bounty");
     assert_eq!(snap.bounties[0].reward, 99);
 

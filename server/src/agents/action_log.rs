@@ -16,12 +16,22 @@ impl ActionLog {
 
     /// Check if an event matching the predicate occurred between start and end ticks.
     pub fn has_between(&self, start: u64, end: u64, pred: impl Fn(&ActionEvent) -> bool) -> bool {
-        self.entries.iter().any(|e| e.tick >= start && e.tick <= end && pred(&e.event))
+        self.entries
+            .iter()
+            .any(|e| e.tick >= start && e.tick <= end && pred(&e.event))
     }
 
     /// Count events matching predicate between ticks.
-    pub fn count_between(&self, start: u64, end: u64, pred: impl Fn(&ActionEvent) -> bool) -> usize {
-        self.entries.iter().filter(|e| e.tick >= start && e.tick <= end && pred(&e.event)).count()
+    pub fn count_between(
+        &self,
+        start: u64,
+        end: u64,
+        pred: impl Fn(&ActionEvent) -> bool,
+    ) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.tick >= start && e.tick <= end && pred(&e.event))
+            .count()
     }
 
     /// Trim old entries to keep log manageable.

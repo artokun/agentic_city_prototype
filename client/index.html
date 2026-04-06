@@ -60,15 +60,21 @@
     .agent-card .card-section-title { font-size: 9px; color: #635bff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
     .agent-card .card-inventory { color: #8bc34a; font-size: 10px; }
     .agent-card .card-inventory .item { display: inline-block; background: #1a2a1a; border: 1px solid #2a3a2a; border-radius: 3px; padding: 1px 5px; margin: 1px; }
+    .agent-card .card-inventory button.item { font: inherit; line-height: inherit; }
     .agent-card .card-inventory .item-card { background: #1a1a2a; border-color: #2a2a3a; color: #8888cc; }
     .agent-card .card-inventory .item-doc { background: #2a2a1a; border-color: #3a3a2a; color: #cccc88; }
     .agent-card .card-inventory .item-egg { background: #2a1a1a; border-color: #3a2a2a; color: #ffcc44; }
+    .agent-card .card-inventory .doc-link { cursor: pointer; }
     .agent-card .card-thoughts { max-height: 80px; overflow-y: auto; font-size: 10px; }
     .agent-card .card-thoughts .thought-entry { color: #888; font-style: italic; padding: 1px 0; border-bottom: 1px solid #111; }
     .agent-card .card-actions { max-height: 60px; overflow-y: auto; font-size: 10px; }
     .agent-card .card-actions .action-entry { padding: 1px 0; border-bottom: 1px solid #111; }
     .agent-card .card-actions .action-entry .act-tick { color: #333; font-size: 9px; margin-right: 3px; }
     .agent-card .card-actions .action-entry .act-text { color: #635bff; }
+    .lib-entry { padding: 4px 0; border-bottom: 1px solid #111; cursor: pointer; }
+    .lib-entry:hover { background: #1a1a1a; }
+    .lib-entry .lib-title { color: #cccc88; font-weight: bold; }
+    .lib-entry .lib-meta { color: #555; font-size: 10px; }
   </style>
 </head>
 <body>
@@ -116,6 +122,12 @@
     <div class="panel full" style="max-height:300px;overflow-y:auto;" id="log-panel">
       <h2>Activity Log <label style="float:right;font-size:9px;color:#555;font-weight:normal;text-transform:none;letter-spacing:0"><input type="checkbox" id="log-autoscroll" checked style="margin-right:3px">autoscroll</label></h2>
       <div id="activity-log" style="font-size:11px;line-height:1.5;"></div>
+    </div>
+    <div class="panel">
+      <h2>Library</h2>
+      <div id="library-panel" style="max-height:250px;overflow-y:auto">
+        <span class="muted">No documents archived yet</span>
+      </div>
     </div>
     <div class="panel span2">
       <h2>Structures</h2>

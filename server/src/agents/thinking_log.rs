@@ -63,9 +63,7 @@ pub fn capture_thinking_system(
 }
 
 /// System: drain ThinkingLog entries to per-agent NDJSON files on disk.
-pub fn flush_thinking_log_system(
-    mut agents: Query<(&AgentName, &mut ThinkingLog)>,
-) {
+pub fn flush_thinking_log_system(mut agents: Query<(&AgentName, &mut ThinkingLog)>) {
     for (name, mut log) in &mut agents {
         if log.entries.is_empty() {
             continue;

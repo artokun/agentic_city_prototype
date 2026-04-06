@@ -89,8 +89,7 @@ impl ScenarioBuilder {
 
     pub fn build(self) -> ScenarioHarness {
         // Pick a random available port via OS assignment.
-        let listener = TcpListener::bind("0.0.0.0:0")
-            .expect("Failed to bind to ephemeral port");
+        let listener = TcpListener::bind("0.0.0.0:0").expect("Failed to bind to ephemeral port");
         let port = listener.local_addr().unwrap().port();
         // Drop the listener so the port is free for the Bevy app's axum server.
         drop(listener);
@@ -126,11 +125,9 @@ impl ScenarioBuilder {
 
                 let mut app = App::new();
 
-                app.add_plugins(
-                    MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
-                        Duration::from_millis(tick_ms),
-                    )),
-                );
+                app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
+                    Duration::from_millis(tick_ms),
+                )));
                 app.add_plugins(TokioTasksPlugin::default());
                 app.add_plugins(server::tick::GameTickPlugin);
                 app.add_plugins(server::world::WorldPlugin);
@@ -148,9 +145,7 @@ impl ScenarioBuilder {
                 }
 
                 if !bounties.is_empty() {
-                    app.insert_resource(ScenarioBountyConfig {
-                        bounties,
-                    });
+                    app.insert_resource(ScenarioBountyConfig { bounties });
                 }
 
                 // Add scenario systems.
@@ -229,11 +224,7 @@ impl ScenarioHarness {
 
     /// Poll the snapshot with a timeout until the predicate returns true.
     /// Returns the snapshot that satisfied the predicate, or an error message.
-    pub fn wait_for<F>(
-        &self,
-        timeout: Duration,
-        mut predicate: F,
-    ) -> Result<WorldSnapshot, String>
+    pub fn wait_for<F>(&self, timeout: Duration, mut predicate: F) -> Result<WorldSnapshot, String>
     where
         F: FnMut(&WorldSnapshot) -> bool,
     {

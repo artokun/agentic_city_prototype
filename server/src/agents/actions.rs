@@ -50,7 +50,20 @@ pub fn action_timer_system(
     mut building_inventories: Query<&mut Inventory, With<StructureId>>,
     building_names: Query<&SpriteType, With<StructureId>>,
 ) {
-    for (entity, mut timer, mut needs, mut inv, mut anim, mut thought, name, agent_id, mut action_log, mut ctx_window, inside) in &mut agents {
+    for (
+        entity,
+        mut timer,
+        mut needs,
+        mut inv,
+        mut anim,
+        mut thought,
+        name,
+        agent_id,
+        mut action_log,
+        mut ctx_window,
+        inside,
+    ) in &mut agents
+    {
         // Resolve the building name for event logging.
         let building_name = inside
             .and_then(|ib| building_names.get(ib.0).ok())
@@ -76,10 +89,13 @@ pub fn action_timer_system(
                     }
                 }
 
-                action_log.log(tick.0, ActionEvent::GoldSpent {
-                    amount: timer.gold_cost,
-                    building: building_name.clone(),
-                });
+                action_log.log(
+                    tick.0,
+                    ActionEvent::GoldSpent {
+                        amount: timer.gold_cost,
+                        building: building_name.clone(),
+                    },
+                );
 
                 timer.paid = true;
             } else {
@@ -118,10 +134,13 @@ pub fn action_timer_system(
                 needs.boredom,
             );
 
-            action_log.log(tick.0, ActionEvent::ServiceUsed {
-                service: timer.action_name.clone(),
-                building: building_name.clone(),
-            });
+            action_log.log(
+                tick.0,
+                ActionEvent::ServiceUsed {
+                    service: timer.action_name.clone(),
+                    building: building_name.clone(),
+                },
+            );
 
             // Sleep actions trigger context compaction.
             let is_sleep = timer.action_name.contains("sleep");
@@ -136,14 +155,22 @@ pub fn action_timer_system(
                 ctx_window.context_limit = crate::config::context_limit();
                 tracing::info!(
                     "[COMPACT] {} slept → /compact sent, tokens {} → 0",
-                    name.0, old,
+                    name.0,
+                    old,
                 );
                 thought.0 = "Woke up refreshed! Energy restored.".into();
             } else if timer.action_name.contains("coffee") {
                 // Coffee temporarily boosts token limit by 10k.
                 ctx_window.context_limit += 10_000;
-                thought.0 = format!("Finished {}. Feeling energized! (token limit +10k)", timer.action_name);
-                tracing::info!("[COFFEE] {} drank coffee — token limit now {}", name.0, ctx_window.context_limit);
+                thought.0 = format!(
+                    "Finished {}. Feeling energized! (token limit +10k)",
+                    timer.action_name
+                );
+                tracing::info!(
+                    "[COFFEE] {} drank coffee — token limit now {}",
+                    name.0,
+                    ctx_window.context_limit
+                );
             } else {
                 thought.0 = format!("Finished {}.", timer.action_name);
             }
