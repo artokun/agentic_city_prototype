@@ -597,7 +597,7 @@ impl SessionAdapter for ClaudeAdapter {
     async fn start(
         &mut self,
         profile: &SessionProfile,
-        _checkpoint: Option<&SessionCheckpoint>,
+        checkpoint: Option<&SessionCheckpoint>,
     ) -> Result<(), AdapterError> {
         if self.command_tx.is_some() {
             return Err(AdapterError::AlreadyRunning);
@@ -606,6 +606,22 @@ impl SessionAdapter for ClaudeAdapter {
         // Override model from profile if set.
         if let Some(ref m) = profile.model {
             self.model = m.clone();
+        }
+
+        // If resuming from checkpoint, prepend compacted context to the system prompt.
+        if let Some(cp) = checkpoint {
+            if let Some(ref ctx) = cp.compacted_context {
+                tracing::info!(
+                    "[{}] resuming from checkpoint (model={}, tokens_in={})",
+                    self.label,
+                    cp.model,
+                    cp.total_input_tokens,
+                );
+                self.system_prompt = format!(
+                    "## Previous Context (compacted)\n{}\n\n---\n\n{}",
+                    ctx, self.system_prompt
+                );
+            }
         }
 
         // Create channels.
@@ -665,7 +681,30 @@ impl SessionAdapter for ClaudeAdapter {
             let _ = tokio::fs::remove_file(&f).await;
         }
 
-        Ok(None)
+        // Build owner from adapter state.
+        let owner = if self.is_system_ai {
+            crate::llm::types::SessionOwner::SystemAi
+        } else if let Some(ref id) = self.agent_identity {
+            crate::llm::types::SessionOwner::Agent(id.name.clone())
+        } else {
+            crate::llm::types::SessionOwner::Agent("unknown".to_string())
+        };
+
+        // Return a checkpoint so the supervisor can persist it.
+        // Token totals are tracked by the supervisor from Usage events,
+        // so we just provide the structural fields here.
+        Ok(Some(SessionCheckpoint {
+            owner,
+            provider_id: self.agent_identity.as_ref().map(|id| id.uuid.clone()),
+            model: self.model.clone(),
+            compact_threshold: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
+            last_turn_marker: None,
+            compacted_context: None,
+            provider_metadata: None,
+        }))
     }
 }
 

@@ -269,17 +269,20 @@ impl CheckpointStore {
 // ---------------------------------------------------------------------------
 
 /// Convert a SessionOwner to a filesystem-safe directory name.
-/// `Agent("Alice Haiku")` → `agent_alice_haiku`
+/// Appends a 4-hex-char hash of the original name to avoid collisions
+/// when different names sanitize to the same string (e.g. "A/B" vs "A B").
+///
+/// `Agent("Alice Haiku")` → `agent_alice_haiku_XXXX`
 /// `SystemAi` → `system_ai`
-/// `Research("web search")` → `research_web_search`
+/// `Research("web search")` → `research_web_search_XXXX`
 fn owner_to_dirname(owner: &SessionOwner) -> String {
     match owner {
         SessionOwner::Agent(name) => {
-            format!("agent_{}", sanitize_name(name))
+            format!("agent_{}_{}", sanitize_name(name), short_hash(name))
         }
         SessionOwner::SystemAi => "system_ai".to_string(),
         SessionOwner::Research(topic) => {
-            format!("research_{}", sanitize_name(topic))
+            format!("research_{}_{}", sanitize_name(topic), short_hash(topic))
         }
     }
 }
@@ -302,6 +305,17 @@ fn sanitize_name(name: &str) -> String {
 
     // Trim trailing underscore.
     result.trim_end_matches('_').to_string()
+}
+
+/// Produce a 4-hex-char hash of a string for disambiguation.
+/// Uses a simple FNV-1a-like hash (no crypto needed, just uniqueness).
+fn short_hash(s: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{:04x}", h & 0xFFFF)
 }
 
 /// Create a PersistedEvent from a SessionEvent for logging.
@@ -353,23 +367,23 @@ pub fn session_event_to_persisted(event: &SessionEvent) -> PersistedEvent {
 /// Build a fresh checkpoint from parts (useful for initial save).
 pub fn build_checkpoint(
     owner: SessionOwner,
-    provider_id: &str,
+    provider_id: Option<&str>,
     model: &str,
     compact_threshold: u32,
     usage: &UsageData,
-    last_turn_marker: &str,
+    last_turn_marker: Option<&str>,
     compacted_context: Option<String>,
-    provider_metadata: serde_json::Value,
+    provider_metadata: Option<serde_json::Value>,
 ) -> SessionCheckpoint {
     SessionCheckpoint {
         owner,
-        provider_id: provider_id.to_string(),
+        provider_id: provider_id.map(|s| s.to_string()),
         model: model.to_string(),
         compact_threshold,
         total_input_tokens: usage.input_tokens,
         total_output_tokens: usage.output_tokens,
         total_cost_usd: usage.cost_usd,
-        last_turn_marker: last_turn_marker.to_string(),
+        last_turn_marker: last_turn_marker.map(|s| s.to_string()),
         compacted_context,
         provider_metadata,
     }
@@ -393,18 +407,18 @@ mod tests {
     fn sample_checkpoint(owner: SessionOwner) -> SessionCheckpoint {
         SessionCheckpoint {
             owner,
-            provider_id: "session-abc123".to_string(),
+            provider_id: Some("session-abc123".to_string()),
             model: "opus".to_string(),
             compact_threshold: 50_000,
             total_input_tokens: 12_000,
             total_output_tokens: 3_000,
             total_cost_usd: 0.42,
-            last_turn_marker: "turn-7".to_string(),
+            last_turn_marker: Some("turn-7".to_string()),
             compacted_context: Some("Agent explored the city.".to_string()),
-            provider_metadata: serde_json::json!({
+            provider_metadata: Some(serde_json::json!({
                 "claude_session_id": "sess_xyz",
                 "resume_url": "ws://localhost:8080/agent/abc/ws"
-            }),
+            })),
         }
     }
 
@@ -418,19 +432,19 @@ mod tests {
         let loaded = store.load(&owner).unwrap().expect("should exist");
 
         assert_eq!(loaded.owner, checkpoint.owner);
-        assert_eq!(loaded.provider_id, "session-abc123");
+        assert_eq!(loaded.provider_id.as_deref(), Some("session-abc123"));
         assert_eq!(loaded.model, "opus");
         assert_eq!(loaded.compact_threshold, 50_000);
         assert_eq!(loaded.total_input_tokens, 12_000);
         assert_eq!(loaded.total_output_tokens, 3_000);
         assert!((loaded.total_cost_usd - 0.42).abs() < f64::EPSILON);
-        assert_eq!(loaded.last_turn_marker, "turn-7");
+        assert_eq!(loaded.last_turn_marker.as_deref(), Some("turn-7"));
         assert_eq!(
             loaded.compacted_context.as_deref(),
             Some("Agent explored the city.")
         );
         assert_eq!(
-            loaded.provider_metadata["claude_session_id"],
+            loaded.provider_metadata.as_ref().unwrap()["claude_session_id"],
             "sess_xyz"
         );
     }
@@ -527,21 +541,33 @@ mod tests {
 
     #[test]
     fn owner_dirname_sanitization() {
-        assert_eq!(
-            owner_to_dirname(&SessionOwner::Agent("Alice Haiku".to_string())),
-            "agent_alice_haiku"
-        );
+        // Agent names include a short hash suffix for collision avoidance.
+        let alice = owner_to_dirname(&SessionOwner::Agent("Alice Haiku".to_string()));
+        assert!(alice.starts_with("agent_alice_haiku_"));
+        assert_eq!(alice.len(), "agent_alice_haiku_".len() + 4);
+
+        // SystemAi is a fixed string, no hash needed.
         assert_eq!(
             owner_to_dirname(&SessionOwner::SystemAi),
             "system_ai"
         );
+
+        // Research topics get hashed too.
+        let research = owner_to_dirname(&SessionOwner::Research("web search!!".to_string()));
+        assert!(research.starts_with("research_web_search_"));
+
+        // Names that would collide without the hash are now distinct.
+        let a_slash_b = owner_to_dirname(&SessionOwner::Agent("A/B".to_string()));
+        let a_space_b = owner_to_dirname(&SessionOwner::Agent("A B".to_string()));
+        let a_dash_b = owner_to_dirname(&SessionOwner::Agent("A--B".to_string()));
+        assert_ne!(a_slash_b, a_space_b);
+        assert_ne!(a_slash_b, a_dash_b);
+        assert_ne!(a_space_b, a_dash_b);
+
+        // Same input always produces the same dirname (deterministic).
         assert_eq!(
-            owner_to_dirname(&SessionOwner::Research("web search!!".to_string())),
-            "research_web_search"
-        );
-        assert_eq!(
-            owner_to_dirname(&SessionOwner::Agent("Bob--Sonnet".to_string())),
-            "agent_bob_sonnet"
+            owner_to_dirname(&SessionOwner::Agent("Alice".to_string())),
+            owner_to_dirname(&SessionOwner::Agent("Alice".to_string()))
         );
     }
 
@@ -577,13 +603,13 @@ mod tests {
 
         // Update and save again.
         cp.total_input_tokens = 99_000;
-        cp.last_turn_marker = "turn-42".to_string();
+        cp.last_turn_marker = Some("turn-42".to_string());
         cp.compacted_context = Some("Updated context.".to_string());
         store.save(&cp).unwrap();
 
         let loaded = store.load(&owner).unwrap().unwrap();
         assert_eq!(loaded.total_input_tokens, 99_000);
-        assert_eq!(loaded.last_turn_marker, "turn-42");
+        assert_eq!(loaded.last_turn_marker.as_deref(), Some("turn-42"));
         assert_eq!(
             loaded.compacted_context.as_deref(),
             Some("Updated context.")
@@ -602,10 +628,10 @@ mod tests {
         });
 
         let mut cp = sample_checkpoint(owner.clone());
-        cp.provider_metadata = metadata.clone();
+        cp.provider_metadata = Some(metadata.clone());
         store.save(&cp).unwrap();
 
         let loaded = store.load(&owner).unwrap().unwrap();
-        assert_eq!(loaded.provider_metadata, metadata);
+        assert_eq!(loaded.provider_metadata, Some(metadata));
     }
 }

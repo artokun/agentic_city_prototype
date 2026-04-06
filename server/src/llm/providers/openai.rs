@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::llm::config::SessionProfile;
 use crate::llm::supervisor::SessionAdapter;
 use crate::llm::tools::catalog::tools_for_set;
+use crate::llm::tools::execute::{execute_game_action, execute_system_tool};
 use crate::llm::tools::schema::to_openai_functions;
 use crate::llm::types::{
     AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, ToolCallRequest, UsageData,
@@ -228,6 +229,19 @@ fn compaction_input(context_summary: &str) -> serde_json::Value {
 // Stream processing task
 // ---------------------------------------------------------------------------
 
+/// A tool call collected from the response stream.
+struct CollectedToolCall {
+    call_id: String,
+    name: String,
+    arguments: serde_json::Value,
+}
+
+/// Result of processing one streaming response.
+struct StreamResult {
+    response_id: String,
+    tool_calls: Vec<CollectedToolCall>,
+}
+
 /// Configuration for the streaming task.
 #[derive(Clone)]
 struct StreamConfig {
@@ -237,9 +251,12 @@ struct StreamConfig {
     system_prompt: String,
     tool_sets: Vec<String>,
     label: String,
+    /// Agent identity for tool execution (name, id). None for system-AI.
+    agent_identity: Option<(String, String)>,
 }
 
-/// Run the streaming loop: reads commands, makes API calls, emits events.
+/// Run the streaming loop: reads commands, makes API calls, executes tool calls
+/// through the shared local tool runtime, and emits canonical SessionEvent values.
 async fn stream_loop(
     mut command_rx: mpsc::Receiver<SessionCommand>,
     event_tx: mpsc::Sender<SessionEvent>,
@@ -254,15 +271,17 @@ async fn stream_loop(
         match cmd {
             SessionCommand::SendUserTurn(text) => {
                 let input = user_message_input(&text);
-                let body = build_request_body(
-                    &config.model,
-                    &input,
+                match run_with_tool_loop(
+                    &client,
+                    &config,
                     &tools,
+                    &input,
                     Some(&config.system_prompt),
                     previous_response_id.as_deref(),
-                );
-
-                match stream_response(&client, &config, &body, &event_tx).await {
+                    &event_tx,
+                )
+                .await
+                {
                     Ok(resp_id) => {
                         if !resp_id.is_empty() {
                             previous_response_id = Some(resp_id);
@@ -275,34 +294,17 @@ async fn stream_loop(
                 }
             }
 
-            SessionCommand::SendToolResult(result) => {
-                let input = tool_result_input(&result.id, &result.output);
-                let body = build_request_body(
-                    &config.model,
-                    &input,
-                    &tools,
-                    None, // no need to resend system prompt for tool results
-                    previous_response_id.as_deref(),
+            SessionCommand::SendToolResult(_) => {
+                // Tool results are handled internally by run_with_tool_loop.
+                // External SendToolResult commands are not expected for OpenAI.
+                tracing::warn!(
+                    "[{}] ignoring external SendToolResult — tools are executed internally",
+                    config.label
                 );
-
-                match stream_response(&client, &config, &body, &event_tx).await {
-                    Ok(resp_id) => {
-                        if !resp_id.is_empty() {
-                            previous_response_id = Some(resp_id);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("[{}] tool result stream error: {e}", config.label);
-                        let _ = event_tx.send(SessionEvent::Error(e)).await;
-                    }
-                }
             }
 
             SessionCommand::Compact => {
                 tracing::info!("[{}] compacting — resetting response chain", config.label);
-
-                // Compaction: break the response chain and start fresh.
-                // The supervisor tracks token totals and saves the checkpoint.
 
                 // Start a new chain — the system prompt re-establishes context.
                 let input = compaction_input(
@@ -317,9 +319,9 @@ async fn stream_loop(
                 );
 
                 match stream_response(&client, &config, &body, &event_tx).await {
-                    Ok(resp_id) => {
-                        if !resp_id.is_empty() {
-                            previous_response_id = Some(resp_id);
+                    Ok(result) => {
+                        if !result.response_id.is_empty() {
+                            previous_response_id = Some(result.response_id);
                         }
                         let _ = event_tx.send(SessionEvent::CompactCompleted).await;
                     }
@@ -341,14 +343,120 @@ async fn stream_loop(
     tracing::info!("[{}] stream loop exited", config.label);
 }
 
+/// Send a request and loop on tool calls until the model produces a final response.
+/// Tool calls are executed through the shared local tool runtime.
+async fn run_with_tool_loop(
+    client: &reqwest::Client,
+    config: &StreamConfig,
+    tools: &[serde_json::Value],
+    initial_input: &serde_json::Value,
+    system_prompt: Option<&str>,
+    initial_prev_id: Option<&str>,
+    event_tx: &mpsc::Sender<SessionEvent>,
+) -> Result<String, String> {
+    let mut current_input = initial_input.clone();
+    let mut prev_id = initial_prev_id.map(|s| s.to_string());
+    let mut iteration = 0;
+    const MAX_TOOL_ITERATIONS: u32 = 20;
+
+    loop {
+        iteration += 1;
+        if iteration > MAX_TOOL_ITERATIONS {
+            tracing::warn!("[{}] hit max tool iterations ({})", config.label, MAX_TOOL_ITERATIONS);
+            break;
+        }
+
+        let body = build_request_body(
+            &config.model,
+            &current_input,
+            tools,
+            if iteration == 1 { system_prompt } else { None },
+            prev_id.as_deref(),
+        );
+
+        let result = stream_response(client, config, &body, event_tx).await?;
+
+        if !result.response_id.is_empty() {
+            prev_id = Some(result.response_id.clone());
+        }
+
+        if result.tool_calls.is_empty() {
+            // No tool calls — model produced a final response.
+            return Ok(result.response_id);
+        }
+
+        // Execute tool calls through the shared local tool runtime.
+        let mut tool_outputs = Vec::new();
+        for tc in &result.tool_calls {
+            // Emit ToolCallRequested so the supervisor can log it.
+            let _ = event_tx
+                .send(SessionEvent::ToolCallRequested(ToolCallRequest {
+                    id: tc.call_id.clone(),
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                }))
+                .await;
+
+            let tool_result = execute_tool_call(
+                &tc.name,
+                &tc.arguments,
+                config.agent_identity.as_ref(),
+            );
+
+            tracing::info!(
+                "[{}] tool {} -> {} (err={})",
+                config.label,
+                tc.name,
+                &tool_result.output[..tool_result.output.len().min(80)],
+                tool_result.is_error,
+            );
+
+            tool_outputs.push(tool_result_input(&tc.call_id, &tool_result.output));
+        }
+
+        // Build combined tool results as input for the next request.
+        let mut combined_results = Vec::new();
+        for output in &tool_outputs {
+            if let Some(arr) = output.as_array() {
+                combined_results.extend(arr.iter().cloned());
+            }
+        }
+        current_input = serde_json::Value::Array(combined_results);
+    }
+
+    Ok(prev_id.unwrap_or_default())
+}
+
+/// Execute a single tool call through the shared local tool runtime.
+fn execute_tool_call(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    agent_identity: Option<&(String, String)>,
+) -> crate::llm::types::ToolCallResult {
+    match tool_name {
+        "game_action" => {
+            let (name, id) = agent_identity
+                .map(|(n, i)| (n.as_str(), i.as_str()))
+                .unwrap_or(("unknown", ""));
+            execute_game_action(arguments, name, id)
+        }
+        _ => {
+            // System tools or unknown tools.
+            execute_system_tool(tool_name, arguments)
+        }
+    }
+}
+
 /// Make a single streaming request and process SSE events.
-/// Returns the response ID on success.
+/// Returns a StreamResult with the response ID and any tool calls collected.
+/// Text deltas, usage, completion, and errors are emitted via event_tx.
+/// Tool calls are collected and returned — the caller handles execution.
 async fn stream_response(
     client: &reqwest::Client,
     config: &StreamConfig,
     body: &serde_json::Value,
     event_tx: &mpsc::Sender<SessionEvent>,
-) -> Result<String, String> {
+) -> Result<StreamResult, String> {
     let url = format!("{}/responses", config.api_base);
 
     tracing::debug!(
@@ -373,8 +481,10 @@ async fn stream_response(
         return Err(format!("API error {status}: {body_text}"));
     }
 
-    // Process SSE stream.
-    let mut response_id = String::new();
+    let mut result = StreamResult {
+        response_id: String::new(),
+        tool_calls: Vec::new(),
+    };
     let text = resp.text().await.map_err(|e| format!("Read error: {e}"))?;
 
     // SSE format: lines starting with "data: " contain JSON payloads.
@@ -383,11 +493,10 @@ async fn stream_response(
         let line = line.trim();
 
         if line.is_empty() || line.starts_with(':') {
-            continue; // comment or blank
+            continue;
         }
 
         if !line.starts_with("data: ") {
-            // Could be "event: " lines — skip.
             continue;
         }
 
@@ -409,16 +518,14 @@ async fn stream_response(
                 let args: serde_json::Value =
                     serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
                 tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, name, call_id);
-                let _ = event_tx
-                    .send(SessionEvent::ToolCallRequested(ToolCallRequest {
-                        id: call_id,
-                        name,
-                        arguments: args,
-                    }))
-                    .await;
+                result.tool_calls.push(CollectedToolCall {
+                    call_id,
+                    name,
+                    arguments: args,
+                });
             }
             SseEvent::Completed { response_id: rid, usage } => {
-                response_id = rid;
+                result.response_id = rid;
                 if let Some(u) = usage {
                     tracing::info!(
                         "[{}] usage: in={}, out={}",
@@ -426,7 +533,6 @@ async fn stream_response(
                         u.input_tokens,
                         u.output_tokens
                     );
-                    // Estimate cost — GPT-5.4 pricing TBD, use placeholder.
                     let cost_usd = estimate_cost(u.input_tokens, u.output_tokens);
                     let _ = event_tx
                         .send(SessionEvent::Usage(UsageData {
@@ -436,7 +542,8 @@ async fn stream_response(
                         }))
                         .await;
                 }
-                let _ = event_tx.send(SessionEvent::Completed).await;
+                // Only emit Completed when there are no tool calls to process.
+                // If there are tool calls, the tool loop will handle completion.
             }
             SseEvent::Error(msg) => {
                 tracing::warn!("[{}] stream error: {}", config.label, msg);
@@ -446,7 +553,12 @@ async fn stream_response(
         }
     }
 
-    Ok(response_id)
+    // Emit Completed only if no tool calls need processing.
+    if result.tool_calls.is_empty() {
+        let _ = event_tx.send(SessionEvent::Completed).await;
+    }
+
+    Ok(result)
 }
 
 /// Compile tools from the tool sets specified in the profile.
@@ -498,12 +610,15 @@ pub struct OpenAiAdapter {
     last_response_id: Option<String>,
     /// API key (resolved at start time).
     api_key_env: String,
+    /// Agent identity for tool execution (name, uuid). None for system-AI.
+    agent_identity: Option<(String, String)>,
 }
 
 impl OpenAiAdapter {
     /// Create a new adapter for an agent session.
     pub fn for_agent(
         agent_name: &str,
+        agent_id: &str,
         model: &str,
         system_prompt: String,
         tool_sets: Vec<String>,
@@ -520,6 +635,7 @@ impl OpenAiAdapter {
             stream_task: None,
             last_response_id: None,
             api_key_env: API_KEY_ENV.to_string(),
+            agent_identity: Some((agent_name.to_string(), agent_id.to_string())),
         }
     }
 
@@ -541,6 +657,7 @@ impl OpenAiAdapter {
             stream_task: None,
             last_response_id: None,
             api_key_env: API_KEY_ENV.to_string(),
+            agent_identity: None,
         }
     }
 
@@ -582,7 +699,8 @@ impl SessionAdapter for OpenAiAdapter {
         let previous_response_id = checkpoint
             .and_then(|cp| {
                 cp.provider_metadata
-                    .get("previous_response_id")
+                    .as_ref()
+                    .and_then(|m| m.get("previous_response_id"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             })
@@ -602,6 +720,7 @@ impl SessionAdapter for OpenAiAdapter {
             system_prompt: self.system_prompt.clone(),
             tool_sets: self.tool_sets.clone(),
             label: self.label.clone(),
+            agent_identity: self.agent_identity.clone(),
         };
 
         // Spawn the streaming task.
@@ -644,24 +763,19 @@ impl SessionAdapter for OpenAiAdapter {
         self.event_rx = None;
 
         // Build a checkpoint with provider metadata containing the last response ID.
-        let metadata = if let Some(ref rid) = self.last_response_id {
+        let metadata = self.last_response_id.as_ref().map(|rid| {
             serde_json::json!({ "previous_response_id": rid })
-        } else {
-            serde_json::json!({})
-        };
+        });
 
         Ok(Some(SessionCheckpoint {
             owner: crate::llm::types::SessionOwner::Agent("unknown".to_string()),
-            provider_id: self
-                .last_response_id
-                .clone()
-                .unwrap_or_default(),
+            provider_id: self.last_response_id.clone(),
             model: self.model.clone(),
             compact_threshold: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
             total_cost_usd: 0.0,
-            last_turn_marker: String::new(),
+            last_turn_marker: None,
             compacted_context: None,
             provider_metadata: metadata,
         }))
@@ -831,9 +945,10 @@ mod tests {
 
     #[test]
     fn adapter_for_agent_sets_label() {
-        let adapter = OpenAiAdapter::for_agent("Alice", "gpt-5.4", String::new(), vec![]);
+        let adapter = OpenAiAdapter::for_agent("Alice", "uuid-123", "gpt-5.4", String::new(), vec![]);
         assert_eq!(adapter.label, "openai:Alice");
         assert_eq!(adapter.model, "gpt-5.4");
+        assert_eq!(adapter.agent_identity, Some(("Alice".to_string(), "uuid-123".to_string())));
     }
 
     #[test]
