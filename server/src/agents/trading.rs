@@ -15,7 +15,7 @@ pub fn parse_item_type(s: &str) -> Option<ItemType> {
         "rations" => Some(ItemType::Rations),
         "sandwich" => Some(ItemType::Sandwich),
         "soup" => Some(ItemType::Soup),
-        "paycheck" => Some(ItemType::Paycheck),
+        "paycheck" => return None, // non-tradeable
         "document" => Some(ItemType::Document),
         "coffee_beans" => Some(ItemType::CoffeeBeans),
         "flour" => Some(ItemType::Flour),
@@ -132,8 +132,11 @@ pub fn trade_system(
 
         // Log the trade for both agents.
         let offered_str: Vec<String> = trade.offered_items.iter().map(|i| i.to_string()).collect();
-        let requested_str: Vec<String> =
-            trade.requested_items.iter().map(|i| i.to_string()).collect();
+        let requested_str: Vec<String> = trade
+            .requested_items
+            .iter()
+            .map(|i| i.to_string())
+            .collect();
 
         event_log.push(LogEvent {
             tick: tick.0,

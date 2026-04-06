@@ -9,7 +9,7 @@ use crate::agents::perception::{InspectionLog, KnownLocations, Tracking, Vision}
 use crate::agents::social::Relationships;
 use crate::agents::thinking_log::ThinkingLog;
 use crate::agents::token_tracking::{AgentCost, ContextWindow};
-use crate::items::{CarrySlots, DocumentInventory, Inventory};
+use crate::items::{CarrySlots, ContainedItems, DocumentInventory, Inventory, ItemType};
 use crate::world::map::GridPos;
 use crate::world::shifts::PaycheckWallet;
 
@@ -62,7 +62,10 @@ pub struct MoveTimer(pub Timer);
 
 impl MoveTimer {
     pub fn from_speed(tiles_per_sec: f32) -> Self {
-        Self(Timer::from_seconds(1.0 / tiles_per_sec, TimerMode::Repeating))
+        Self(Timer::from_seconds(
+            1.0 / tiles_per_sec,
+            TimerMode::Repeating,
+        ))
     }
 }
 
@@ -124,6 +127,7 @@ pub struct AgentBundle {
     pub documents: DocumentInventory,
     pub thinking_log: ThinkingLog,
     pub carry_slots: CarrySlots,
+    pub contained_items: ContainedItems,
     pub business_cards: BusinessCards,
     pub context_window: ContextWindow,
     pub agent_cost: AgentCost,
@@ -137,7 +141,12 @@ impl AgentBundle {
             pos,
             animation: AgentAnimation::default(),
             thought: ThoughtBubble(format!("{name} is looking around...")),
-            inventory: Inventory::default(), // start with 0 gold — earn everything
+            inventory: {
+                let mut inv = Inventory::default();
+                inv.add(ItemType::Coffee, 1);
+                inv.add(ItemType::Rations, 2);
+                inv
+            },
             needs: Needs::default(),
             relationships: Relationships::default(),
             vision: Vision::default(),
@@ -153,6 +162,7 @@ impl AgentBundle {
             documents: DocumentInventory::default(),
             thinking_log: ThinkingLog::default(),
             carry_slots: CarrySlots::default(),
+            contained_items: ContainedItems::default(),
             business_cards: BusinessCards::default(),
             context_window: ContextWindow::default(),
             agent_cost: AgentCost::default(),

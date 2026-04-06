@@ -79,11 +79,63 @@ pub struct PendingCreateDocument {
     pub content: String,
 }
 
+/// Batch variant for returning multiple documents (e.g. on bounty rejection).
+#[derive(Component)]
+pub struct PendingCreateDocumentBatch {
+    pub docs: Vec<(String, String)>, // (title, content)
+}
+
 /// Marker component: queued conversation message to apply to both agents' logs.
 #[derive(Component)]
 pub struct PendingConversationMessage {
     pub message: ConversationMessage,
     pub partner: Entity,
+}
+
+fn queue_dropbox_return(
+    commands: &mut Commands,
+    entity: Entity,
+    contained_items: &mut crate::items::ContainedItems,
+    slot: crate::world::bounty::DropboxSlot,
+    bounty: Option<&crate::world::bounty::BountyTokenData>,
+) {
+    let mut return_items: Vec<(crate::items::ItemType, u32)> = Vec::new();
+
+    if slot.bounty_token_id.is_some() {
+        return_items.push((crate::items::ItemType::BountyToken, 1));
+    }
+
+    if let Some(item_entity) = slot.bounty_token_item {
+        commands
+            .entity(item_entity)
+            .insert(crate::items::ItemContainer(entity));
+        contained_items.insert(item_entity);
+    }
+
+    for (item, count) in slot.items {
+        return_items.push((item, count));
+    }
+
+    for item_entity in slot.document_items {
+        commands
+            .entity(item_entity)
+            .insert(crate::items::ItemContainer(entity));
+        contained_items.insert(item_entity);
+    }
+
+    if !slot.documents.is_empty() {
+        commands
+            .entity(entity)
+            .insert(PendingCreateDocumentBatch {
+                docs: slot.documents,
+            });
+    }
+
+    if !return_items.is_empty() {
+        commands.entity(entity).insert(PendingClaimItems {
+            items: return_items,
+        });
+    }
 }
 
 /// System: apply pending conversation messages to ConversationLog on both agents
@@ -107,7 +159,9 @@ pub fn apply_conversation_messages_system(
             partner_needs.boredom = (partner_needs.boredom + 5.0).min(100.0);
         }
         // Remove the marker.
-        commands.entity(entity).remove::<PendingConversationMessage>();
+        commands
+            .entity(entity)
+            .remove::<PendingConversationMessage>();
     }
 }
 
@@ -145,24 +199,55 @@ pub fn give_claim_items_system(
 pub fn process_gm_verdicts_system(
     mut commands: Commands,
     mut verdicts: ResMut<super::commands::PendingVerdicts>,
+    mut system_ai: ResMut<crate::agents::gm::SystemAiState>,
     mut boards_verdict: Query<(&mut BountyTokenStore, &mut BountyDropbox), With<BountyBoard>>,
-    mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut ThoughtBubble, &mut AgentGoal)>,
+    mut agents: Query<(
+        Entity,
+        &AgentName,
+        &mut Inventory,
+        &mut crate::items::ContainedItems,
+        &mut ThoughtBubble,
+        &mut AgentGoal,
+    ),
+        (With<AgentName>, Without<BountyBoard>)>,
+    mut board_contained_items: Query<
+        &mut crate::items::ContainedItems,
+        (With<BountyBoard>, Without<AgentName>),
+    >,
     mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
     tick: Res<crate::tick::TickCount>,
     sessions: Res<crate::agents::ai::AgentSessions>,
     mut library: ResMut<Library>,
 ) {
-    let Some((mut bounty_registry, mut dropbox)) = boards_verdict.iter_mut().next() else { return; };
+    let Some((mut bounty_registry, mut dropbox)) = boards_verdict.iter_mut().next() else {
+        return;
+    };
     if !verdicts.verdicts.is_empty() {
-        tracing::info!("[GM VERDICT PROCESSING] {} verdicts pending", verdicts.verdicts.len());
+        tracing::info!(
+            "[GM VERDICT PROCESSING] {} verdicts pending",
+            verdicts.verdicts.len()
+        );
     }
     for (bounty_id, approved, reason) in verdicts.verdicts.drain(..) {
-        tracing::info!("[GM VERDICT PROCESSING] bounty={} approved={}", bounty_id, approved);
+        tracing::info!(
+            "[GM VERDICT PROCESSING] bounty={} approved={}",
+            bounty_id,
+            approved
+        );
+        system_ai.mark_review_complete(bounty_id);
         let bounty = bounty_registry.tokens.get(&bounty_id).cloned();
         let Some(bounty) = bounty else {
             tracing::warn!("[GM] Bounty {} not found", bounty_id);
             continue;
         };
+        if bounty.state != crate::world::bounty::BountyState::PendingVerification {
+            tracing::warn!(
+                "[GM] Ignoring stale verdict for {} in state {:?}",
+                bounty_id,
+                bounty.state
+            );
+            continue;
+        }
         let Some(agent_entity) = bounty.claimed_by else {
             tracing::warn!("[GM] Bounty {} has no claimant", bounty_id);
             continue;
@@ -171,18 +256,25 @@ pub fn process_gm_verdicts_system(
         if approved {
             // Pay out.
             let agent_name_str;
-            if let Ok((_, name, mut inv, mut thought, mut goal)) = agents.get_mut(agent_entity) {
+            if let Ok((_, name, mut inv, _contained, mut thought, mut goal)) =
+                agents.get_mut(agent_entity)
+            {
                 agent_name_str = name.0.clone();
                 inv.add(crate::items::ItemType::GoldCoin, bounty.reward_gold);
                 thought.0 = format!("GM approved! Collected {} gold!", bounty.reward_gold);
                 *goal = AgentGoal::Idle;
-                tracing::info!("[GM APPROVED] {} +{} gold for '{}'", name.0, bounty.reward_gold, bounty.description);
+                tracing::info!(
+                    "[GM APPROVED] {} +{} gold for '{}'",
+                    name.0,
+                    bounty.reward_gold,
+                    bounty.description
+                );
 
                 event_log.push(crate::agents::event_log::LogEvent {
                     tick: tick.0,
                     agent: "SYSTEM".into(),
-                    kind: crate::agents::event_log::LogKind::Speech,
-                    text: format!("[to {}] {}", name.0, reason),
+                    kind: crate::agents::event_log::LogKind::GmVerdict,
+                    text: format!("APPROVED {}'s bounty '{}' ({}g): {}", name.0, bounty.description, bounty.reward_gold, reason),
                 });
 
                 if let Some(session) = sessions.sessions.get(&agent_entity) {
@@ -196,6 +288,16 @@ pub fn process_gm_verdicts_system(
 
             // Move documents from dropbox to Library and save to disk.
             if let Some(slot) = dropbox.clear_slot(agent_entity) {
+                if let Ok(mut board_items) = board_contained_items.single_mut() {
+                    if let Some(item_entity) = slot.bounty_token_item {
+                        board_items.remove(item_entity);
+                        commands.entity(item_entity).despawn();
+                    }
+                    for item_entity in slot.document_items {
+                        board_items.remove(item_entity);
+                        commands.entity(item_entity).despawn();
+                    }
+                }
                 for (title, content) in &slot.documents {
                     library.documents.push(crate::world::bounty::LibraryEntry {
                         title: title.clone(),
@@ -205,10 +307,15 @@ pub fn process_gm_verdicts_system(
                         bounty_description: bounty.description.clone(),
                     });
                     // Save to filesystem.
-                    let agent_dir = format!("./documents/{}", agent_name_str.to_lowercase());
+                    let agent_dir = agent_documents_dir(&agent_name_str);
                     let _ = std::fs::create_dir_all(&agent_dir);
-                    let _ = std::fs::write(format!("{}/{}", agent_dir, title), content);
-                    tracing::info!("[Library] Archived '{}' by {} (bounty: {})", title, agent_name_str, bounty.description);
+                    let _ = std::fs::write(agent_dir.join(title), content);
+                    tracing::info!(
+                        "[Library] Archived '{}' by {} (bounty: {})",
+                        title,
+                        agent_name_str,
+                        bounty.description
+                    );
                 }
                 // Token is consumed, proof items are consumed on approval.
             }
@@ -219,15 +326,22 @@ pub fn process_gm_verdicts_system(
             }
         } else {
             // Rejected — return all items from dropbox to agent, keep bounty Claimed.
-            if let Ok((_, name, _inv, mut thought, _goal)) = agents.get_mut(agent_entity) {
+            if let Ok((_, name, _inv, mut contained, mut thought, _goal)) =
+                agents.get_mut(agent_entity)
+            {
                 thought.0 = format!("GM rejected bounty: {}", reason);
-                tracing::info!("[GM REJECTED] {} bounty '{}': {}", name.0, bounty.description, reason);
+                tracing::info!(
+                    "[GM REJECTED] {} bounty '{}': {}",
+                    name.0,
+                    bounty.description,
+                    reason
+                );
 
                 event_log.push(crate::agents::event_log::LogEvent {
                     tick: tick.0,
                     agent: "SYSTEM".into(),
-                    kind: crate::agents::event_log::LogKind::Speech,
-                    text: format!("[to {}] {}", name.0, reason),
+                    kind: crate::agents::event_log::LogKind::GmVerdict,
+                    text: format!("REJECTED {}'s bounty '{}': {}", name.0, bounty.description, reason),
                 });
 
                 if let Some(session) = sessions.sessions.get(&agent_entity) {
@@ -238,43 +352,24 @@ pub fn process_gm_verdicts_system(
             }
 
             // Return all items from dropbox to agent.
-            let mut return_items: Vec<(crate::items::ItemType, u32)> = Vec::new();
             if let Some(slot) = dropbox.clear_slot(agent_entity) {
-                // Return bounty token.
-                if slot.bounty_token_id.is_some() {
-                    return_items.push((crate::items::ItemType::BountyToken, 1));
-                    // Re-add BountyTokenInfo.
-                    let instructions = bounty.hidden_criteria
-                        .split("\n\nGM:")
-                        .next()
-                        .unwrap_or("")
-                        .strip_prefix("Instructions for agent: ")
-                        .unwrap_or("Complete the task and return to the board.")
-                        .to_string();
-                    commands.entity(agent_entity).insert(crate::items::BountyTokenInfo {
-                        bounty_id: bounty_id.to_string(),
-                        title: bounty.description.clone(),
-                        reward: bounty.reward_gold,
-                        instructions,
-                    });
+                if let Ok(mut board_items) = board_contained_items.single_mut() {
+                    if let Some(item_entity) = slot.bounty_token_item {
+                        board_items.remove(item_entity);
+                    }
+                    for item_entity in &slot.document_items {
+                        board_items.remove(*item_entity);
+                    }
                 }
-                // Return proof items.
-                for (item, count) in &slot.items {
-                    return_items.push((*item, *count));
+                if let Ok((_, _, _, mut contained, _, _)) = agents.get_mut(agent_entity) {
+                    queue_dropbox_return(
+                        &mut commands,
+                        agent_entity,
+                        &mut contained,
+                        slot,
+                        Some(&bounty),
+                    );
                 }
-                // Return documents back to agent's DocumentInventory.
-                for (title, content) in &slot.documents {
-                    commands.entity(agent_entity).insert(PendingCreateDocument {
-                        title: title.clone(),
-                        content: content.clone(),
-                    });
-                }
-            }
-
-            if !return_items.is_empty() {
-                commands.entity(agent_entity).insert(PendingClaimItems {
-                    items: return_items,
-                });
             }
 
             // Keep bounty as Claimed — agent can retry.
@@ -285,22 +380,30 @@ pub fn process_gm_verdicts_system(
 
 /// System: deliver research documents to agents.
 pub fn deliver_documents_system(
+    mut commands: Commands,
     mut pending: ResMut<super::commands::PendingDocuments>,
-    mut agents: Query<(&AgentName, &mut Inventory, &mut crate::items::DocumentInventory, &mut ThoughtBubble)>,
+    mut agents: Query<(Entity, &AgentName, &mut ThoughtBubble)>,
     sessions: Res<crate::agents::ai::AgentSessions>,
     mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
     tick: Res<crate::tick::TickCount>,
 ) {
     for (agent_name, title, content) in pending.docs.drain(..) {
-        let agent = agents.iter_mut().find(|(n, _, _, _)| n.0 == agent_name);
-        if let Some((name, mut inv, mut docs, mut thought)) = agent {
-            // Add document to DocumentInventory with content.
-            docs.add(title.clone(), content.clone());
-            // Add Document item type to regular inventory.
-            inv.add(crate::items::ItemType::Document, 1);
-
-            thought.0 = format!("Research complete! Document '{}' is in your inventory.", title);
-            tracing::info!("[DOC] {} received '{}' ({} chars)", name.0, title, content.len());
+        let agent = agents.iter_mut().find(|(_, n, _)| n.0 == agent_name);
+        if let Some((entity, name, mut thought)) = agent {
+            commands.entity(entity).insert(PendingCreateDocument {
+                title: title.clone(),
+                content: content.clone(),
+            });
+            thought.0 = format!(
+                "Research complete! Document '{}' is in your inventory.",
+                title
+            );
+            tracing::info!(
+                "[DOC] {} received '{}' ({} chars)",
+                name.0,
+                title,
+                content.len()
+            );
 
             event_log.push(crate::agents::event_log::LogEvent {
                 tick: tick.0,
@@ -309,10 +412,60 @@ pub fn deliver_documents_system(
                 text: format!("Research document produced: '{}'", title),
             });
 
-            // Notify the agent.
-            // Find entity for session lookup — use a different approach.
-            // We can't easily get Entity from this query pattern, so just log it.
+            if let Some(session) = sessions.sessions.get(&entity) {
+                let _ = session.prompt_tx.try_send(format!(
+                    "Research complete. '{}' is now in your inventory as a document item.",
+                    title
+                ));
+            }
         }
+    }
+}
+
+/// System: process discretionary gold grants issued by the System AI.
+pub fn process_gold_grants_system(
+    mut pending: ResMut<super::commands::PendingGoldGrants>,
+    mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut ThoughtBubble)>,
+    sessions: Res<crate::agents::ai::AgentSessions>,
+    mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
+    tick: Res<crate::tick::TickCount>,
+) {
+    for (agent_name, amount, reason, message) in pending.grants.drain(..) {
+        if amount == 0 {
+            continue;
+        }
+
+        let Some((entity, name, mut inv, mut thought)) = agents
+            .iter_mut()
+            .find(|(_, name, _, _)| name.0.eq_ignore_ascii_case(&agent_name))
+        else {
+            tracing::warn!(
+                "[GM] Couldn't grant {}g to '{}': agent not found",
+                amount,
+                agent_name
+            );
+            continue;
+        };
+
+        inv.add(crate::items::ItemType::GoldCoin, amount);
+        thought.0 = format!("Received {} gold from the System AI.", amount);
+
+        let public_message = message.unwrap_or_else(|| reason.clone());
+        event_log.push(crate::agents::event_log::LogEvent {
+            tick: tick.0,
+            agent: "SYSTEM".into(),
+            kind: crate::agents::event_log::LogKind::System,
+            text: format!("[grant {}g to {}] {}", amount, name.0, public_message),
+        });
+
+        if let Some(session) = sessions.sessions.get(&entity) {
+            let _ = session.prompt_tx.try_send(format!(
+                "SYSTEM AI AWARD: You received {} gold. Reason: {}",
+                amount, reason
+            ));
+        }
+
+        tracing::info!("[GM] Granted {}g to {} ({})", amount, name.0, reason);
     }
 }
 
@@ -325,12 +478,32 @@ pub fn process_deposits_system(
     deposits: Query<(Entity, &AgentName, &PendingDeposit)>,
     mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
     mut agent_docs: Query<&mut crate::items::DocumentInventory, With<AgentName>>,
+    mut contained_items: Query<&mut crate::items::ContainedItems>,
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
-    structures: Query<(&crate::world::structures::SpriteType,), With<StructureId>>,
-    mut incapacitated_agents: Query<(Entity, &AgentName, &mut ThoughtBubble), With<crate::world::hospital::Incapacitated>>,
+    mut structure_docs: Query<
+        &mut crate::items::DocumentInventory,
+        (With<StructureId>, Without<AgentName>),
+    >,
+    structures: Query<
+        (
+            &crate::world::structures::SpriteType,
+            Option<&crate::items::RestrictedItems>,
+        ),
+        With<StructureId>,
+    >,
+    mut incapacitated_agents: Query<
+        (Entity, &AgentName, &mut ThoughtBubble),
+        With<crate::world::hospital::Incapacitated>,
+    >,
     mut dropbox_boards: Query<&mut BountyDropbox, With<BountyBoard>>,
     board_entities: Query<Entity, With<BountyBoard>>,
-    agent_token_info: Query<&crate::items::BountyTokenInfo>,
+    item_lookup: Query<(
+        Entity,
+        &crate::items::ItemKind,
+        Option<&crate::items::ItemName>,
+        Option<&crate::items::BountyTokenInfo>,
+    )>,
+    mut item_containers: Query<&mut crate::items::ItemContainer>,
 ) {
     // Pre-check: is the deposit target a bounty board?
     let board_entity_set: std::collections::HashSet<Entity> = board_entities.iter().collect();
@@ -341,59 +514,161 @@ pub fn process_deposits_system(
         // Special case: depositing a body at the hospital.
         if deposit.item_name.starts_with("body:") {
             let victim_name = &deposit.item_name[5..];
-            let is_hospital = structures.get(deposit.building_entity)
-                .map(|(sprite,)| sprite.0 == "hospital")
+            let is_hospital = structures
+                .get(deposit.building_entity)
+                .map(|(sprite, _)| sprite.0 == "hospital")
                 .unwrap_or(false);
 
             if is_hospital {
                 for (victim_entity, vname, mut vthought) in &mut incapacitated_agents {
                     if vname.0 == victim_name {
-                        commands.entity(victim_entity).insert(crate::world::hospital::Recovering {
-                            ticks_remaining: crate::config::recovery_ticks(),
-                        });
-                        vthought.0 = format!("Being treated at the hospital... {} brought me here.", name.0);
-                        tracing::info!("[RESCUE] {} delivered {} to the hospital — recovery started!", name.0, victim_name);
+                        commands
+                            .entity(victim_entity)
+                            .insert(crate::world::hospital::Recovering {
+                                ticks_remaining: crate::config::recovery_ticks(),
+                            });
+                        vthought.0 = format!(
+                            "Being treated at the hospital... {} brought me here.",
+                            name.0
+                        );
+                        tracing::info!(
+                            "[RESCUE] {} delivered {} to the hospital — recovery started!",
+                            name.0,
+                            victim_name
+                        );
                         break;
                     }
                 }
             } else {
-                tracing::info!("[Deposit] {} dropped {} here (not the hospital)", name.0, deposit.item_name);
+                tracing::info!(
+                    "[Deposit] {} dropped {} here (not the hospital)",
+                    name.0,
+                    deposit.item_name
+                );
             }
         } else if is_bounty_board {
             // --- Bounty board: route into BountyDropbox ---
             if deposit.item_name == "bounty_token" || deposit.item_name == "bountytoken" {
-                // Deposit bounty token into dropbox.
-                let bounty_id = agent_token_info.get(entity).ok()
-                    .and_then(|info| uuid::Uuid::parse_str(&info.bounty_id).ok());
-                if let Some(bid) = bounty_id {
-                    // Remove from agent inventory.
-                    if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
-                        agent_inv.remove(crate::items::ItemType::BountyToken, 1);
-                    }
-                    // Put in dropbox.
-                    if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
-                        dropbox.deposit_token(entity, bid);
-                    }
-                    // Remove BountyTokenInfo component.
-                    commands.entity(entity).remove::<crate::items::BountyTokenInfo>();
-                    tracing::info!("[Dropbox] {} deposited bounty_token (bounty {})", name.0, &bid.to_string()[..6]);
+                // Validate: agent must actually have a BountyToken in inventory.
+                let has_token = agent_inventories
+                    .get(entity)
+                    .map(|inv| inv.has(crate::items::ItemType::BountyToken, 1))
+                    .unwrap_or(false);
+
+                if !has_token {
+                    tracing::warn!(
+                        "[Dropbox] {} tried to deposit bounty_token but doesn't have one",
+                        name.0
+                    );
                 } else {
-                    tracing::warn!("[Dropbox] {} tried to deposit bounty_token but has no BountyTokenInfo", name.0);
+                    let token_item = contained_items.get(entity).ok().and_then(|contained| {
+                        contained.items.iter().find_map(|item_entity| {
+                            item_lookup.get(*item_entity).ok().and_then(
+                                |(item_entity, kind, _name, token_info)| {
+                                    if kind.0 == crate::items::ItemType::BountyToken {
+                                        token_info.map(|info| {
+                                            let bounty_id =
+                                                uuid::Uuid::parse_str(&info.bounty_id).ok()?;
+                                            Some((item_entity, bounty_id))
+                                        })?
+                                    } else {
+                                        None
+                                    }
+                                },
+                            )
+                        })
+                    });
+
+                    let bounty_id = token_item.map(|(_, bounty_id)| bounty_id);
+                    if let Some(bid) = bounty_id {
+                        // Remove from agent inventory.
+                        if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                            agent_inv.remove(crate::items::ItemType::BountyToken, 1);
+                        }
+                        if let Some((item_entity, _)) = token_item {
+                            if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                                owner.0 = deposit.building_entity;
+                            }
+                            if let Ok(mut source) = contained_items.get_mut(entity) {
+                                source.remove(item_entity);
+                            }
+                            if let Ok(mut board_items) =
+                                contained_items.get_mut(deposit.building_entity)
+                            {
+                                board_items.insert(item_entity);
+                            }
+                        }
+                        // Put in dropbox.
+                        if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
+                            dropbox.deposit_token(
+                                entity,
+                                bid,
+                                token_item.map(|(item_entity, _)| item_entity),
+                            );
+                        }
+                        tracing::info!(
+                            "[Dropbox] {} deposited bounty_token (bounty {})",
+                            name.0,
+                            &bid.to_string()[..6]
+                        );
+                    } else {
+                        tracing::warn!(
+                            "[Dropbox] {} has bounty_token but no valid bounty token item metadata",
+                            name.0
+                        );
+                    }
                 }
             } else if deposit.item_name.starts_with("doc:") || deposit.item_name.ends_with(".md") {
                 // Deposit document into dropbox.
-                let doc_title = deposit.item_name.strip_prefix("doc:").unwrap_or(&deposit.item_name);
+                let doc_title = deposit
+                    .item_name
+                    .strip_prefix("doc:")
+                    .unwrap_or(&deposit.item_name);
                 let mut found = false;
+                let document_item = contained_items.get(entity).ok().and_then(|contained| {
+                    contained.items.iter().find_map(|item_entity| {
+                        item_lookup.get(*item_entity).ok().and_then(
+                            |(item_entity, kind, item_name, _)| {
+                                (kind.0 == crate::items::ItemType::Document
+                                    && item_name.is_some_and(|name| name.0 == doc_title))
+                                .then_some(item_entity)
+                            },
+                        )
+                    })
+                });
                 if let Ok(mut docs) = agent_docs.get_mut(entity) {
                     if let Some(content) = docs.documents.remove(doc_title) {
                         found = true;
                         if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                             agent_inv.remove(crate::items::ItemType::Document, 1);
                         }
-                        if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
-                            dropbox.deposit_document(entity, doc_title.to_string(), content.clone());
+                        if let Some(item_entity) = document_item {
+                            if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                                owner.0 = deposit.building_entity;
+                            }
+                            if let Ok(mut source) = contained_items.get_mut(entity) {
+                                source.remove(item_entity);
+                            }
+                            if let Ok(mut board_items) =
+                                contained_items.get_mut(deposit.building_entity)
+                            {
+                                board_items.insert(item_entity);
+                            }
                         }
-                        tracing::info!("[Dropbox] {} deposited document '{}' ({} chars)", name.0, doc_title, content.len());
+                        if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
+                            dropbox.deposit_document(
+                                entity,
+                                doc_title.to_string(),
+                                content.clone(),
+                                document_item,
+                            );
+                        }
+                        tracing::info!(
+                            "[Dropbox] {} deposited document '{}' ({} chars)",
+                            name.0,
+                            doc_title,
+                            content.len()
+                        );
                     }
                 }
                 if !found {
@@ -403,62 +678,281 @@ pub fn process_deposits_system(
                 // Regular item deposit into dropbox.
                 let item_type = parse_item_name(&deposit.item_name);
                 if let Some(item) = item_type {
+                    if item == crate::items::ItemType::Document {
+                        let mut deposited = false;
+                        if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                            if let Some((title, content)) = take_named_document(&mut docs) {
+                                let document_item =
+                                    contained_items.get(entity).ok().and_then(|contained| {
+                                        contained.items.iter().find_map(|item_entity| {
+                                            item_lookup.get(*item_entity).ok().and_then(
+                                                |(item_entity, kind, item_name, _)| {
+                                                    (kind.0 == crate::items::ItemType::Document
+                                                        && item_name
+                                                            .is_some_and(|name| name.0 == title))
+                                                    .then_some(item_entity)
+                                                },
+                                            )
+                                        })
+                                    });
+                                if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                                    agent_inv.remove(crate::items::ItemType::Document, 1);
+                                }
+                                if let Some(item_entity) = document_item {
+                                    if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                                        owner.0 = deposit.building_entity;
+                                    }
+                                    if let Ok(mut source) = contained_items.get_mut(entity) {
+                                        source.remove(item_entity);
+                                    }
+                                    if let Ok(mut board_items) =
+                                        contained_items.get_mut(deposit.building_entity)
+                                    {
+                                        board_items.insert(item_entity);
+                                    }
+                                }
+                                if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
+                                    dropbox.deposit_document(
+                                        entity,
+                                        title.clone(),
+                                        content.clone(),
+                                        document_item,
+                                    );
+                                }
+                                tracing::info!(
+                                    "[Dropbox] {} deposited document '{}' via generic document item ({} chars)",
+                                    name.0,
+                                    title,
+                                    content.len()
+                                );
+                                deposited = true;
+                            }
+                        }
+
+                        if !deposited {
+                            tracing::info!(
+                                "[Dropbox] {} tried to deposit a generic document item but has no named documents to submit",
+                                name.0
+                            );
+                        }
+                        commands.entity(entity).remove::<PendingDeposit>();
+                        continue;
+                    }
+
                     if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                         if agent_inv.has(item, 1) {
                             agent_inv.remove(item, 1);
                             if let Some(mut dropbox) = dropbox_boards.iter_mut().next() {
                                 dropbox.deposit_item(entity, item, 1);
                             }
-                            tracing::info!("[Dropbox] {} deposited {} into bounty board dropbox", name.0, deposit.item_name);
+                            tracing::info!(
+                                "[Dropbox] {} deposited {} into bounty board dropbox",
+                                name.0,
+                                deposit.item_name
+                            );
                         } else {
-                            tracing::info!("[Dropbox] {} doesn't have {} in inventory", name.0, deposit.item_name);
+                            tracing::info!(
+                                "[Dropbox] {} doesn't have {} in inventory",
+                                name.0,
+                                deposit.item_name
+                            );
                         }
                     }
                 } else {
-                    tracing::warn!("[Dropbox] Unknown item '{}'. Check your inventory for valid item names.", deposit.item_name);
+                    tracing::warn!(
+                        "[Dropbox] Unknown item '{}'. Check your inventory for valid item names.",
+                        deposit.item_name
+                    );
                 }
             }
         } else if deposit.item_name.starts_with("doc:") || deposit.item_name.ends_with(".md") {
+            let accepts_documents = structures
+                .get(deposit.building_entity)
+                .ok()
+                .and_then(|(_, restricted)| restricted)
+                .map_or(true, |restricted| {
+                    restricted.allows(crate::items::ItemType::Document)
+                });
+            if !accepts_documents {
+                tracing::warn!(
+                    "[Deposit] {} tried to deposit a document into a restricted container",
+                    name.0
+                );
+                commands.entity(entity).remove::<PendingDeposit>();
+                continue;
+            }
+
             // Named document deposit at a regular building.
-            let doc_title = deposit.item_name.strip_prefix("doc:").unwrap_or(&deposit.item_name);
+            let doc_title = deposit
+                .item_name
+                .strip_prefix("doc:")
+                .unwrap_or(&deposit.item_name);
             let mut found = false;
+            let document_item = contained_items.get(entity).ok().and_then(|contained| {
+                contained.items.iter().find_map(|item_entity| {
+                    item_lookup.get(*item_entity).ok().and_then(
+                        |(item_entity, kind, item_name, _)| {
+                            (kind.0 == crate::items::ItemType::Document
+                                && item_name.is_some_and(|name| name.0 == doc_title))
+                            .then_some(item_entity)
+                        },
+                    )
+                })
+            });
             if let Ok(mut docs) = agent_docs.get_mut(entity) {
                 if let Some(content) = docs.documents.remove(doc_title) {
                     found = true;
                     if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                         agent_inv.remove(crate::items::ItemType::Document, 1);
                     }
-                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
+                    if let Some(item_entity) = document_item {
+                        if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                            owner.0 = deposit.building_entity;
+                        }
+                        if let Ok(mut source) = contained_items.get_mut(entity) {
+                            source.remove(item_entity);
+                        }
+                        if let Ok(mut destination) =
+                            contained_items.get_mut(deposit.building_entity)
+                        {
+                            destination.insert(item_entity);
+                        }
+                    }
+                    if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity)
+                    {
                         bld_inv.add(crate::items::ItemType::Document, 1);
                     }
-                    tracing::info!("[Deposit] {} deposited document '{}' ({} chars)", name.0, doc_title, content.len());
+                    if let Ok(mut docs) = structure_docs.get_mut(deposit.building_entity) {
+                        docs.add(doc_title.to_string(), content.clone());
+                    }
+                    tracing::info!(
+                        "[Deposit] {} deposited document '{}' into building ({} chars)",
+                        name.0,
+                        doc_title,
+                        content.len()
+                    );
                 }
             }
             if !found {
-                tracing::info!("[Deposit] {} doesn't have document '{}' — available docs listed in inventory", name.0, doc_title);
+                tracing::info!(
+                    "[Deposit] {} doesn't have document '{}' — available docs listed in inventory",
+                    name.0,
+                    doc_title
+                );
             }
         } else {
             // Regular item deposit at a regular building.
             let item_type = parse_item_name(&deposit.item_name);
             if let Some(item) = item_type {
+                let allowed = structures
+                    .get(deposit.building_entity)
+                    .ok()
+                    .and_then(|(_, restricted)| restricted)
+                    .map_or(true, |restricted| restricted.allows(item));
+                if !allowed {
+                    tracing::warn!(
+                        "[Deposit] {} tried to deposit disallowed item {}",
+                        name.0,
+                        deposit.item_name
+                    );
+                    commands.entity(entity).remove::<PendingDeposit>();
+                    continue;
+                }
+
+                if item == crate::items::ItemType::Document {
+                    let mut deposited = false;
+                    if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                        if let Some((title, content)) = take_named_document(&mut docs) {
+                            let document_item =
+                                contained_items.get(entity).ok().and_then(|contained| {
+                                    contained.items.iter().find_map(|item_entity| {
+                                        item_lookup.get(*item_entity).ok().and_then(
+                                            |(item_entity, kind, item_name, _)| {
+                                                (kind.0 == crate::items::ItemType::Document
+                                                    && item_name
+                                                        .is_some_and(|name| name.0 == title))
+                                                .then_some(item_entity)
+                                            },
+                                        )
+                                    })
+                                });
+                            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                                agent_inv.remove(crate::items::ItemType::Document, 1);
+                            }
+                            if let Some(item_entity) = document_item {
+                                if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                                    owner.0 = deposit.building_entity;
+                                }
+                                if let Ok(mut source) = contained_items.get_mut(entity) {
+                                    source.remove(item_entity);
+                                }
+                                if let Ok(mut destination) =
+                                    contained_items.get_mut(deposit.building_entity)
+                                {
+                                    destination.insert(item_entity);
+                                }
+                            }
+                            if let Ok(mut bld_inv) =
+                                structure_inventories.get_mut(deposit.building_entity)
+                            {
+                                bld_inv.add(crate::items::ItemType::Document, 1);
+                            }
+                            if let Ok(mut bld_docs) =
+                                structure_docs.get_mut(deposit.building_entity)
+                            {
+                                bld_docs.add(title.clone(), content.clone());
+                            }
+                            tracing::info!(
+                                "[Deposit] {} deposited document '{}' into building via generic document item ({} chars)",
+                                name.0,
+                                title,
+                                content.len()
+                            );
+                            deposited = true;
+                        }
+                    }
+
+                    if deposited {
+                        commands.entity(entity).remove::<PendingDeposit>();
+                        continue;
+                    }
+                }
+
                 let mut success = false;
                 if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                     if agent_inv.has(item, 1) {
                         agent_inv.remove(item, 1);
-                        if let Ok(mut bld_inv) = structure_inventories.get_mut(deposit.building_entity) {
+                        if let Ok(mut bld_inv) =
+                            structure_inventories.get_mut(deposit.building_entity)
+                        {
                             bld_inv.add(item, 1);
                             success = true;
-                            tracing::info!("[Deposit] {} deposited {} into building", name.0, deposit.item_name);
+                            tracing::info!(
+                                "[Deposit] {} deposited {} into building",
+                                name.0,
+                                deposit.item_name
+                            );
                         }
                     } else {
-                        tracing::info!("[Deposit] {} doesn't have {} in inventory", name.0, deposit.item_name);
+                        tracing::info!(
+                            "[Deposit] {} doesn't have {} in inventory",
+                            name.0,
+                            deposit.item_name
+                        );
                     }
                 }
                 if !success {
-                    tracing::warn!("[Deposit] Failed: {} tried to deposit {} but doesn't have it", name.0, deposit.item_name);
+                    tracing::warn!(
+                        "[Deposit] Failed: {} tried to deposit {} but doesn't have it",
+                        name.0,
+                        deposit.item_name
+                    );
                 }
             } else {
-                tracing::warn!("[Deposit] Unknown item '{}'. Check your inventory for valid item names.", deposit.item_name);
+                tracing::warn!(
+                    "[Deposit] Unknown item '{}'. Check your inventory for valid item names.",
+                    deposit.item_name
+                );
             }
         }
 
@@ -486,12 +980,53 @@ fn parse_item_name(name: &str) -> Option<crate::items::ItemType> {
     }
 }
 
+fn take_named_document(docs: &mut crate::items::DocumentInventory) -> Option<(String, String)> {
+    let mut titles: Vec<_> = docs.documents.keys().cloned().collect();
+    titles.sort();
+    let title = titles.into_iter().next()?;
+    let content = docs.documents.remove(&title)?;
+    Some((title, content))
+}
+
+fn preview_document(content: &str) -> String {
+    const MAX_LEN: usize = 1200;
+    if content.len() <= MAX_LEN {
+        return content.to_string();
+    }
+
+    let mut clipped = content[..MAX_LEN].to_string();
+    clipped.push_str("\n\n[truncated]");
+    clipped
+}
+
+fn documents_root() -> std::path::PathBuf {
+    std::env::var("DOCUMENTS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("./documents"))
+}
+
+fn agent_documents_dir(agent_name: &str) -> std::path::PathBuf {
+    documents_root().join(agent_name.to_lowercase())
+}
+
 /// System: process take_item — move item from building/tile to agent inventory.
 pub fn process_take_items_system(
     mut commands: Commands,
     takes: Query<(Entity, &AgentName, &GridPos, &PendingTakeItem)>,
     mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
+    mut agent_docs: Query<&mut crate::items::DocumentInventory, With<AgentName>>,
+    mut contained_items: Query<&mut crate::items::ContainedItems>,
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
+    mut structure_docs: Query<
+        &mut crate::items::DocumentInventory,
+        (With<StructureId>, Without<AgentName>),
+    >,
+    item_lookup: Query<(
+        Entity,
+        &crate::items::ItemKind,
+        Option<&crate::items::ItemName>,
+    )>,
+    mut item_containers: Query<&mut crate::items::ItemContainer>,
     mut tile_inventory: ResMut<crate::world::map::TileInventory>,
 ) {
     for (entity, name, pos, take) in &takes {
@@ -502,26 +1037,167 @@ pub fn process_take_items_system(
                 // Add to the carrier's inventory as a special item.
                 if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                     // Store as a generic "body" item — the name is tracked separately.
-                    agent_inv.items.entry(crate::items::ItemType::Document).or_insert(0); // placeholder
-                    tracing::info!("[Take] {} picked up {} from tile ({},{})", name.0, take.item_name, pos.x, pos.y);
+                    agent_inv
+                        .items
+                        .entry(crate::items::ItemType::Document)
+                        .or_insert(0); // placeholder
+                    tracing::info!(
+                        "[Take] {} picked up {} from tile ({},{})",
+                        name.0,
+                        take.item_name,
+                        pos.x,
+                        pos.y
+                    );
                 }
             } else {
-                tracing::info!("[Take] No {} at ({},{}) for {}", take.item_name, pos.x, pos.y, name.0);
+                tracing::info!(
+                    "[Take] No {} at ({},{}) for {}",
+                    take.item_name,
+                    pos.x,
+                    pos.y,
+                    name.0
+                );
             }
         } else {
             // Regular item — try building first, then tile.
+            if take.item_name.starts_with("doc:") || take.item_name.ends_with(".md") {
+                let doc_title = take
+                    .item_name
+                    .strip_prefix("doc:")
+                    .unwrap_or(&take.item_name);
+                let mut taken = false;
+                let document_item =
+                    contained_items
+                        .get(take.building_entity)
+                        .ok()
+                        .and_then(|contained| {
+                            contained.items.iter().find_map(|item_entity| {
+                                item_lookup.get(*item_entity).ok().and_then(
+                                    |(item_entity, kind, item_name)| {
+                                        (kind.0 == crate::items::ItemType::Document
+                                            && item_name.is_some_and(|name| name.0 == doc_title))
+                                        .then_some(item_entity)
+                                    },
+                                )
+                            })
+                        });
+
+                if let Ok(mut bld_docs) = structure_docs.get_mut(take.building_entity) {
+                    if let Some(content) = bld_docs.documents.remove(doc_title) {
+                        if let Ok(mut bld_inv) = structure_inventories.get_mut(take.building_entity)
+                        {
+                            bld_inv.remove(crate::items::ItemType::Document, 1);
+                        }
+                        if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                            docs.add(doc_title.to_string(), content.clone());
+                        }
+                        if let Some(item_entity) = document_item {
+                            if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                                owner.0 = entity;
+                            }
+                            if let Ok(mut source) = contained_items.get_mut(take.building_entity) {
+                                source.remove(item_entity);
+                            }
+                            if let Ok(mut destination) = contained_items.get_mut(entity) {
+                                destination.insert(item_entity);
+                            }
+                        }
+                        if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                            agent_inv.add(crate::items::ItemType::Document, 1);
+                        }
+                        tracing::info!(
+                            "[Take] {} took document '{}' from building ({} chars)",
+                            name.0,
+                            doc_title,
+                            content.len()
+                        );
+                        taken = true;
+                    }
+                }
+
+                if !taken {
+                    tracing::info!(
+                        "[Take] {} couldn't find document '{}' here",
+                        name.0,
+                        doc_title
+                    );
+                }
+
+                commands.entity(entity).remove::<PendingTakeItem>();
+                continue;
+            }
+
             let item_type = parse_item_name(&take.item_name);
             let mut taken = false;
 
             if let Some(item) = item_type {
-                // Try building inventory.
-                if let Ok(mut bld_inv) = structure_inventories.get_mut(take.building_entity) {
-                    if bld_inv.has(item, 1) {
-                        bld_inv.remove(item, 1);
-                        if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
-                            agent_inv.add(item, 1);
+                if item == crate::items::ItemType::Document {
+                    if let Ok(mut bld_docs) = structure_docs.get_mut(take.building_entity) {
+                        if let Some((title, content)) = take_named_document(&mut bld_docs) {
+                            let document_item = contained_items
+                                .get(take.building_entity)
+                                .ok()
+                                .and_then(|contained| {
+                                    contained.items.iter().find_map(|item_entity| {
+                                        item_lookup.get(*item_entity).ok().and_then(
+                                            |(item_entity, kind, item_name)| {
+                                                (kind.0 == crate::items::ItemType::Document
+                                                    && item_name
+                                                        .is_some_and(|name| name.0 == title))
+                                                .then_some(item_entity)
+                                            },
+                                        )
+                                    })
+                                });
+                            if let Ok(mut bld_inv) =
+                                structure_inventories.get_mut(take.building_entity)
+                            {
+                                bld_inv.remove(crate::items::ItemType::Document, 1);
+                            }
+                            if let Ok(mut docs) = agent_docs.get_mut(entity) {
+                                docs.add(title.clone(), content.clone());
+                            }
+                            if let Some(item_entity) = document_item {
+                                if let Ok(mut owner) = item_containers.get_mut(item_entity) {
+                                    owner.0 = entity;
+                                }
+                                if let Ok(mut source) =
+                                    contained_items.get_mut(take.building_entity)
+                                {
+                                    source.remove(item_entity);
+                                }
+                                if let Ok(mut destination) = contained_items.get_mut(entity) {
+                                    destination.insert(item_entity);
+                                }
+                            }
+                            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                                agent_inv.add(crate::items::ItemType::Document, 1);
+                            }
+                            tracing::info!(
+                                "[Take] {} took document '{}' from building via generic document item ({} chars)",
+                                name.0,
+                                title,
+                                content.len()
+                            );
                             taken = true;
-                            tracing::info!("[Take] {} took {} from building", name.0, take.item_name);
+                        }
+                    }
+                }
+
+                // Try building inventory.
+                if !taken {
+                    if let Ok(mut bld_inv) = structure_inventories.get_mut(take.building_entity) {
+                        if bld_inv.has(item, 1) {
+                            bld_inv.remove(item, 1);
+                            if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
+                                agent_inv.add(item, 1);
+                                taken = true;
+                                tracing::info!(
+                                    "[Take] {} took {} from building",
+                                    name.0,
+                                    take.item_name
+                                );
+                            }
                         }
                     }
                 }
@@ -530,7 +1206,13 @@ pub fn process_take_items_system(
                     if let Ok(mut agent_inv) = agent_inventories.get_mut(entity) {
                         agent_inv.add(item, 1);
                         taken = true;
-                        tracing::info!("[Take] {} took {} from tile ({},{})", name.0, take.item_name, pos.x, pos.y);
+                        tracing::info!(
+                            "[Take] {} took {} from tile ({},{})",
+                            name.0,
+                            take.item_name,
+                            pos.x,
+                            pos.y
+                        );
                     }
                 }
             }
@@ -543,52 +1225,155 @@ pub fn process_take_items_system(
     }
 }
 
+/// Shared logic: upsert a single document into an agent's inventory + ECS items.
+fn upsert_document(
+    commands: &mut Commands,
+    entity: Entity,
+    title: &str,
+    content: &str,
+    agent_name: &str,
+    inventories: &mut Query<&mut Inventory, With<AgentName>>,
+    doc_inventories: &mut Query<&mut crate::items::DocumentInventory>,
+    contained_items: &mut Query<&mut crate::items::ContainedItems, With<AgentName>>,
+    item_lookup: &Query<(
+        Entity,
+        &crate::items::ItemKind,
+        Option<&crate::items::ItemName>,
+    )>,
+) {
+    let existing_item = contained_items.get(entity).ok().and_then(|contained| {
+        contained.items.iter().find_map(|item_entity| {
+            item_lookup
+                .get(*item_entity)
+                .ok()
+                .and_then(|(item_entity, kind, item_name)| {
+                    (kind.0 == crate::items::ItemType::Document
+                        && item_name.is_some_and(|n| n.0 == title))
+                    .then_some(item_entity)
+                })
+        })
+    });
+
+    if let Ok(mut docs) = doc_inventories.get_mut(entity) {
+        docs.add(title.to_string(), content.to_string());
+    }
+
+    if let Some(item_entity) = existing_item {
+        commands.entity(item_entity).insert((
+            crate::items::ItemDescription(format!("Document '{}'", title)),
+            crate::items::ItemContents(content.to_string()),
+            crate::items::ItemContainer(entity),
+        ));
+    } else {
+        if let Ok(mut inv) = inventories.get_mut(entity) {
+            inv.add(crate::items::ItemType::Document, 1);
+        }
+        let item_entity = commands
+            .spawn((
+                crate::items::ItemKind(crate::items::ItemType::Document),
+                crate::items::ItemName(title.to_string()),
+                crate::items::ItemDescription(format!("Document '{}'", title)),
+                crate::items::ItemContents(content.to_string()),
+                crate::items::ItemContainer(entity),
+            ))
+            .id();
+        if let Ok(mut contained) = contained_items.get_mut(entity) {
+            contained.insert(item_entity);
+        }
+    }
+
+    let agent_dir = agent_documents_dir(agent_name);
+    let _ = std::fs::create_dir_all(&agent_dir);
+    let _ = std::fs::write(agent_dir.join(title), content);
+
+    tracing::info!(
+        "[CreateDoc] {} created '{}' ({} chars)",
+        agent_name,
+        title,
+        content.len()
+    );
+}
+
 /// System: process create_document — agent writes a document to their inventory.
 pub fn process_create_documents_system(
     mut commands: Commands,
     pending: Query<(Entity, &AgentName, &AgentId, &PendingCreateDocument)>,
+    pending_batch: Query<(Entity, &AgentName, &PendingCreateDocumentBatch)>,
     mut inventories: Query<&mut Inventory, With<AgentName>>,
     mut doc_inventories: Query<&mut crate::items::DocumentInventory>,
+    mut contained_items: Query<&mut crate::items::ContainedItems, With<AgentName>>,
+    item_lookup: Query<(
+        Entity,
+        &crate::items::ItemKind,
+        Option<&crate::items::ItemName>,
+    )>,
 ) {
-    for (entity, name, agent_id, doc) in &pending {
-        // Add to DocumentInventory (with content).
-        if let Ok(mut docs) = doc_inventories.get_mut(entity) {
-            docs.add(doc.title.clone(), doc.content.clone());
-        }
-        // Add Document item type to regular inventory.
-        if let Ok(mut inv) = inventories.get_mut(entity) {
-            inv.add(crate::items::ItemType::Document, 1);
-        }
-
-        // Also save to filesystem.
-        let agent_dir = format!("./documents/{}", name.0.to_lowercase());
-        let _ = std::fs::create_dir_all(&agent_dir);
-        let _ = std::fs::write(format!("{}/{}", agent_dir, doc.title), &doc.content);
-
-        tracing::info!("[CreateDoc] {} created '{}' ({} chars)", name.0, doc.title, doc.content.len());
+    for (entity, name, _agent_id, doc) in &pending {
+        upsert_document(
+            &mut commands,
+            entity,
+            &doc.title,
+            &doc.content,
+            &name.0,
+            &mut inventories,
+            &mut doc_inventories,
+            &mut contained_items,
+            &item_lookup,
+        );
         commands.entity(entity).remove::<PendingCreateDocument>();
+    }
+
+    // Process batch returns (e.g. from bounty rejection with multiple docs).
+    for (entity, name, batch) in &pending_batch {
+        for (title, content) in &batch.docs {
+            upsert_document(
+                &mut commands,
+                entity,
+                title,
+                content,
+                &name.0,
+                &mut inventories,
+                &mut doc_inventories,
+                &mut contained_items,
+                &item_lookup,
+            );
+        }
+        commands.entity(entity).remove::<PendingCreateDocumentBatch>();
     }
 }
 
 /// System: auto-exchange business cards when agents are in a conversation.
 /// Each agent adds their partner as a contact if not already known.
 pub fn auto_exchange_cards_system(
-    mut agents: Query<(&AgentName, &AgentId, &ActiveConversation, &mut BusinessCards)>,
+    mut agents: Query<(
+        &AgentName,
+        &AgentId,
+        &ActiveConversation,
+        &mut BusinessCards,
+    )>,
 ) {
     // Collect partner IDs first to avoid borrow conflicts.
-    let partner_ids: std::collections::HashMap<Entity, (String, String)> = agents.iter()
+    let partner_ids: std::collections::HashMap<Entity, (String, String)> = agents
+        .iter()
         .map(|(name, id, _convo, _)| (_convo.partner, (name.0.clone(), id.0.to_string())))
         .collect();
 
     for (_name, _id, convo, mut cards) in &mut agents {
         if !cards.contacts.contains_key(&convo.partner_name) && cards.cards_remaining > 0 {
             // Look up partner's ID from the pre-collected map.
-            let partner_id = partner_ids.get(&convo.partner)
+            let partner_id = partner_ids
+                .get(&convo.partner)
                 .map(|(_, id)| id.clone())
                 .unwrap_or_default();
-            cards.contacts.insert(convo.partner_name.clone(), partner_id);
+            cards
+                .contacts
+                .insert(convo.partner_name.clone(), partner_id);
             cards.cards_remaining -= 1;
-            tracing::info!("[Cards] {} received {}'s business card", _name.0, convo.partner_name);
+            tracing::info!(
+                "[Cards] {} received {}'s business card",
+                _name.0,
+                convo.partner_name
+            );
         }
     }
 }
@@ -603,54 +1388,103 @@ pub fn apply_mcp_actions_system(
     mut suggestion_box: ResMut<SuggestionBox>,
     mut boards_mcp: Query<(&mut BountyTokenStore, &mut BountyDropbox), With<BountyBoard>>,
     sessions: Res<AgentSessions>,
+    mut item_params: ParamSet<(
+        Query<&mut crate::items::ContainedItems>,
+        Query<&mut crate::items::DocumentInventory, With<AgentName>>,
+        Query<&mut crate::items::DocumentInventory, (With<StructureId>, Without<AgentName>)>,
+        Query<(
+            Entity,
+            &crate::items::ItemKind,
+            Option<&crate::items::ItemName>,
+            Option<&crate::items::BountyTokenInfo>,
+        )>,
+        Query<&mut crate::items::ItemContainer>,
+    )>,
     mut agents: Query<(
-        Entity, &AgentName, &GridPos,
-        &mut AgentGoal, &mut ThoughtBubble,
-        &KnownLocations, Option<&ShiftWorker>,
+        Entity,
+        &AgentName,
+        &GridPos,
+        &mut AgentGoal,
+        &mut ThoughtBubble,
+        &KnownLocations,
+        Option<&ShiftWorker>,
         &mut Needs,
         Option<&ActiveConversation>,
         &BusinessCards,
     )>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
     mut trade_proposals: Query<(Entity, &mut TradeProposal)>,
+    library: Res<crate::world::bounty::Library>,
+    mut agent_inventories_mcp: Query<&mut Inventory, With<AgentName>>,
+    mut agent_context_windows: Query<&mut crate::agents::token_tracking::ContextWindow, With<AgentName>>,
 ) {
-    let Some((mut bounty_registry, mut dropbox)) = boards_mcp.iter_mut().next() else { return; };
+    let Some((mut bounty_registry, mut dropbox)) = boards_mcp.iter_mut().next() else {
+        return;
+    };
 
     let structure_list: Vec<(Entity, GridPos, String)> = structures
-        .iter().map(|(e, ent, sprite)| (e, ent.0, sprite.0.clone())).collect();
+        .iter()
+        .map(|(e, ent, sprite)| (e, ent.0, sprite.0.clone()))
+        .collect();
 
     // Pre-collect agent info for cross-agent lookups (avoids borrow conflicts).
-    let agent_snapshot: Vec<(Entity, String, GridPos, bool)> = agents.iter()
+    let agent_snapshot: Vec<(Entity, String, GridPos, bool)> = agents
+        .iter()
         .map(|(e, n, p, _, _, _, _, _, ac, _)| (e, n.0.clone(), *p, ac.is_some()))
         .collect();
 
     for mcp_action in pending.actions.drain(..) {
         // Find the agent entity by name.
-        let agent = agents.iter_mut()
+        let agent = agents
+            .iter_mut()
             .find(|(_, name, _, _, _, _, _, _, _, _)| name.0 == mcp_action.agent_name);
 
-        let Some((entity, name, pos, mut goal, mut thought, known_locs, shift_worker, mut needs, active_convo, business_cards)) = agent else {
+        let Some((
+            entity,
+            name,
+            pos,
+            mut goal,
+            mut thought,
+            known_locs,
+            shift_worker,
+            mut needs,
+            active_convo,
+            business_cards,
+        )) = agent
+        else {
             tracing::warn!("[MCP] Agent '{}' not found", mcp_action.agent_name);
             continue;
         };
 
         let action_str = &mcp_action.action;
-        tracing::info!("[MCP:{}] action={} building={:?} service={:?}",
-            name.0, action_str, mcp_action.building, mcp_action.service);
+        tracing::info!(
+            "[MCP:{}] action={} building={:?} service={:?}",
+            name.0,
+            action_str,
+            mcp_action.building,
+            mcp_action.service
+        );
 
         event_log.push(LogEvent {
             tick: tick.0,
             agent: name.0.clone(),
             kind: LogKind::Action,
-            text: format!("→ {} {:?} {:?}", action_str, mcp_action.building, mcp_action.service),
+            text: format!(
+                "→ {} {:?} {:?}",
+                action_str, mcp_action.building, mcp_action.service
+            ),
         });
 
         // Helper: find building and get location info for error messages.
         let find_building = |name: &str| -> Option<(Entity, GridPos, String)> {
-            structure_list.iter().find(|(_, _, s)| s == name).map(|(e, p, s)| (*e, *p, s.clone()))
+            structure_list
+                .iter()
+                .find(|(_, _, s)| s == name)
+                .map(|(e, p, s)| (*e, *p, s.clone()))
         };
 
-        let known_buildings: Vec<String> = structure_list.iter().map(|(_, _, s)| s.clone()).collect();
+        let known_buildings: Vec<String> =
+            structure_list.iter().map(|(_, _, s)| s.clone()).collect();
 
         match action_str.as_str() {
             "go_to_board" => {
@@ -658,12 +1492,19 @@ pub fn apply_mcp_actions_system(
                 if !matches!(*goal, AgentGoal::ReturningToBoard(_)) {
                     *goal = AgentGoal::GoingToBoard;
                 }
-                if let Some(board) = known_locs.locations.values().find(|l| l.name == "bounty_board") {
+                if let Some(board) = known_locs
+                    .locations
+                    .values()
+                    .find(|l| l.name == "bounty_board")
+                {
                     if let Some(p) = pathfinding::bfs(&map, *pos, board.entrance) {
                         let tiles = p.len();
                         commands.entity(entity).insert(Path(p));
                         if matches!(*goal, AgentGoal::ReturningToBoard(_)) {
-                            thought.0 = format!("Returning to board to collect bounty reward ({} tiles).", tiles);
+                            thought.0 = format!(
+                                "Returning to board to collect bounty reward ({} tiles).",
+                                tiles
+                            );
                         } else {
                             thought.0 = format!("Heading to the bounty board ({} tiles).", tiles);
                         }
@@ -671,7 +1512,9 @@ pub fn apply_mcp_actions_system(
                         thought.0 = "ERROR: Can't find path to the bounty board!".into();
                     }
                 } else {
-                    thought.0 = "ERROR: Don't know where the bounty board is. Try look_around first.".into();
+                    thought.0 =
+                        "ERROR: Don't know where the bounty board is. Try look_around first."
+                            .into();
                 }
             }
 
@@ -687,9 +1530,11 @@ pub fn apply_mcp_actions_system(
                     if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
                         let tiles = p.len();
                         commands.entity(entity).insert(Path(p));
-                        thought.0 = format!("Walking to {} for {} ({} tiles).", building, service, tiles);
+                        thought.0 =
+                            format!("Walking to {} for {} ({} tiles).", building, service, tiles);
                     } else {
-                        thought.0 = format!("ERROR: Can't find path to {}. Try look_around.", building);
+                        thought.0 =
+                            format!("ERROR: Can't find path to {}. Try look_around.", building);
                     }
                 } else {
                     thought.0 = format!(
@@ -766,7 +1611,9 @@ pub fn apply_mcp_actions_system(
 
             "complete_bounty" => {
                 // Must be at the bounty board to submit completion.
-                let at_board = known_locs.locations.values()
+                let at_board = known_locs
+                    .locations
+                    .values()
                     .find(|l| l.name == "bounty_board")
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
 
@@ -785,8 +1632,10 @@ pub fn apply_mcp_actions_system(
                         // No token in dropbox — check if they have an active bounty.
                         let has_active = match *goal {
                             AgentGoal::ExecutingBounty(_) | AgentGoal::ReturningToBoard(_) => true,
-                            _ => bounty_registry.tokens.values()
-                                .any(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed),
+                            _ => bounty_registry.tokens.values().any(|b| {
+                                b.claimed_by == Some(entity)
+                                    && b.state == crate::world::bounty::BountyState::Claimed
+                            }),
                         };
                         if has_active {
                             thought.0 = "ERROR: You must deposit your bounty_token at the board first! Use deposit_item with service='bounty_token', then deposit your proof documents/items, THEN call complete_bounty.".into();
@@ -808,10 +1657,14 @@ pub fn apply_mcp_actions_system(
                         *goal = AgentGoal::Wandering;
                         thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
                     } else {
-                        thought.0 = format!("ERROR: Can't find path to ({},{}). The map is 40x40.", x, y);
+                        thought.0 = format!(
+                            "ERROR: Can't find path to ({},{}). The map is 40x200.",
+                            x, y
+                        );
                     }
                 } else {
-                    thought.0 = "ERROR: go_to requires x and y coordinates. Map is 40x40 (0-39).".into();
+                    thought.0 =
+                        "ERROR: go_to requires x and y coordinates. Map is 40x200 (x: 0-39, y: 0-199).".into();
                 }
             }
 
@@ -822,7 +1675,8 @@ pub fn apply_mcp_actions_system(
             }
 
             "send_message" => {
-                if let (Some(recipient), Some(text)) = (&mcp_action.agent_target, &mcp_action.text) {
+                if let (Some(recipient), Some(text)) = (&mcp_action.agent_target, &mcp_action.text)
+                {
                     // Must have recipient's business card to send messages.
                     if business_cards.contacts.contains_key(recipient.as_str()) {
                         commands.entity(entity).insert(WantsToSendMessage {
@@ -841,28 +1695,42 @@ pub fn apply_mcp_actions_system(
             "claim_bounty" => {
                 // Allow claiming if at the board (any goal state — the board queue
                 // was too strict and agents kept getting stuck).
-                let at_board = known_locs.locations.values()
+                let at_board = known_locs
+                    .locations
+                    .values()
                     .find(|l| l.name == "bounty_board")
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
                 if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard) {
-                    thought.0 = "Must be at the bounty board to claim a bounty! Go there first.".into();
-                } else if bounty_registry.tokens.values().any(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed) {
+                    thought.0 =
+                        "Must be at the bounty board to claim a bounty! Go there first.".into();
+                } else if bounty_registry.tokens.values().any(|b| {
+                    b.claimed_by == Some(entity)
+                        && b.state == crate::world::bounty::BountyState::Claimed
+                }) {
                     thought.0 = "ERROR: You already have an active bounty. Complete or cancel it before claiming another. You can only hold one bounty token at a time.".into();
                 } else {
-                    let keyword = mcp_action.text.as_deref()
+                    let keyword = mcp_action
+                        .text
+                        .as_deref()
                         .or(mcp_action.service.as_deref())
                         .unwrap_or("");
 
                     // Find available bounty by ID prefix or keyword match.
-                    let bounty_match = bounty_registry.available().iter()
+                    let bounty_match = bounty_registry
+                        .available()
+                        .iter()
                         .find(|b| {
-                            if keyword.is_empty() { return true; }
+                            if keyword.is_empty() {
+                                return true;
+                            }
                             // Match by short ID (first 6 chars of UUID).
                             let short_id = &b.id.to_string()[..6];
                             if keyword == short_id || keyword == b.id.to_string() {
                                 return true;
                             }
-                            b.description.to_lowercase().contains(&keyword.to_lowercase())
+                            b.description
+                                .to_lowercase()
+                                .contains(&keyword.to_lowercase())
                         })
                         .map(|b| b.id);
 
@@ -878,22 +1746,34 @@ pub fn apply_mcp_actions_system(
                                 items: items_to_give,
                             });
 
-                            // Store bounty info on the agent for inspect_item.
-                            let instructions = bounty.hidden_criteria
+                            let instructions = bounty
+                                .hidden_criteria
                                 .split("\n\nGM:")
                                 .next()
                                 .unwrap_or("")
                                 .strip_prefix("Instructions for agent: ")
                                 .unwrap_or("Complete the task and return to the board.")
                                 .to_string();
-                            commands.entity(entity).insert(crate::items::BountyTokenInfo {
-                                bounty_id: bounty_id.to_string(),
-                                title: desc.clone(),
-                                reward: bounty.reward_gold,
-                                instructions: instructions.clone(),
-                            });
+                            let token_entity = commands
+                                .spawn((
+                                    crate::items::ItemKind(crate::items::ItemType::BountyToken),
+                                    crate::items::ItemName(format!("bounty: {}", desc)),
+                                    crate::items::ItemDescription(instructions.clone()),
+                                    crate::items::ItemContainer(entity),
+                                    crate::items::BountyTokenInfo {
+                                        bounty_id: bounty_id.to_string(),
+                                        title: desc.clone(),
+                                        reward: bounty.reward_gold,
+                                        instructions: instructions.clone(),
+                                    },
+                                ))
+                                .id();
+                            if let Ok(mut contained) = item_params.p0().get_mut(entity) {
+                                contained.insert(token_entity);
+                            }
 
-                            thought.0 = format!("Claimed: {}. INSTRUCTIONS: {}", desc, instructions);
+                            thought.0 =
+                                format!("Claimed: {}. INSTRUCTIONS: {}", desc, instructions);
 
                             event_log.push(LogEvent {
                                 tick: tick.0,
@@ -907,7 +1787,8 @@ pub fn apply_mcp_actions_system(
                             // Leave the board queue.
                             *goal = AgentGoal::ExecutingBounty(bounty_id);
                         } else {
-                            thought.0 = "Couldn't claim that bounty — it may already be taken.".into();
+                            thought.0 =
+                                "Couldn't claim that bounty — it may already be taken.".into();
                         }
                     } else {
                         let avail = bounty_registry.available().len();
@@ -921,18 +1802,43 @@ pub fn apply_mcp_actions_system(
             }
 
             "leave_board" => {
+                if let Some(slot) = dropbox.clear_slot(entity) {
+                    let bounty = slot
+                        .bounty_token_id
+                        .and_then(|bounty_id| bounty_registry.get(bounty_id));
+                    if let Some((board_entity, _, _)) = structure_list
+                        .iter()
+                        .find(|(_, _, name)| name == "bounty_board")
+                    {
+                        if let Ok(mut board_items) = item_params.p0().get_mut(*board_entity) {
+                            if let Some(item_entity) = slot.bounty_token_item {
+                                board_items.remove(item_entity);
+                            }
+                            for item_entity in &slot.document_items {
+                                board_items.remove(*item_entity);
+                            }
+                        }
+                    }
+                    if let Ok(mut contained) = item_params.p0().get_mut(entity) {
+                        queue_dropbox_return(&mut commands, entity, &mut contained, slot, bounty);
+                    }
+                    thought.0 = "Left the bounty board. Your temporary dropbox contents were returned to your inventory.".into();
+                } else {
+                    thought.0 = "Left the bounty board.".into();
+                }
                 *goal = AgentGoal::Idle;
-                thought.0 = "Left the bounty board.".into();
             }
 
             "start_conversation" => {
                 let target_name = mcp_action.agent_target.as_deref().unwrap_or("unknown");
 
                 if active_convo.is_some() {
-                    thought.0 = "ERROR: Already in a conversation. Use end_conversation first.".into();
+                    thought.0 =
+                        "ERROR: Already in a conversation. Use end_conversation first.".into();
                 } else {
                     // Look up target from pre-collected snapshot (avoids borrow conflict).
-                    let target_info = agent_snapshot.iter()
+                    let target_info = agent_snapshot
+                        .iter()
                         .find(|(_, n, _, _)| n == target_name)
                         .map(|(e, n, p, in_convo)| (*e, n.clone(), *p, *in_convo));
 
@@ -941,7 +1847,8 @@ pub fn apply_mcp_actions_system(
                             thought.0 = format!("ERROR: Agent '{}' not found.", target_name);
                         }
                         Some((_, _, _, true)) => {
-                            thought.0 = format!("ERROR: {} is already in a conversation.", target_name);
+                            thought.0 =
+                                format!("ERROR: {} is already in a conversation.", target_name);
                         }
                         Some((target_entity, partner_name, target_pos, false)) => {
                             let dist = (pos.x - target_pos.x).abs() + (pos.y - target_pos.y).abs();
@@ -1042,9 +1949,9 @@ pub fn apply_mcp_actions_system(
 
                     // Notify the partner via their session.
                     if let Some(session) = sessions.sessions.get(&partner_entity) {
-                        let _ = session.prompt_tx.try_send(
-                            format!("{} says: \"{}\"", self_name, message_text),
-                        );
+                        let _ = session
+                            .prompt_tx
+                            .try_send(format!("{} says: \"{}\"", self_name, message_text));
                     }
 
                     // Boost partner's boredom too (via deferred command).
@@ -1057,7 +1964,8 @@ pub fn apply_mcp_actions_system(
                         partner: partner_entity,
                     });
                 } else {
-                    thought.0 = "ERROR: Not in a conversation. Use start_conversation first.".into();
+                    thought.0 =
+                        "ERROR: Not in a conversation. Use start_conversation first.".into();
                 }
             }
 
@@ -1070,7 +1978,9 @@ pub fn apply_mcp_actions_system(
                     // Remove conversation components from both agents.
                     commands.entity(entity).remove::<ActiveConversation>();
                     commands.entity(entity).remove::<ConversationLog>();
-                    commands.entity(partner_entity).remove::<ActiveConversation>();
+                    commands
+                        .entity(partner_entity)
+                        .remove::<ActiveConversation>();
                     commands.entity(partner_entity).remove::<ConversationLog>();
 
                     thought.0 = format!("Ended conversation with {}.", partner_name);
@@ -1084,9 +1994,9 @@ pub fn apply_mcp_actions_system(
 
                     // Notify the partner.
                     if let Some(session) = sessions.sessions.get(&partner_entity) {
-                        let _ = session.prompt_tx.try_send(
-                            format!("{} ended the conversation.", self_name),
-                        );
+                        let _ = session
+                            .prompt_tx
+                            .try_send(format!("{} ended the conversation.", self_name));
                     }
                 } else {
                     thought.0 = "ERROR: Not in a conversation. Nothing to end.".into();
@@ -1107,19 +2017,22 @@ pub fn apply_mcp_actions_system(
                     let requested = trading::parse_item_list(requested_str);
 
                     match (offered, requested) {
-                        (Ok(offered_items), Ok(requested_items)) if !offered_items.is_empty() || !requested_items.is_empty() => {
+                        (Ok(offered_items), Ok(requested_items))
+                            if !offered_items.is_empty() || !requested_items.is_empty() =>
+                        {
                             // Check for existing trade proposal between these agents.
-                            let existing = trade_proposals.iter()
-                                .any(|(_, tp)| {
-                                    (tp.proposer == entity && tp.responder == partner_entity)
+                            let existing = trade_proposals.iter().any(|(_, tp)| {
+                                (tp.proposer == entity && tp.responder == partner_entity)
                                     || (tp.proposer == partner_entity && tp.responder == entity)
-                                });
+                            });
 
                             if existing {
                                 thought.0 = "ERROR: A trade is already pending with this partner. Accept, reject, or wait.".into();
                             } else {
-                                let offered_desc: Vec<String> = offered_items.iter().map(|i| i.to_string()).collect();
-                                let requested_desc: Vec<String> = requested_items.iter().map(|i| i.to_string()).collect();
+                                let offered_desc: Vec<String> =
+                                    offered_items.iter().map(|i| i.to_string()).collect();
+                                let requested_desc: Vec<String> =
+                                    requested_items.iter().map(|i| i.to_string()).collect();
 
                                 // Spawn a TradeProposal entity.
                                 commands.spawn(TradeProposal {
@@ -1179,7 +2092,8 @@ pub fn apply_mcp_actions_system(
                 let self_name = name.0.clone();
 
                 // Find a trade proposal where this agent is a participant.
-                let proposal = trade_proposals.iter_mut()
+                let proposal = trade_proposals
+                    .iter_mut()
                     .find(|(_, tp)| tp.proposer == entity || tp.responder == entity);
 
                 if let Some((_, mut tp)) = proposal {
@@ -1191,7 +2105,11 @@ pub fn apply_mcp_actions_system(
                         thought.0 = "Accepted the trade on your side.".into();
                     }
 
-                    let partner = if tp.proposer == entity { tp.responder } else { tp.proposer };
+                    let partner = if tp.proposer == entity {
+                        tp.responder
+                    } else {
+                        tp.proposer
+                    };
 
                     event_log.push(LogEvent {
                         tick: tick.0,
@@ -1202,9 +2120,9 @@ pub fn apply_mcp_actions_system(
 
                     // Notify the partner.
                     if let Some(session) = sessions.sessions.get(&partner) {
-                        let _ = session.prompt_tx.try_send(
-                            format!("{} accepted the trade!", self_name),
-                        );
+                        let _ = session
+                            .prompt_tx
+                            .try_send(format!("{} accepted the trade!", self_name));
                     }
                 } else {
                     thought.0 = "ERROR: No pending trade to accept.".into();
@@ -1215,12 +2133,17 @@ pub fn apply_mcp_actions_system(
                 let self_name = name.0.clone();
 
                 // Find and remove a trade proposal where this agent is a participant.
-                let proposal = trade_proposals.iter()
+                let proposal = trade_proposals
+                    .iter()
                     .find(|(_, tp)| tp.proposer == entity || tp.responder == entity)
                     .map(|(e, tp)| (e, tp.proposer, tp.responder));
 
                 if let Some((proposal_entity, proposer, responder)) = proposal {
-                    let partner = if proposer == entity { responder } else { proposer };
+                    let partner = if proposer == entity {
+                        responder
+                    } else {
+                        proposer
+                    };
 
                     commands.entity(proposal_entity).despawn();
 
@@ -1235,9 +2158,9 @@ pub fn apply_mcp_actions_system(
 
                     // Notify the partner.
                     if let Some(session) = sessions.sessions.get(&partner) {
-                        let _ = session.prompt_tx.try_send(
-                            format!("{} rejected the trade.", self_name),
-                        );
+                        let _ = session
+                            .prompt_tx
+                            .try_send(format!("{} rejected the trade.", self_name));
                     }
                 } else {
                     thought.0 = "ERROR: No pending trade to reject.".into();
@@ -1248,7 +2171,8 @@ pub fn apply_mcp_actions_system(
                 let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
 
                 // Must be inside a building.
-                let building = structure_list.iter()
+                let building = structure_list
+                    .iter()
                     .find(|(_, entrance, name)| pos.x == entrance.x && pos.y == entrance.y);
 
                 if let Some((bld_entity, _, bld_name)) = building {
@@ -1272,7 +2196,8 @@ pub fn apply_mcp_actions_system(
             "take_item" => {
                 let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
 
-                let building = structure_list.iter()
+                let building = structure_list
+                    .iter()
                     .find(|(_, entrance, _)| pos.x == entrance.x && pos.y == entrance.y);
 
                 if let Some((bld_entity, _, bld_name)) = building {
@@ -1294,11 +2219,16 @@ pub fn apply_mcp_actions_system(
             }
 
             "create_document" => {
-                let title = mcp_action.service.as_deref().unwrap_or("untitled.md").to_string();
+                let title = mcp_action
+                    .service
+                    .as_deref()
+                    .unwrap_or("untitled.md")
+                    .to_string();
                 let content = mcp_action.text.as_deref().unwrap_or("").to_string();
 
                 if content.is_empty() {
-                    thought.0 = "ERROR: create_document requires 'text' with the markdown content.".into();
+                    thought.0 =
+                        "ERROR: create_document requires 'text' with the markdown content.".into();
                 } else {
                     commands.entity(entity).insert(PendingCreateDocument {
                         title: title.clone(),
@@ -1315,57 +2245,202 @@ pub fn apply_mcp_actions_system(
                 }
             }
 
+            "append_document" => {
+                let doc_name = mcp_action.service.as_deref().unwrap_or("document");
+                let append_text = mcp_action.text.as_deref().unwrap_or("").trim();
+
+                if append_text.is_empty() {
+                    thought.0 = "ERROR: append_document requires 'service' with a document title and 'text' with the addendum.".into();
+                } else if let Ok(mut docs) = item_params.p1().get_mut(entity) {
+                    let target_title = if doc_name == "document" {
+                        let mut titles: Vec<_> = docs.documents.keys().cloned().collect();
+                        titles.sort();
+                        titles.into_iter().next()
+                    } else {
+                        Some(
+                            doc_name
+                                .strip_prefix("doc:")
+                                .unwrap_or(doc_name)
+                                .to_string(),
+                        )
+                    };
+
+                    let Some(target_title) = target_title else {
+                        thought.0 =
+                            "ERROR: You are not carrying any documents to append to.".into();
+                        continue;
+                    };
+
+                    if let Some(existing) = docs.documents.get_mut(&target_title) {
+                        existing.push_str("\n\n## Addendum\n");
+                        existing.push_str(append_text);
+                        let updated_contents = existing.clone();
+                        thought.0 = format!("Appended an addendum to '{}'.", target_title);
+
+                        let agent_dir = agent_documents_dir(&name.0);
+                        let _ = std::fs::create_dir_all(&agent_dir);
+                        let _ = std::fs::write(agent_dir.join(&target_title), &updated_contents);
+
+                        event_log.push(LogEvent {
+                            tick: tick.0,
+                            agent: name.0.clone(),
+                            kind: LogKind::Action,
+                            text: format!("APPENDED DOC: {}", target_title),
+                        });
+
+                        let contained_item_ids = item_params
+                            .p0()
+                            .get_mut(entity)
+                            .map(|contained| contained.items.clone())
+                            .unwrap_or_default();
+                        for item_entity in contained_item_ids {
+                            if let Ok((item_entity, kind, item_name, _)) =
+                                item_params.p3().get(item_entity)
+                            {
+                                if kind.0 == crate::items::ItemType::Document
+                                    && item_name.is_some_and(|name| name.0 == target_title)
+                                {
+                                    commands.entity(item_entity).insert(
+                                        crate::items::ItemContents(updated_contents.clone()),
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        thought.0 = format!(
+                            "ERROR: You are not carrying '{}'. Take the note first, then append to it.",
+                            target_title
+                        );
+                    }
+                }
+            }
+
             "inspect_item" => {
                 let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
 
                 if item_name == "bounty_token" || item_name.starts_with("bounty") {
                     // Show bounty token details via session message.
                     if let Some(session) = sessions.sessions.get(&entity) {
-                        // Look up the agent's active bounty from the registry.
-                        let active = bounty_registry.tokens.values()
-                            .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed);
-                        if let Some(bounty) = active {
-                            let instructions = bounty.hidden_criteria
-                                .split("\n\nGM:")
-                                .next()
-                                .unwrap_or("")
-                                .strip_prefix("Instructions for agent: ")
-                                .unwrap_or("No instructions available.");
+                        let contained_item_ids = item_params
+                            .p0()
+                            .get_mut(entity)
+                            .map(|contained| contained.items.clone())
+                            .unwrap_or_default();
+                        let token_info = contained_item_ids.into_iter().find_map(|item_entity| {
+                            item_params.p3().get(item_entity).ok().and_then(
+                                |(_, kind, _item_name, token_info)| {
+                                    (kind.0 == crate::items::ItemType::BountyToken)
+                                        .then(|| token_info.cloned())
+                                        .flatten()
+                                },
+                            )
+                        });
+                        if let Some(info) = token_info {
                             let _ = session.prompt_tx.try_send(format!(
                                 "=== BOUNTY TOKEN ===\nTitle: {}\nReward: {}g\nID: {}\nInstructions: {}\n=== END TOKEN ===",
-                                bounty.description, bounty.reward_gold, &bounty.id.to_string()[..6], instructions,
+                                info.title,
+                                info.reward,
+                                &info.bounty_id[..6.min(info.bounty_id.len())],
+                                info.instructions,
                             ));
-                            thought.0 = format!("Reading bounty token: {}", bounty.description);
+                            thought.0 = format!("Reading bounty token: {}", info.title);
                         } else {
                             thought.0 = "You don't have a bounty token.".into();
                         }
                     }
                 } else if item_name.starts_with("doc:") || item_name.ends_with(".md") {
-                    // Read a document from DocumentInventory.
-                    // We can't access DocumentInventory from this query, so send via session.
                     let doc_title = item_name.strip_prefix("doc:").unwrap_or(item_name);
-                    if let Some(session) = sessions.sessions.get(&entity) {
-                        let _ = session.prompt_tx.try_send(format!(
-                            "Reading document '{}'. Check the documents REST API at /api/documents/{}/{} for full content.",
-                            doc_title, name.0.to_lowercase(), doc_title,
-                        ));
+                    let mut found_content = None;
+                    let mut found_location = "inventory".to_string();
+
+                    if let Ok(docs) = item_params.p1().get_mut(entity) {
+                        found_content = docs.documents.get(doc_title).cloned();
                     }
-                    thought.0 = format!("Reading document: {}", doc_title);
+
+                    if found_content.is_none() {
+                        let building = structure_list
+                            .iter()
+                            .find(|(_, entrance, _)| pos.x == entrance.x && pos.y == entrance.y);
+                        if let Some((bld_entity, _, bld_name)) = building {
+                            if let Ok(docs) = item_params.p2().get_mut(*bld_entity) {
+                                found_content = docs.documents.get(doc_title).cloned();
+                            }
+                            if found_content.is_some() {
+                                found_location = bld_name.clone();
+                            }
+                        }
+                    }
+
+                    if let Some(content) = found_content {
+                        if let Some(session) = sessions.sessions.get(&entity) {
+                            let _ = session.prompt_tx.try_send(format!(
+                                "=== DOCUMENT: {} ===\n{}\n=== END DOCUMENT ===",
+                                doc_title,
+                                preview_document(&content),
+                            ));
+                        }
+                        thought.0 =
+                            format!("Reading document '{}' from {}.", doc_title, found_location);
+                    } else {
+                        thought.0 = format!(
+                            "ERROR: Could not find document '{}'. Carry it or stand at the building holding it.",
+                            doc_title
+                        );
+                    }
+                } else if item_name == "document" {
+                    let mut titles: Vec<String> = Vec::new();
+                    if let Ok(docs) = item_params.p1().get_mut(entity) {
+                        titles.extend(docs.documents.keys().cloned());
+                    }
+                    if titles.is_empty() {
+                        let building = structure_list
+                            .iter()
+                            .find(|(_, entrance, _)| pos.x == entrance.x && pos.y == entrance.y);
+                        if let Some((bld_entity, _, _)) = building {
+                            if let Ok(docs) = item_params.p2().get_mut(*bld_entity) {
+                                titles.extend(docs.documents.keys().cloned());
+                            }
+                        }
+                    }
+                    titles.sort();
+
+                    if let Some(title) = titles.first() {
+                        if let Some(session) = sessions.sessions.get(&entity) {
+                            let _ = session.prompt_tx.try_send(format!(
+                                "Generic 'document' selected. Available document: '{}'. Use inspect_item with service='doc:{}' for the full contents, or take_item with service='document' to pick up the first one.",
+                                title,
+                                title,
+                            ));
+                        }
+                        thought.0 = format!("Available document: {}", title);
+                    } else {
+                        thought.0 = "ERROR: No documents available here to inspect.".into();
+                    }
                 } else {
-                    thought.0 = format!("Nothing special about '{}'. It's just a regular item.", item_name);
+                    thought.0 = format!(
+                        "Nothing special about '{}'. It's just a regular item.",
+                        item_name
+                    );
                 }
             }
 
             "cancel_bounty" => {
-                let at_board = known_locs.locations.values()
+                let at_board = known_locs
+                    .locations
+                    .values()
                     .find(|l| l.name == "bounty_board")
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
 
                 if !at_board {
                     thought.0 = "Must be at the bounty board to cancel a bounty.".into();
                 } else {
-                    let active = bounty_registry.tokens.values()
-                        .find(|b| b.claimed_by == Some(entity) && b.state == crate::world::bounty::BountyState::Claimed)
+                    let active = bounty_registry
+                        .tokens
+                        .values()
+                        .find(|b| {
+                            b.claimed_by == Some(entity)
+                                && b.state == crate::world::bounty::BountyState::Claimed
+                        })
                         .map(|b| b.id);
 
                     if let Some(bounty_id) = active {
@@ -1379,38 +2454,35 @@ pub fn apply_mcp_actions_system(
                         // Clear the dropbox slot and return all items to agent.
                         // We queue the returns via PendingClaimItems since we don't have
                         // inventory access in this query.
-                        let mut return_items: Vec<(crate::items::ItemType, u32)> = Vec::new();
                         if let Some(slot) = dropbox.clear_slot(entity) {
-                            // Return bounty token if it was in dropbox.
-                            if slot.bounty_token_id.is_some() {
-                                return_items.push((crate::items::ItemType::BountyToken, 1));
+                            if let Some((board_entity, _, _)) = structure_list
+                                .iter()
+                                .find(|(_, _, name)| name == "bounty_board")
+                            {
+                                if let Ok(mut board_items) = item_params.p0().get_mut(*board_entity)
+                                {
+                                    if let Some(item_entity) = slot.bounty_token_item {
+                                        board_items.remove(item_entity);
+                                    }
+                                    for item_entity in &slot.document_items {
+                                        board_items.remove(*item_entity);
+                                    }
+                                }
                             }
-                            // Return proof items.
-                            for (item, count) in &slot.items {
-                                return_items.push((*item, *count));
+                            if let Ok(mut contained) = item_params.p0().get_mut(entity) {
+                                queue_dropbox_return(
+                                    &mut commands,
+                                    entity,
+                                    &mut contained,
+                                    slot,
+                                    None,
+                                );
                             }
-                            // Return documents — re-add via PendingCreateDocument.
-                            // (Documents go back to the agent's DocumentInventory.)
-                            for (title, content) in &slot.documents {
-                                commands.entity(entity).insert(PendingCreateDocument {
-                                    title: title.clone(),
-                                    content: content.clone(),
-                                });
-                            }
-                        } else {
-                            // Token wasn't in dropbox — return it to inventory.
-                            return_items.push((crate::items::ItemType::BountyToken, 1));
                         }
 
-                        if !return_items.is_empty() {
-                            commands.entity(entity).insert(PendingClaimItems {
-                                items: return_items,
-                            });
-                        }
-
-                        commands.entity(entity).remove::<crate::items::BountyTokenInfo>();
                         *goal = AgentGoal::Idle;
-                        thought.0 = "Bounty cancelled. Token and items returned to your inventory.".into();
+                        thought.0 =
+                            "Bounty cancelled. Token and items returned to your inventory.".into();
 
                         event_log.push(LogEvent {
                             tick: tick.0,
@@ -1424,8 +2496,217 @@ pub fn apply_mcp_actions_system(
                 }
             }
 
+            "consume_item" => {
+                let item_name = mcp_action.service.as_deref().unwrap_or("");
+                let item_type = crate::agents::trading::parse_item_type(item_name);
+
+                if item_name.is_empty() || item_type.is_none() {
+                    thought.0 = format!("ERROR: consume_item requires service=<item name>. Consumable items: coffee, muffin, rations, sandwich, soup.");
+                } else {
+                    let item = item_type.unwrap();
+                    let has_item = agent_inventories_mcp
+                        .get(entity)
+                        .map(|inv| inv.has(item, 1))
+                        .unwrap_or(false);
+
+                    if !has_item {
+                        thought.0 = format!("ERROR: You don't have any {} to consume.", item_name);
+                    } else {
+                        // Remove from inventory.
+                        if let Ok(mut inv) = agent_inventories_mcp.get_mut(entity) {
+                            inv.remove(item, 1);
+                        }
+
+                        // Apply effects based on item type.
+                        match item {
+                            crate::items::ItemType::Coffee => {
+                                // Coffee boosts context ceiling by 10k tokens.
+                                if let Ok(mut ctx) = agent_context_windows.get_mut(entity) {
+                                    ctx.context_limit += 10_000;
+                                    let ratio = ctx.tokens_used as f32 / ctx.context_limit as f32;
+                                    needs.energy = (100.0 * (1.0 - ratio)).clamp(0.0, 100.0);
+                                    thought.0 = format!(
+                                        "Drank coffee! Context limit boosted to {}k tokens. Energy now {:.0}.",
+                                        ctx.context_limit / 1000,
+                                        needs.energy
+                                    );
+                                }
+                            }
+                            crate::items::ItemType::Muffin => {
+                                needs.hunger = (needs.hunger + 30.0).min(100.0);
+                                thought.0 = format!("Ate a muffin. Hunger now {:.0}.", needs.hunger);
+                            }
+                            crate::items::ItemType::Rations => {
+                                needs.hunger = (needs.hunger + 50.0).min(100.0);
+                                thought.0 = format!("Ate rations. Hunger now {:.0}.", needs.hunger);
+                            }
+                            crate::items::ItemType::Sandwich => {
+                                needs.hunger = (needs.hunger + 60.0).min(100.0);
+                                needs.boredom = (needs.boredom + 10.0).min(100.0);
+                                thought.0 = format!("Ate a sandwich. Hunger now {:.0}.", needs.hunger);
+                            }
+                            crate::items::ItemType::Soup => {
+                                needs.hunger = (needs.hunger + 45.0).min(100.0);
+                                thought.0 = format!("Ate soup. Hunger now {:.0}.", needs.hunger);
+                            }
+                            _ => {
+                                // Non-consumable — put it back.
+                                if let Ok(mut inv) = agent_inventories_mcp.get_mut(entity) {
+                                    inv.add(item, 1);
+                                }
+                                thought.0 = format!("You can't consume {}.", item_name);
+                            }
+                        }
+
+                        event_log.push(LogEvent {
+                            tick: tick.0,
+                            agent: name.0.clone(),
+                            kind: LogKind::Action,
+                            text: format!("Consumed {}", item_name),
+                        });
+                    }
+                }
+            }
+
+            "search_library" => {
+                let at_library = structure_list.iter().any(|(_, entrance, sname)| {
+                    sname == "library" && pos.x == entrance.x && pos.y == entrance.y
+                });
+
+                if !at_library {
+                    thought.0 = "ERROR: You must be at the library to search documents. Use go_to_service with building='library'.".into();
+                } else {
+                    let query = mcp_action
+                        .service
+                        .as_deref()
+                        .or(mcp_action.text.as_deref())
+                        .unwrap_or("");
+
+                    if query.is_empty() {
+                        if library.documents.is_empty() {
+                            thought.0 =
+                                "The library is empty — no documents have been archived yet."
+                                    .into();
+                        } else {
+                            let listing: Vec<String> = library
+                                .documents
+                                .iter()
+                                .enumerate()
+                                .map(|(i, doc)| {
+                                    format!(
+                                        "{}. \"{}\" by {} (bounty: {})",
+                                        i + 1,
+                                        doc.title,
+                                        doc.author,
+                                        doc.bounty_description
+                                    )
+                                })
+                                .collect();
+                            let msg = format!("=== LIBRARY CATALOG ({} documents) ===\n{}\n=== Use copy_document with service=<title> to copy one ===",
+                                library.documents.len(), listing.join("\n"));
+                            if let Some(session) = sessions.sessions.get(&entity) {
+                                let _ = session.prompt_tx.try_send(msg);
+                            }
+                            thought.0 = format!(
+                                "Found {} documents in the library.",
+                                library.documents.len()
+                            );
+                        }
+                    } else {
+                        let query_lower = query.to_lowercase();
+                        let matches: Vec<&crate::world::bounty::LibraryEntry> = library
+                            .documents
+                            .iter()
+                            .filter(|doc| {
+                                doc.title.to_lowercase().contains(&query_lower)
+                                    || doc.author.to_lowercase().contains(&query_lower)
+                                    || doc.bounty_description.to_lowercase().contains(&query_lower)
+                                    || doc.content.to_lowercase().contains(&query_lower)
+                            })
+                            .collect();
+
+                        if matches.is_empty() {
+                            thought.0 =
+                                format!("No documents matching '{}' in the library.", query);
+                        } else {
+                            let listing: Vec<String> = matches
+                                .iter()
+                                .map(|doc| {
+                                    format!(
+                                        "- \"{}\" by {} (bounty: {})",
+                                        doc.title, doc.author, doc.bounty_description
+                                    )
+                                })
+                                .collect();
+                            let msg = format!("=== SEARCH RESULTS for '{}' ({} matches) ===\n{}\n=== Use copy_document with service=<title> to copy one ===",
+                                query, matches.len(), listing.join("\n"));
+                            if let Some(session) = sessions.sessions.get(&entity) {
+                                let _ = session.prompt_tx.try_send(msg);
+                            }
+                            thought.0 =
+                                format!("Found {} documents matching '{}'.", matches.len(), query);
+                        }
+                    }
+
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: name.0.clone(),
+                        kind: LogKind::Action,
+                        text: format!(
+                            "Searched library for '{}'",
+                            mcp_action.service.as_deref().unwrap_or("all")
+                        ),
+                    });
+                }
+            }
+
+            "copy_document" => {
+                let at_library = structure_list.iter().any(|(_, entrance, sname)| {
+                    sname == "library" && pos.x == entrance.x && pos.y == entrance.y
+                });
+
+                if !at_library {
+                    thought.0 = "ERROR: You must be at the library to copy documents.".into();
+                } else {
+                    let title = mcp_action.service.as_deref().unwrap_or("");
+                    if title.is_empty() {
+                        thought.0 =
+                            "ERROR: copy_document requires service=<document title>.".into();
+                    } else {
+                        let found = library.documents.iter().find(|doc| doc.title == title);
+                        if let Some(doc) = found {
+                            commands.entity(entity).insert(PendingCreateDocument {
+                                title: doc.title.clone(),
+                                content: doc.content.clone(),
+                            });
+
+                            thought.0 =
+                                format!("Copied '{}' from the library to your inventory.", title);
+
+                            if let Some(session) = sessions.sessions.get(&entity) {
+                                let _ = session.prompt_tx.try_send(format!(
+                                    "=== LIBRARY COPY: {} ===\nAuthor: {}\nBounty: {}\n\n{}\n=== END ===",
+                                    doc.title, doc.author, doc.bounty_description, doc.content,
+                                ));
+                            }
+
+                            event_log.push(LogEvent {
+                                tick: tick.0,
+                                agent: name.0.clone(),
+                                kind: LogKind::Action,
+                                text: format!("Copied '{}' from library", title),
+                            });
+                        } else {
+                            thought.0 = format!("ERROR: No document titled '{}' in the library. Use search_library to browse.", title);
+                        }
+                    }
+                }
+            }
+
             "help" => {
-                let feedback = mcp_action.feedback.clone()
+                let feedback = mcp_action
+                    .feedback
+                    .clone()
                     .or_else(|| mcp_action.text.clone())
                     .unwrap_or_else(|| "general feedback".into());
 
@@ -1450,6 +2731,87 @@ pub fn apply_mcp_actions_system(
             _ => {
                 thought.0 = format!("Unknown action: {}", action_str);
             }
+        }
+    }
+}
+
+pub fn cleanup_abandoned_dropbox_slots_system(
+    mut commands: Commands,
+    mut boards: Query<
+        (
+            Entity,
+            &BountyTokenStore,
+            &mut BountyDropbox,
+            &Entrance,
+            &mut crate::items::ContainedItems,
+        ),
+        (With<BountyBoard>, Without<AgentName>),
+    >,
+    mut agents: Query<(
+        Entity,
+        &AgentName,
+        &GridPos,
+        &mut crate::items::ContainedItems,
+        &mut ThoughtBubble,
+    ),
+        (With<AgentName>, Without<BountyBoard>)>,
+    mut event_log: ResMut<AgentEventLog>,
+    tick: Res<TickCount>,
+) {
+    let Some((board_entity, bounty_registry, mut dropbox, board_entrance, mut board_items)) =
+        boards.iter_mut().next()
+    else {
+        return;
+    };
+
+    let to_return: Vec<Entity> = dropbox
+        .slots
+        .iter()
+        .filter_map(|(entity, slot)| {
+            let pending_verification = slot.bounty_token_id.is_some_and(|bounty_id| {
+                bounty_registry.get(bounty_id).is_some_and(|bounty| {
+                    bounty.state == crate::world::bounty::BountyState::PendingVerification
+                })
+            });
+            if pending_verification {
+                return None;
+            }
+
+            agents
+                .get(*entity)
+                .ok()
+                .filter(|(_, _, pos, _, _)| **pos != board_entrance.0)
+                .map(|(entity, _, _, _, _)| entity)
+        })
+        .collect();
+
+    for entity in to_return {
+        let Some(slot) = dropbox.clear_slot(entity) else {
+            continue;
+        };
+        let bounty = slot
+            .bounty_token_id
+            .and_then(|bounty_id| bounty_registry.get(bounty_id));
+        if let Some(item_entity) = slot.bounty_token_item {
+            board_items.remove(item_entity);
+        }
+        for item_entity in &slot.document_items {
+            board_items.remove(*item_entity);
+        }
+        if let Ok((_, _, _, mut contained, _)) = agents.get_mut(entity) {
+            queue_dropbox_return(&mut commands, entity, &mut contained, slot, bounty);
+        }
+
+        if let Ok((_, name, _, _, mut thought)) = agents.get_mut(entity) {
+            thought.0 =
+                "You left the bounty board, so your temporary dropbox contents were returned to your inventory."
+                    .into();
+            event_log.push(LogEvent {
+                tick: tick.0,
+                agent: name.0.clone(),
+                kind: LogKind::System,
+                text: "DROPBOX RETURNED: left bounty board before submission".into(),
+            });
         }
     }
 }
