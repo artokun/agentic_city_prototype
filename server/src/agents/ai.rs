@@ -49,8 +49,10 @@ pub fn spawn_sessions_system(
     relays: Res<AgentRelaysResource>,
     agents: Query<(Entity, &AgentId, &AgentName, &Personality, &ClaudeModel)>,
     server_port: Option<Res<crate::network::ws::ServerPort>>,
+    proc_registry: Option<Res<crate::process_manager::ProcessRegistryRes>>,
 ) {
     let port = server_port.map(|p| p.0).unwrap_or(8080);
+    let process_registry = proc_registry.map(|r| r.0.clone()).unwrap_or_default();
     for (entity, agent_id, name, personality, claude_model) in &agents {
         if sessions.sessions.contains_key(&entity) {
             continue;
@@ -75,6 +77,7 @@ pub fn spawn_sessions_system(
         });
 
         let entity_copy = entity;
+        let process_registry = process_registry.clone();
 
         runtime.spawn_background_task(move |mut ctx| async move {
             let handle = relays_clone.register(&agent_uuid).await;
@@ -146,7 +149,12 @@ pub fn spawn_sessions_system(
                 }
             };
 
-            tracing::info!("Claude spawned for {} → {} (model: {})", agent_name, sdk_url, model_name);
+            // Register the PID for clean shutdown.
+            let child_pid = child.id().unwrap_or(0);
+            if child_pid > 0 {
+                process_registry.register(child_pid);
+            }
+            tracing::info!("Claude spawned for {} → {} (model: {}, pid: {})", agent_name, sdk_url, model_name, child_pid);
 
             // Capture stdout NDJSON — may contain assistant messages with thinking.
             let name_out = agent_name.clone();
@@ -247,7 +255,8 @@ pub fn spawn_sessions_system(
             }).await;
 
             let _ = child.wait().await;
-            tracing::info!("Claude process exited for {}", agent_name);
+            if child_pid > 0 { process_registry.remove(child_pid); }
+            tracing::warn!("Claude process exited for {} (pid: {}) — this should not happen during normal gameplay", agent_name, child_pid);
             let _ = tokio::fs::remove_file(&prompt_file).await;
             let _ = tokio::fs::remove_file(&mcp_config_path).await;
         });
