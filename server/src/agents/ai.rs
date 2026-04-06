@@ -207,8 +207,15 @@ pub fn spawn_sessions_system(
                 _ = connected.notified() => {
                     tracing::info!("Claude connected via --sdk-url for {}", agent_name);
                 }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
-                    tracing::error!("Claude connection timeout for {}", agent_name);
+                _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
+                    tracing::error!("Claude connection timeout for {} (90s)", agent_name);
+                    // Remove placeholder session so spawn_sessions_system retries next tick.
+                    ctx.run_on_main_thread(move |main_ctx| {
+                        let world = main_ctx.world;
+                        let mut sessions = world.resource_mut::<AgentSessions>();
+                        sessions.sessions.remove(&entity_copy);
+                        tracing::info!("Cleared session placeholder for {} — will retry", agent_name);
+                    }).await;
                     return;
                 }
             }
