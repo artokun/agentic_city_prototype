@@ -181,12 +181,9 @@ pub struct ClaudeAdapter {
     label: String,
 }
 
-/// Identity info for agent sessions (not needed for system-AI).
-#[derive(Clone)]
-pub struct AgentIdentity {
-    pub name: String,
-    pub uuid: String,
-}
+// AgentIdentity is defined in crate::llm::types and re-exported here
+// for backwards compatibility during migration.
+pub use crate::llm::types::AgentIdentity;
 
 impl ClaudeAdapter {
     /// Create a new adapter for an agent session.

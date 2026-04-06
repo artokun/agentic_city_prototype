@@ -30,6 +30,12 @@ model = "opus"
 compact_threshold = 15000
 tool_sets = ["system"]
 
+[profiles.research]
+provider = "claude"
+model = "haiku"
+compact_threshold = 50000
+tool_sets = []
+
 [profiles.agent-openai]
 provider = "openai"
 model = "gpt-5.4"

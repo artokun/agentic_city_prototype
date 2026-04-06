@@ -107,6 +107,14 @@ pub struct SessionCheckpoint {
     pub provider_metadata: Option<serde_json::Value>,
 }
 
+/// Identity info for an agent session (name + uuid).
+/// Used by adapters to configure MCP tools and process labels.
+#[derive(Debug, Clone)]
+pub struct AgentIdentity {
+    pub name: String,
+    pub uuid: String,
+}
+
 /// Error type for adapter operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AdapterError {

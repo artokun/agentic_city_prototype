@@ -1,12 +1,17 @@
 //! Session lifecycle supervisor — start, monitor, restart sessions.
 //! Manages adapter lifecycle and integrates with durable persistence.
+//! Also provides the adapter factory that role code uses to create sessions
+//! without importing provider-specific modules.
 
 use std::collections::HashMap;
 
 use super::config::SessionProfile;
 use super::persistence::CheckpointStore;
 use super::session_registry::SessionHandle;
-use super::types::{AdapterError, SessionCheckpoint, SessionCommand, SessionEvent, SessionOwner};
+use super::types::{
+    AdapterError, AgentIdentity, SessionCheckpoint, SessionCommand, SessionEvent, SessionOwner,
+};
+use crate::process_manager::ProcessRegistry;
 use tokio::sync::mpsc;
 
 /// Trait for provider-specific session adapters.
@@ -48,6 +53,82 @@ pub fn create_handle_channels(
         profile_name: profile_name.to_string(),
     };
     (handle, command_rx, event_tx)
+}
+
+// ---------------------------------------------------------------------------
+// Adapter factory — role code calls these instead of importing providers
+// ---------------------------------------------------------------------------
+
+/// Spawn a Claude CLI process for an agent session.
+/// The process connects back via WebSocket at `ws://127.0.0.1:{port}/agent/{uuid}/ws`.
+/// This is the provider-neutral entry point — role code should not import
+/// `crate::llm::providers::claude` directly.
+pub async fn spawn_agent_process(
+    identity: &AgentIdentity,
+    model: &str,
+    system_prompt: &str,
+    ws_port: u16,
+    process_registry: &ProcessRegistry,
+) -> Result<(), String> {
+    crate::llm::providers::claude::spawn_agent_process(
+        identity,
+        model,
+        system_prompt,
+        ws_port,
+        process_registry,
+    )
+    .await
+}
+
+/// Spawn a Claude CLI process for the system-AI (Game Master) session.
+/// The process connects back via WebSocket at `ws://127.0.0.1:{port}/system/ws`.
+/// This is the provider-neutral entry point — role code should not import
+/// `crate::llm::providers::claude` directly.
+pub async fn spawn_system_ai_process(
+    model: &str,
+    system_prompt: &str,
+    ws_port: u16,
+    process_registry: &ProcessRegistry,
+) -> Result<(), String> {
+    crate::llm::providers::claude::spawn_system_ai_process(
+        model,
+        system_prompt,
+        ws_port,
+        process_registry,
+    )
+    .await
+}
+
+/// Create an OpenAI adapter for an agent session.
+/// Returns a boxed SessionAdapter ready to be started.
+pub fn create_openai_agent_adapter(
+    agent_name: &str,
+    agent_id: &str,
+    model: &str,
+    system_prompt: String,
+    tool_sets: Vec<String>,
+) -> Box<dyn SessionAdapter> {
+    Box::new(crate::llm::providers::openai::OpenAiAdapter::for_agent(
+        agent_name,
+        agent_id,
+        model,
+        system_prompt,
+        tool_sets,
+    ))
+}
+
+/// Create an OpenAI adapter for the system-AI session.
+/// Returns a boxed SessionAdapter ready to be started.
+pub fn create_openai_system_ai_adapter(
+    model: &str,
+    system_prompt: String,
+    tool_sets: Vec<String>,
+) -> Box<dyn SessionAdapter> {
+    Box::new(crate::llm::providers::openai::OpenAiAdapter::for_system_ai(
+        model,
+        system_prompt,
+        tool_sets,
+    ))
 }
 
 /// Manages adapter lifecycle, persistence, and recovery.

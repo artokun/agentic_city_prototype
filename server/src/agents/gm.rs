@@ -18,7 +18,6 @@ use uuid::Uuid;
 use crate::config;
 use crate::llm::config::LlmConfig;
 use crate::llm::session_registry::SessionRegistry;
-use crate::llm::supervisor::SessionAdapter;
 use crate::llm::types::{SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
 use crate::network::agent_relay::TokenUsageEvent;
 use crate::network::system_relay::SystemRelayResource;
@@ -223,9 +222,9 @@ pub fn spawn_system_ai_session_system(
                     }
                 });
 
-                // Start the OpenAI adapter.
+                // Start the OpenAI adapter via factory.
                 let mut adapter =
-                    crate::llm::providers::openai::OpenAiAdapter::for_system_ai(
+                    crate::llm::supervisor::create_openai_system_ai_adapter(
                         &model,
                         system_prompt_clone,
                         tool_sets,
@@ -280,9 +279,9 @@ pub fn spawn_system_ai_session_system(
             runtime.spawn_background_task(move |mut ctx| async move {
                 let handle = relays.register().await;
 
-                // Spawn Claude process via the adapter.
+                // Spawn Claude process via the adapter factory.
                 if let Err(e) =
-                    crate::llm::providers::claude::spawn_system_ai_process(
+                    crate::llm::supervisor::spawn_system_ai_process(
                         &model,
                         &system_prompt,
                         port,
@@ -463,7 +462,7 @@ pub fn system_ai_token_drain_system(mut system_ai: ResMut<SystemAiState>) {
 
 /// System: spawn a research agent for agents using search_internet.
 /// Produces a real document via the configured LLM provider.
-/// Provider selection flows through the `agent-default` profile.
+/// Provider selection flows through the `research` profile in llm.toml.
 pub fn spawn_research_system(
     mut commands: Commands,
     runtime: ResMut<TokioTasksRuntime>,
@@ -480,15 +479,15 @@ pub fn spawn_research_system(
         let topic = research.topic.clone();
         let agent_uuid = agent_id.0.to_string();
 
-        // Resolve provider from agent-default profile (research uses light model).
+        // Resolve provider from research profile (one-shot, light model).
         let provider_type = llm_config
-            .profile("agent-default")
+            .profile("research")
             .and_then(|p| llm_config.provider(&p.provider))
             .map(|p| p.provider_type.clone())
             .unwrap_or_else(|| "claude_cli".to_string());
 
         let model = llm_config
-            .profile("agent-default")
+            .profile("research")
             .and_then(|p| llm_config.effective_model(p))
             .unwrap_or_else(|| "haiku".to_string());
 

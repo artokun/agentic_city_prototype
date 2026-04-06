@@ -12,10 +12,8 @@ use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
 use crate::llm::config::LlmConfig;
-use crate::llm::providers::claude::AgentIdentity;
 use crate::llm::session_registry::SessionRegistry;
-use crate::llm::supervisor::SessionAdapter;
-use crate::llm::types::{SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
+use crate::llm::types::{AgentIdentity, SessionCommand, SessionEvent, SessionOwner, COMPACT_COMMAND};
 use crate::network::agent_relay::AgentRelays;
 use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyTokenStore};
@@ -209,9 +207,9 @@ pub fn spawn_sessions_system(
                         }
                     });
 
-                    // Start the OpenAI adapter streaming task.
+                    // Start the OpenAI adapter via factory.
                     let mut adapter =
-                        crate::llm::providers::openai::OpenAiAdapter::for_agent(
+                        crate::llm::supervisor::create_openai_agent_adapter(
                             &agent_name_clone,
                             &agent_uuid_clone,
                             &model,
@@ -281,13 +279,13 @@ pub fn spawn_sessions_system(
                     // Register relay for this agent.
                     let handle = relays_clone.register(&agent_uuid).await;
 
-                    // Spawn Claude process via the adapter.
+                    // Spawn Claude process via the adapter factory.
                     let identity = AgentIdentity {
                         name: agent_name.clone(),
                         uuid: agent_uuid.clone(),
                     };
                     if let Err(e) =
-                        crate::llm::providers::claude::spawn_agent_process(
+                        crate::llm::supervisor::spawn_agent_process(
                             &identity,
                             &model_name,
                             &sys_prompt_clone,
