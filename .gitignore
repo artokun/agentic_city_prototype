@@ -11,5 +11,9 @@ client/.vite
 *.db
 documents/
 
+# Claude Code tooling
+.claude/worktrees/
+.playwright-mcp/
+
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
