@@ -11,6 +11,9 @@ client/.vite
 *.db
 documents/
 
+# Run logs
+logs/
+
 # Claude Code tooling
 .claude/worktrees/
 .playwright-mcp/

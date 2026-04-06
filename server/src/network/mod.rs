@@ -29,6 +29,20 @@ impl Plugin for NetworkPlugin {
         let debug_log: std::sync::Arc<std::sync::RwLock<Vec<ws::DebugEntry>>> =
             std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
 
+        // Create logs directory and initialize run log file.
+        let log_dir = std::path::PathBuf::from("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let log_path = log_dir.join(format!("run_{}.jsonl", timestamp));
+        // Create/truncate the file.
+        let _ = std::fs::File::create(&log_path);
+        // Update the `latest` symlink.
+        let latest = log_dir.join("latest.jsonl");
+        let _ = std::fs::remove_file(&latest);
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(&log_path.file_name().unwrap(), &latest);
+        tracing::info!("[LOGS] Writing to {}", log_path.display());
+
         app.init_resource::<BroadcastTx>()
             .init_resource::<action_handler::PendingActions>()
             .init_resource::<action_handler::SuggestionBox>()
@@ -40,6 +54,7 @@ impl Plugin for NetworkPlugin {
             .insert_resource(LibraryJsonArc(library_json))
             .insert_resource(DebugLogArc(debug_log.clone()))
             .init_resource::<DebugLogCursor>()
+            .insert_resource(RunLogFile(log_path))
             .insert_resource(CommandReceiver { rx: cmd_rx })
             .insert_resource(CommandSenderHolder(cmd_tx))
             .insert_resource(AgentRelaysResource(relays.clone()))
@@ -125,6 +140,10 @@ pub struct DebugLogArc(pub std::sync::Arc<std::sync::RwLock<Vec<ws::DebugEntry>>
 #[derive(Resource, Default)]
 struct DebugLogCursor(usize);
 
+/// Path to the current run's JSONL log file on disk.
+#[derive(Resource)]
+struct RunLogFile(std::path::PathBuf);
+
 /// System: sync new event log entries into the shared debug log for the REST endpoint.
 fn sync_debug_log(
     event_log: Res<crate::agents::event_log::AgentEventLog>,
@@ -133,12 +152,14 @@ fn sync_debug_log(
     suggestion_box: Res<crate::network::action_handler::SuggestionBox>,
     system_ai: Res<crate::agents::gm::SystemAiState>,
     tick: Res<crate::tick::TickCount>,
+    log_file: Res<RunLogFile>,
 ) {
     let current_len = event_log.entries.len();
+    let mut new_entries: Vec<ws::DebugEntry> = Vec::new();
 
-    let mut guard = holder.0.write().unwrap();
+    // Collect new event log entries.
     for entry in event_log.entries.iter().skip(cursor.0) {
-        guard.push(ws::DebugEntry {
+        new_entries.push(ws::DebugEntry {
             tick: entry.tick,
             agent: entry.agent.clone(),
             kind: entry.kind.as_str().to_string(),
@@ -147,13 +168,14 @@ fn sync_debug_log(
     }
     cursor.0 = current_len;
 
-    // Sync feedback entries.
+    // Collect new feedback entries.
+    let guard_read = holder.0.read().unwrap();
     for suggestion in &suggestion_box.entries {
-        let already_logged = guard.iter().any(|e| {
+        let already_logged = guard_read.iter().any(|e| {
             e.tick == suggestion.tick && e.agent == suggestion.agent && e.kind == "feedback"
         });
         if !already_logged {
-            guard.push(ws::DebugEntry {
+            new_entries.push(ws::DebugEntry {
                 tick: suggestion.tick,
                 agent: suggestion.agent.clone(),
                 kind: "feedback".to_string(),
@@ -161,12 +183,13 @@ fn sync_debug_log(
             });
         }
     }
+    drop(guard_read);
 
     // Drain GM thinking/response entries.
     if let Some(ref gm_log_rx) = system_ai.gm_log_rx {
         if let Ok(mut rx) = gm_log_rx.try_lock() {
             while let Ok(entry) = rx.try_recv() {
-                guard.push(ws::DebugEntry {
+                new_entries.push(ws::DebugEntry {
                     tick: tick.0,
                     agent: "SYSTEM".to_string(),
                     kind: format!("gm_{}", entry.kind),
@@ -176,7 +199,28 @@ fn sync_debug_log(
         }
     }
 
-    // Cap at 5000 entries.
+    if new_entries.is_empty() {
+        return;
+    }
+
+    // Write new entries to disk (JSONL).
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_file.0)
+    {
+        use std::io::Write;
+        for entry in &new_entries {
+            if serde_json::to_writer(&mut file, entry).is_ok() {
+                let _ = writeln!(file);
+            }
+        }
+    }
+
+    // Append to in-memory buffer.
+    let mut guard = holder.0.write().unwrap();
+    guard.extend(new_entries);
+
+    // Cap in-memory at 5000 (disk has everything).
     if guard.len() > 5000 {
         let drain = guard.len() - 5000;
         guard.drain(..drain);
