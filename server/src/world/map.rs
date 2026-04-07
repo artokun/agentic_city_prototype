@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-pub const MAP_WIDTH: i32 = 40;
-pub const MAP_HEIGHT: i32 = 200;
+pub const MAP_WIDTH: i32 = 100;
+pub const MAP_HEIGHT: i32 = 40;
 
 pub struct MapPlugin;
 
@@ -172,11 +172,11 @@ pub fn city_buildings() -> Vec<BuildingDef> {
             h: 4,
             entrance: EntranceSide::South,
         },
-        // === Residential — way down in the redwoods ===
+        // === Residential — far east ===
         BuildingDef {
             name: "apartments",
-            x: 28,
-            y: 185,
+            x: 80,
+            y: 18,
             w: 6,
             h: 5,
             entrance: EntranceSide::West,

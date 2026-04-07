@@ -22,6 +22,116 @@ const docTitleEl = $("doc-title");
 const docContentEl = $("doc-content");
 const libraryPanel = $("library-panel");
 
+const mapCanvas = $("world-map") as HTMLCanvasElement | null;
+const mapCtx = mapCanvas ? mapCanvas.getContext("2d") : null;
+const mapOverlays = $("map-overlays");
+const TILE_SIZE = 10;
+
+function drawStaticMap() {
+  if (!mapCtx || !mapCanvas) return;
+  mapCtx.fillStyle = "#111";
+  mapCtx.fillRect(0, 0, mapCanvas.width, mapCanvas.height);
+  
+  const buildings = [
+    { name: "cafe", x: 2, y: 2, w: 5, h: 4, color: "#e67e22" },
+    { name: "google", x: 10, y: 2, w: 6, h: 4, color: "#3498db" },
+    { name: "market", x: 20, y: 2, w: 6, h: 4, color: "#2ecc71" },
+    { name: "warehouse", x: 2, y: 12, w: 8, h: 4, color: "#95a5a6" },
+    { name: "hotel", x: 14, y: 12, w: 5, h: 4, color: "#9b59b6" },
+    { name: "apartments", x: 80, y: 18, w: 6, h: 5, color: "#e74c3c" },
+    { name: "hospital", x: 2, y: 22, w: 5, h: 4, color: "#ff4d4d" },
+    { name: "library", x: 14, y: 22, w: 5, h: 4, color: "#f1c40f" }
+  ];
+
+  mapCtx.fillStyle = "#27ae60";
+  mapCtx.fillRect(14 * TILE_SIZE, 33 * TILE_SIZE, 12 * TILE_SIZE, 5 * TILE_SIZE);
+  
+  mapCtx.fillStyle = "#f39c12";
+  mapCtx.fillRect(20 * TILE_SIZE, 32 * TILE_SIZE, 1 * TILE_SIZE, 1 * TILE_SIZE);
+
+  buildings.forEach(b => {
+    mapCtx.fillStyle = "#222";
+    mapCtx.fillRect(b.x * TILE_SIZE, b.y * TILE_SIZE, b.w * TILE_SIZE, b.h * TILE_SIZE);
+    mapCtx.strokeStyle = b.color;
+    mapCtx.lineWidth = 1;
+    mapCtx.strokeRect(b.x * TILE_SIZE, b.y * TILE_SIZE, b.w * TILE_SIZE, b.h * TILE_SIZE);
+    
+    mapCtx.fillStyle = b.color;
+    mapCtx.font = "9px 'SF Mono', 'Fira Code', monospace";
+    mapCtx.textAlign = "center";
+    mapCtx.textBaseline = "middle";
+    mapCtx.fillText(b.name, (b.x + b.w / 2) * TILE_SIZE, (b.y + b.h / 2) * TILE_SIZE);
+  });
+}
+
+function updateMap(s: WorldSnapshot) {
+  if (!mapCtx || !mapCanvas || !mapOverlays) return;
+  drawStaticMap();
+
+  const activeSpeakers = new Map<string, string>();
+  for (let i = 0; i < s.agentsLength(); i++) {
+    const a = s.agents(i)!;
+    if (a.activeChatLength() > 0) {
+      for (let j = a.activeChatLength() - 1; j >= 0; j--) {
+        const msg = a.activeChat(j)!;
+        if (msg.speaker() === a.name()) {
+           activeSpeakers.set(a.name()!, msg.text()!);
+           break;
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < s.eventLogLength(); i++) {
+    const entry = s.eventLog(i)!;
+    if (entry.kind() === "speech" && Number(entry.tick()) === Number(s.tick())) {
+      const agent = entry.agent() ?? "";
+      if (!activeSpeakers.has(agent)) {
+        const rawText = (entry.text() ?? "").replace(/^\[to [^\]]+\]\s*/, "");
+        activeSpeakers.set(agent, rawText);
+      }
+    }
+  }
+
+  let overlaysHtml = "";
+
+  for (let i = 0; i < s.agentsLength(); i++) {
+    const a = s.agents(i)!;
+    const pos = a.pos();
+    if (!pos) continue;
+    
+    const x = pos.x() * TILE_SIZE + TILE_SIZE / 2;
+    const y = pos.y() * TILE_SIZE + TILE_SIZE / 2;
+    const color = agentColor(a.name() || "?");
+
+    mapCtx.beginPath();
+    mapCtx.arc(x, y, 4, 0, Math.PI * 2);
+    mapCtx.fillStyle = color;
+    mapCtx.fill();
+    mapCtx.lineWidth = 1;
+    mapCtx.strokeStyle = "#000";
+    mapCtx.stroke();
+    
+    mapCtx.fillStyle = "#ccc";
+    mapCtx.font = "9px 'SF Mono', 'Fira Code', monospace";
+    mapCtx.textAlign = "center";
+    mapCtx.textBaseline = "top";
+    mapCtx.fillText(a.name() || "?", x, y + 6);
+
+    const speech = activeSpeakers.get(a.name() || "");
+    if (speech) {
+      overlaysHtml += `
+        <div style="position:absolute; left:${x}px; top:${y - 12}px; transform:translate(-50%, -100%); background:rgba(0,0,0,0.85); border:1px solid ${color}; color:#fff; padding:4px 8px; border-radius:4px; font-size:10px; max-width:180px; text-align:center; box-shadow:0 2px 8px rgba(0,0,0,0.8); z-index:10; pointer-events:none; word-wrap:break-word;">
+          ${escapeHtml(speech)}
+          <div style="position:absolute; bottom:-5px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:5px solid transparent; border-right:5px solid transparent; border-top:5px solid ${color};"></div>
+        </div>
+      `;
+    }
+  }
+  
+  mapOverlays.innerHTML = overlaysHtml;
+}
+
 // Per-agent history (persisted across renders).
 const agentThoughts: Record<string, string[]> = {};
 const agentActions: Record<string, { tick: number; text: string }[]> = {};
