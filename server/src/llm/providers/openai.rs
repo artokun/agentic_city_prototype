@@ -570,7 +570,35 @@ async fn stream_loop(
     let mut inspected_docs = std::collections::HashSet::new();
 
     while let Some(cmd) = command_rx.recv().await {
+        // Drain any additional queued commands into a batch.
+        // This prevents context updates from piling up while the adapter
+        // was busy with a long API response.
+        let mut cmds = vec![cmd];
+        while let Ok(extra) = command_rx.try_recv() {
+            cmds.push(extra);
+        }
+        // Process only the LAST SendUserTurn (most recent context), skip stale ones.
+        let cmd = if cmds.len() > 1 {
+            let mut last_turn = None;
+            let mut other = None;
+            for c in cmds.into_iter().rev() {
+                match c {
+                    SessionCommand::SendUserTurn(_) if last_turn.is_none() => last_turn = Some(c),
+                    SessionCommand::SendUserTurn(_) => {
+                        tracing::debug!("[{}] dropping stale context update", config.label);
+                    }
+                    SessionCommand::Shutdown => { other = Some(c); break; }
+                    SessionCommand::Compact => { other = Some(c); }
+                    _ => {}
+                }
+            }
+            other.or(last_turn).unwrap_or(SessionCommand::SendUserTurn(String::new()))
+        } else {
+            cmds.into_iter().next().unwrap()
+        };
+
         match cmd {
+            SessionCommand::SendUserTurn(text) if text.is_empty() => continue,
             SessionCommand::SendUserTurn(text) => {
                 // Ensure we have a live WebSocket connection (lazy connect / reconnect).
                 if ws.is_none() {
