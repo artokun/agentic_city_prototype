@@ -191,13 +191,13 @@ fn game_tools() -> Vec<ToolDef> {
             },
             ParamDef {
                 name: "x",
-                description: "X coordinate (for go_to). Map is 40x200.",
+                description: "X coordinate (for go_to). Map is 100x40.",
                 param_type: ParamType::Integer,
                 required: false,
             },
             ParamDef {
                 name: "y",
-                description: "Y coordinate (for go_to). Map is 40x200.",
+                description: "Y coordinate (for go_to). Map is 100x40.",
                 param_type: ParamType::Integer,
                 required: false,
             },

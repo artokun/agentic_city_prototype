@@ -93,20 +93,22 @@ pub fn auto_eat_system(
     use crate::items::ItemType;
 
     for (mut needs, mut inv, name) in &mut agents {
-        if needs.hunger >= 15.0 {
+        if needs.hunger >= 5.0 {
             continue;
         }
 
-        // Try to eat the best food available.
+        // Emergency auto-eat at hunger < 5 (about to pass out).
+        // Only eat items the agent has MORE than 1 of, to preserve
+        // bounty delivery items. Exception: muffin is always safe to eat.
         let food_priority = [
-            (ItemType::Sandwich, 60.0),
-            (ItemType::Rations, 50.0),
-            (ItemType::Soup, 45.0),
-            (ItemType::Muffin, 30.0),
+            (ItemType::Muffin, 30.0, 1),     // safe — trade item, eat if have 1+
+            (ItemType::Rations, 50.0, 2),     // keep 1 for delivery, eat if have 2+
+            (ItemType::Sandwich, 60.0, 2),    // keep 1 for delivery, eat if have 2+
+            (ItemType::Soup, 45.0, 2),        // keep 1, eat if have 2+
         ];
 
-        for (item, hunger_boost) in &food_priority {
-            if inv.has(*item, 1) {
+        for (item, hunger_boost, min_count) in &food_priority {
+            if inv.has(*item, *min_count) {
                 inv.remove(*item, 1);
                 needs.hunger = (needs.hunger + hunger_boost).min(100.0);
                 tracing::info!("[AUTO-EAT] {} auto-consumed {} (hunger was {:.0}, now {:.0})",

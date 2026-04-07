@@ -397,9 +397,9 @@ mod tests {
         // Check a few corners that should remain street.
         let street_positions = vec![
             GridPos { x: 0, y: 0 },
-            GridPos { x: 39, y: 0 },
-            GridPos { x: 0, y: 199 },
-            GridPos { x: 39, y: 199 },
+            GridPos { x: MAP_WIDTH - 1, y: 0 },
+            GridPos { x: 0, y: MAP_HEIGHT - 1 },
+            GridPos { x: MAP_WIDTH - 1, y: MAP_HEIGHT - 1 },
         ];
         for pos in &street_positions {
             assert!(

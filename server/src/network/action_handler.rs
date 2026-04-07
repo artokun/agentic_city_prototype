@@ -1668,7 +1668,7 @@ pub fn apply_mcp_actions_system(
                     // Treat x=0 AND y=0 as "no coordinates" unless agent is already near (0,0).
                     let near_origin = pos.x.abs() <= 2 && pos.y.abs() <= 2;
                     if x == 0 && y == 0 && !near_origin {
-                        thought.0 = "ERROR: go_to requires explicit x and y coordinates. If you want to visit a building, use go_to_service instead. Map is 40x200 (x: 0-39, y: 0-199).".into();
+                        thought.0 = "ERROR: go_to requires explicit x and y coordinates. If you want to visit a building, use go_to_service instead. Map is 100x40 (x: 0-39, y: 0-199).".into();
                     } else {
                         let target = GridPos { x, y };
                         if !map.is_walkable(&target) {
@@ -1690,7 +1690,7 @@ pub fn apply_mcp_actions_system(
                     }
                 } else {
                     thought.0 =
-                        "ERROR: go_to requires x and y coordinates. Map is 40x200 (x: 0-39, y: 0-199).".into();
+                        "ERROR: go_to requires x and y coordinates. Map is 100x40 (x: 0-39, y: 0-199).".into();
                 }
             }
 

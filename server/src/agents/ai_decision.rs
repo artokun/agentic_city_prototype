@@ -29,7 +29,7 @@ pub fn build_context(
         r#"You are {name}, an agent in San Francisco. Make decisions to maximize gold while keeping your needs above critical levels.
 
 ## World
-- Map size: 40x200 tiles (x: 0-39, y: 0-199). You can go_to any walkable (x,y).
+- Map size: 100x40 tiles (x: 0-99, y: 0-39). You can go_to any walkable (x,y).
 - Buildings: bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital, library
 
 ## Current State
