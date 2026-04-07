@@ -58,6 +58,8 @@ enum SseEvent {
         response_id: String,
         usage: Option<RawUsage>,
     },
+    /// Reasoning summary from `response.output_item.done` with type=reasoning.
+    ReasoningSummary(String),
     /// `response.failed` or `response.incomplete`.
     Error(String),
     /// Events we don't need to act on.
@@ -192,10 +194,41 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
             }
         }
 
+        // Reasoning summary arrives in output_item.done with type=reasoning.
+        "response.output_item.done" => {
+            let item = val.get("item").unwrap_or(&val);
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if item_type == "reasoning" {
+                // Extract summary text from the summary array.
+                let summary_text = item
+                    .get("summary")
+                    .and_then(|s| s.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|entry| {
+                                if entry.get("type").and_then(|t| t.as_str()) == Some("summary_text") {
+                                    entry.get("text").and_then(|t| t.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if !summary_text.is_empty() {
+                    SseEvent::ReasoningSummary(summary_text)
+                } else {
+                    SseEvent::Ignored
+                }
+            } else {
+                SseEvent::Ignored
+            }
+        }
+
         // Output item events we can ignore.
         "response.created"
         | "response.in_progress"
-        | "response.output_item.done"
         | "response.content_part.added"
         | "response.content_part.done"
         | "response.output_text.done"
@@ -242,7 +275,7 @@ fn build_request_body(
     }
 
     if let Some(effort) = reasoning_effort {
-        body["reasoning"] = serde_json::json!({ "effort": effort });
+        body["reasoning"] = serde_json::json!({ "effort": effort, "summary": "auto" });
     }
 
     body
@@ -424,6 +457,11 @@ async fn process_events_until_done(
             SseEvent::TextDelta(delta) => {
                 let _ = event_tx.send(SessionEvent::TextDelta(delta)).await;
             }
+            SseEvent::ReasoningSummary(summary) => {
+                // Reasoning summaries are the model's "thinking" — emit as text.
+                tracing::info!("[{}] REASONING: {}...", config.label, &summary[..summary.len().min(80)]);
+                let _ = event_tx.send(SessionEvent::TextDelta(summary)).await;
+            }
             SseEvent::FunctionCallStarted { call_id, item_id, name } => {
                 tracing::info!(
                     "[{}] FN_START: name={} call_id={} item_id={}",
@@ -455,6 +493,14 @@ async fn process_events_until_done(
                 let args: serde_json::Value =
                     serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
                 tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, resolved_name, call_id);
+
+                // Emit ToolCallRequested so the bridge flushes accumulated text as a thought.
+                let _ = event_tx.send(SessionEvent::ToolCallRequested(ToolCallRequest {
+                    id: call_id.clone(),
+                    name: resolved_name.clone(),
+                    arguments: args.clone(),
+                })).await;
+
                 tool_calls.push(CollectedToolCall {
                     call_id,
                     name: resolved_name,
