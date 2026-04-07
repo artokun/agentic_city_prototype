@@ -27,13 +27,8 @@ pub fn movement_system(
     for (_name, mut pos, mut anim, mut move_timer, path, active_convo, mut action_log) in
         &mut agents
     {
-        // Agents in a conversation don't move.
-        if active_convo.is_some() {
-            if anim.0 == AnimState::Walking {
-                anim.0 = AnimState::Idle;
-            }
-            continue;
-        }
+        // Agents can walk and talk simultaneously.
+        // Previously conversations froze movement, causing starvation death spirals.
         move_timer.0.tick(time.delta());
 
         let Some(mut path) = path else {

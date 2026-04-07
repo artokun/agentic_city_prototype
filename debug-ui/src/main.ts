@@ -25,7 +25,46 @@ const libraryPanel = $("library-panel");
 const mapCanvas = $("world-map") as HTMLCanvasElement | null;
 const mapCtx = mapCanvas ? mapCanvas.getContext("2d") : null;
 const mapOverlays = $("map-overlays");
+const mapContainer = $("map-container");
 const TILE_SIZE = 10;
+
+if (mapContainer) {
+  let isDown = false;
+  let startX = 0;
+  let startY = 0;
+  let scrollLeft = 0;
+  let scrollTop = 0;
+
+  mapContainer.addEventListener("mousedown", (e) => {
+    isDown = true;
+    mapContainer.style.cursor = "grabbing";
+    startX = e.pageX - mapContainer.offsetLeft;
+    startY = e.pageY - mapContainer.offsetTop;
+    scrollLeft = mapContainer.scrollLeft;
+    scrollTop = mapContainer.scrollTop;
+  });
+
+  mapContainer.addEventListener("mouseleave", () => {
+    isDown = false;
+    mapContainer.style.cursor = "grab";
+  });
+
+  mapContainer.addEventListener("mouseup", () => {
+    isDown = false;
+    mapContainer.style.cursor = "grab";
+  });
+
+  mapContainer.addEventListener("mousemove", (e) => {
+    if (!isDown) return;
+    e.preventDefault();
+    const x = e.pageX - mapContainer.offsetLeft;
+    const y = e.pageY - mapContainer.offsetTop;
+    const walkX = (x - startX) * 1.5;
+    const walkY = (y - startY) * 1.5;
+    mapContainer.scrollLeft = scrollLeft - walkX;
+    mapContainer.scrollTop = scrollTop - walkY;
+  });
+}
 
 function drawStaticMap() {
   if (!mapCtx || !mapCanvas) return;
@@ -33,14 +72,14 @@ function drawStaticMap() {
   mapCtx.fillRect(0, 0, mapCanvas.width, mapCanvas.height);
   
   const buildings = [
-    { name: "cafe", x: 2, y: 2, w: 5, h: 4, color: "#e67e22" },
-    { name: "google", x: 10, y: 2, w: 6, h: 4, color: "#3498db" },
-    { name: "market", x: 20, y: 2, w: 6, h: 4, color: "#2ecc71" },
-    { name: "warehouse", x: 2, y: 12, w: 8, h: 4, color: "#95a5a6" },
-    { name: "hotel", x: 14, y: 12, w: 5, h: 4, color: "#9b59b6" },
-    { name: "apartments", x: 80, y: 18, w: 6, h: 5, color: "#e74c3c" },
-    { name: "hospital", x: 2, y: 22, w: 5, h: 4, color: "#ff4d4d" },
-    { name: "library", x: 14, y: 22, w: 5, h: 4, color: "#f1c40f" }
+    { name: "cafe", x: 2, y: 2, w: 5, h: 4, color: "#e67e22", ent: "south" },
+    { name: "google", x: 10, y: 2, w: 6, h: 4, color: "#3498db", ent: "south" },
+    { name: "market", x: 20, y: 2, w: 6, h: 4, color: "#2ecc71", ent: "south" },
+    { name: "warehouse", x: 2, y: 12, w: 8, h: 4, color: "#95a5a6", ent: "south" },
+    { name: "hotel", x: 14, y: 12, w: 5, h: 4, color: "#9b59b6", ent: "south" },
+    { name: "apartments", x: 80, y: 18, w: 6, h: 5, color: "#e74c3c", ent: "west" },
+    { name: "hospital", x: 2, y: 22, w: 5, h: 4, color: "#ff4d4d", ent: "south" },
+    { name: "library", x: 14, y: 22, w: 5, h: 4, color: "#f1c40f", ent: "south" }
   ];
 
   mapCtx.fillStyle = "#27ae60";
@@ -56,6 +95,21 @@ function drawStaticMap() {
     mapCtx.lineWidth = 1;
     mapCtx.strokeRect(b.x * TILE_SIZE, b.y * TILE_SIZE, b.w * TILE_SIZE, b.h * TILE_SIZE);
     
+    // Draw entrance
+    let ex = 0;
+    let ey = 0;
+    if (b.ent === "south") {
+      ex = b.x + Math.floor(b.w / 2);
+      ey = b.y + b.h;
+    } else if (b.ent === "west") {
+      ex = b.x - 1;
+      ey = b.y + Math.floor(b.h / 2);
+    }
+    mapCtx.fillStyle = "#fff";
+    mapCtx.fillRect(ex * TILE_SIZE, ey * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    mapCtx.strokeStyle = "#000";
+    mapCtx.strokeRect(ex * TILE_SIZE, ey * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+
     mapCtx.fillStyle = b.color;
     mapCtx.font = "9px 'SF Mono', 'Fira Code', monospace";
     mapCtx.textAlign = "center";

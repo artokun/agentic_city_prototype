@@ -25,9 +25,9 @@ pub fn system_ai_compact_limit() -> u32 {
 }
 
 // --- Needs decay (per tick) ---
-/// Hunger decay per tick. 5min to drain at 1Hz (100/300 ticks).
+/// Hunger decay per tick. 10min to drain at 1Hz (100/600 ticks).
 pub fn hunger_decay() -> f32 {
-    env_or("HUNGER_DECAY", 0.333)
+    env_or("HUNGER_DECAY", 0.167)
 }
 /// Boredom decay per tick when idle/wandering.
 pub fn boredom_decay_idle() -> f32 {
@@ -65,7 +65,7 @@ pub fn critical_threshold() -> f32 {
 // --- Hospital ---
 /// Gold fee for hospital recovery (can cause debt).
 pub fn hospital_fee() -> u32 {
-    env_or("HOSPITAL_FEE", 5)
+    env_or("HOSPITAL_FEE", 2)
 }
 /// Gold reward for rescuing a passed-out agent.
 pub fn rescue_reward() -> u32 {

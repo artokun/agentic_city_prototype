@@ -145,7 +145,7 @@ impl AgentBundle {
             inventory: {
                 let mut inv = Inventory::default();
                 inv.add(ItemType::Coffee, 1);
-                inv.add(ItemType::Rations, 2);
+                inv.add(ItemType::Rations, 3);
                 inv
             },
             needs: Needs::default(),

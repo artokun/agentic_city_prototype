@@ -80,17 +80,27 @@ pub fn pass_out_system(
         // Deduct hospital fee (can go into debt).
         inv.deduct_gold_with_debt(config::hospital_fee());
 
-        // Post rescue bounty.
+        // Post rescue bounty with clear instructions.
         let bounty_id = Uuid::new_v4();
-        let bounty = Bounty::simple(
+        let mut bounty = Bounty::simple(
             bounty_id,
             format!(
                 "RESCUE: Carry {} to the hospital (passed out at ({},{}))",
                 name.0, pos.x, pos.y
             ),
-            BountyObjective::WorkAtBuilding, // rescuer goes to hospital with the agent
+            BountyObjective::WorkAtBuilding,
             config::rescue_reward(),
             vec![],
+        );
+        bounty.hidden_criteria = format!(
+            "Instructions for agent: Step 1: Go to ({},{}) where {} passed out. \
+             Step 2: Use take_item with service='body:{}' to pick up their body. \
+             Step 3: Go to the hospital using go_to_service with building='hospital'. \
+             Step 4: Use deposit_item with service='body:{}' to drop them off at the hospital. \
+             Step 5: Return to the bounty board, deposit your bounty_token, and complete_bounty.\n\n\
+             GM: Verify the rescuer picked up body:{} (take_item in action log) AND deposited body:{} at the hospital (deposit_item in action log). \
+             If they just walked to the hospital without carrying the body, REJECT.",
+            pos.x, pos.y, name.0, name.0, name.0, name.0, name.0
         );
         bounty_registry.tokens.insert(bounty.id, bounty);
 
