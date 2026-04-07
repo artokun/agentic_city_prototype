@@ -1411,7 +1411,7 @@ pub fn apply_mcp_actions_system(
         &mut Needs,
         Option<&ActiveConversation>,
         &BusinessCards,
-    )>,
+    ), Without<crate::world::hospital::Incapacitated>>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
     mut trade_proposals: Query<(Entity, &mut TradeProposal)>,
     library: Res<crate::world::bounty::Library>,

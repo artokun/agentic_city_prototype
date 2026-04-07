@@ -279,7 +279,7 @@ pub fn ai_context_system(
         Option<&ShiftWorker>,
         &crate::items::CarrySlots,
         &BusinessCards,
-    )>,
+    ), Without<crate::world::hospital::Incapacitated>>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
 ) {
