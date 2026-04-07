@@ -1,0 +1,3 @@
+[submodule "packages/stunner"]
+	path = packages/stunner
+	url = https://github.com/dotdotdashdev/stunner.git

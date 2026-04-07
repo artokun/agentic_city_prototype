@@ -1,16 +1,10 @@
 {
-  "name": "debug-monitor",
+  "name": "client",
   "private": true,
+  "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build"
-  },
   "dependencies": {
-    "flatbuffers": "25.2.10"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "@stunner/core": "file:../packages/stunner/packages/stunner-core",
+    "@stunner/react": "file:../packages/stunner/packages/stunner-react"
   }
 }
