@@ -1574,18 +1574,22 @@ pub fn apply_mcp_actions_system(
                     // Check if agent is already at the building.
                     let at_building = pos.x == entrance.x && pos.y == entrance.y;
                     if at_building {
-                        // Start shift immediately.
-                        *goal = AgentGoal::GoingToService {
-                            building: bld_entity,
-                            service: "work_shift".into(),
-                        };
+                        // Start shift immediately. Preserve ExecutingBounty goal.
+                        if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                            *goal = AgentGoal::GoingToService {
+                                building: bld_entity,
+                                service: "work_shift".into(),
+                            };
+                        }
                         thought.0 = format!("Starting shift at {}.", building);
                     } else {
-                        // Walk there first.
-                        *goal = AgentGoal::GoingToService {
-                            building: bld_entity,
-                            service: "work_shift".into(),
-                        };
+                        // Walk there first. Preserve ExecutingBounty goal.
+                        if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                            *goal = AgentGoal::GoingToService {
+                                building: bld_entity,
+                                service: "work_shift".into(),
+                            };
+                        }
                         if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
                             let tiles = p.len();
                             commands.entity(entity).insert(Path(p));
@@ -1606,8 +1610,14 @@ pub fn apply_mcp_actions_system(
             }
 
             "leave_shift" => {
-                if matches!(*goal, AgentGoal::WorkingShift { .. }) {
-                    *goal = AgentGoal::Idle;
+                // Allow leaving a shift whether the goal is WorkingShift or ExecutingBounty
+                // (the agent may be working a shift as part of a bounty).
+                let on_shift = shift_worker.is_some();
+                if on_shift {
+                    // Preserve ExecutingBounty goal — shift was part of bounty work.
+                    if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                        *goal = AgentGoal::Idle;
+                    }
                     thought.0 = "Left the shift. Paycheck earned based on ticks worked.".into();
                 } else {
                     thought.0 = "ERROR: Not currently working a shift. Nothing to leave.".into();
@@ -1653,22 +1663,29 @@ pub fn apply_mcp_actions_system(
 
             "go_to" => {
                 if let (Some(x), Some(y)) = (mcp_action.x, mcp_action.y) {
-                    let target = GridPos { x, y };
-                    if !map.is_walkable(&target) {
-                        thought.0 = format!("ERROR: ({},{}) is not walkable (might be inside a building). Try nearby coordinates.", x, y);
-                    } else if let Some(p) = pathfinding::bfs(&map, *pos, target) {
-                        let tiles = p.len();
-                        commands.entity(entity).insert(Path(p));
-                        // Preserve ExecutingBounty goal — don't lose the active bounty context.
-                        if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
-                            *goal = AgentGoal::Wandering;
-                        }
-                        thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
+                    // GPT-series fills optional integer params with 0 instead of omitting.
+                    // Treat x=0 AND y=0 as "no coordinates" unless agent is already near (0,0).
+                    let near_origin = pos.x.abs() <= 2 && pos.y.abs() <= 2;
+                    if x == 0 && y == 0 && !near_origin {
+                        thought.0 = "ERROR: go_to requires explicit x and y coordinates. If you want to visit a building, use go_to_service instead. Map is 40x200 (x: 0-39, y: 0-199).".into();
                     } else {
-                        thought.0 = format!(
-                            "ERROR: Can't find path to ({},{}). The map is 40x200.",
-                            x, y
-                        );
+                        let target = GridPos { x, y };
+                        if !map.is_walkable(&target) {
+                            thought.0 = format!("ERROR: ({},{}) is not walkable (might be inside a building). Try nearby coordinates.", x, y);
+                        } else if let Some(p) = pathfinding::bfs(&map, *pos, target) {
+                            let tiles = p.len();
+                            commands.entity(entity).insert(Path(p));
+                            // Preserve ExecutingBounty goal — don't lose the active bounty context.
+                            if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                                *goal = AgentGoal::Wandering;
+                            }
+                            thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
+                        } else {
+                            thought.0 = format!(
+                                "ERROR: Can't find path to ({},{}). The map is 40x200.",
+                                x, y
+                            );
+                        }
                     }
                 } else {
                     thought.0 =
@@ -1678,7 +1695,10 @@ pub fn apply_mcp_actions_system(
 
             "chat_with" => {
                 let target = mcp_action.agent_target.as_deref().unwrap_or("someone");
-                *goal = AgentGoal::Wandering;
+                // Preserve ExecutingBounty goal — chatting may be part of bounty work.
+                if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                    *goal = AgentGoal::Wandering;
+                }
                 thought.0 = format!("Looking to chat with {}...", target);
             }
 

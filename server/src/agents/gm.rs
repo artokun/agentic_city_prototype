@@ -213,6 +213,7 @@ pub fn spawn_system_ai_session_system(
 
         let prompt_tx_for_main = bridge.prompt_tx.clone();
         let token_rx_for_main = Arc::new(Mutex::new(bridge.token_rx));
+        let gm_log_rx_for_main = bridge.gm_log_rx.map(|rx| Arc::new(Mutex::new(rx)));
 
         ctx.run_on_main_thread(move |main_ctx| {
             let world = main_ctx.world;
@@ -220,7 +221,7 @@ pub fn spawn_system_ai_session_system(
             system_ai.prompt_tx = Some(prompt_tx_for_main);
             system_ai.response_rx = None;
             system_ai.token_rx = Some(token_rx_for_main);
-            system_ai.gm_log_rx = None;
+            system_ai.gm_log_rx = gm_log_rx_for_main;
             system_ai.spawning = false;
             system_ai.tokens_since_compact = 0;
         }).await;

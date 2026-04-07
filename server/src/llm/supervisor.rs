@@ -82,6 +82,8 @@ pub struct SessionBridge {
     /// Uses `watch` instead of `Notify` so the signal is retained even if
     /// the receiver isn't registered yet (fixes OpenAI race condition).
     pub connected: tokio::sync::watch::Receiver<bool>,
+    /// GM log receiver — only populated for System AI sessions using the Claude relay.
+    pub gm_log_rx: Option<tokio::sync::mpsc::Receiver<crate::network::system_relay::GmLogEntry>>,
 }
 
 /// Parameters for spawning a session.
@@ -151,25 +153,11 @@ async fn spawn_openai_session(
         .ok_or_else(|| "adapter did not produce event receiver".to_string())?;
 
     // Build the bridge: prompt_tx (String) -> adapter.send_command (SessionCommand).
-    let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(32);
+    // Larger buffer (256) because OpenAI processes messages slower than Claude,
+    // and context updates can back up if the adapter is busy with tool calls.
+    let (prompt_tx, mut prompt_rx) = mpsc::channel::<String>(256);
     let adapter_arc: Arc<tokio::sync::Mutex<Box<dyn SessionAdapter>>> =
         Arc::new(tokio::sync::Mutex::new(adapter));
-
-    let adapter_for_bridge = adapter_arc.clone();
-    tokio::spawn(async move {
-        while let Some(text) = prompt_rx.recv().await {
-            let cmd = if text == crate::llm::types::COMPACT_COMMAND {
-                SessionCommand::Compact
-            } else {
-                SessionCommand::SendUserTurn(text)
-            };
-            let adapter = adapter_for_bridge.lock().await;
-            if let Err(e) = adapter.send_command(cmd).await {
-                tracing::warn!("[openai-bridge] send_command failed: {}", e);
-                break;
-            }
-        }
-    });
 
     // Bridge: evt_rx (SessionEvent) -> response_tx (String) + token_tx.
     let (response_tx, response_rx) = mpsc::channel::<String>(64);
@@ -179,6 +167,25 @@ async fn spawn_openai_session(
     } else {
         params.agent_identity.as_ref().map(|i| i.name.clone()).unwrap_or_else(|| "unknown".to_string())
     };
+
+    let adapter_for_bridge = adapter_arc.clone();
+    let bridge_label = label.clone();
+    tokio::spawn(async move {
+        while let Some(text) = prompt_rx.recv().await {
+            let cmd = if text == crate::llm::types::COMPACT_COMMAND {
+                SessionCommand::Compact
+            } else {
+                SessionCommand::SendUserTurn(text)
+            };
+            let adapter = adapter_for_bridge.lock().await;
+            if let Err(e) = adapter.send_command(cmd).await {
+                tracing::warn!("[openai-bridge:{}] send_command failed, will retry on next message: {}", bridge_label, e);
+                // Don't break — transient errors should not kill the bridge.
+                // The stream_loop inside the adapter handles reconnection.
+                continue;
+            }
+        }
+    });
 
     tokio::spawn(async move {
         let mut evt_rx = evt_rx;
@@ -244,6 +251,7 @@ async fn spawn_openai_session(
         response_rx,
         token_rx,
         connected: connected_rx,
+        gm_log_rx: None,
     })
 }
 
@@ -290,6 +298,7 @@ async fn spawn_claude_session(
             response_rx,
             token_rx,
             connected: connected_rx,
+            gm_log_rx: Some(handle.gm_log_rx),
         })
     } else {
         // Agent: use agent relay.
@@ -316,6 +325,7 @@ async fn spawn_claude_session(
             response_rx: handle.response_rx,
             token_rx: handle.token_rx,
             connected: connected_rx,
+            gm_log_rx: None,
         })
     }
 }

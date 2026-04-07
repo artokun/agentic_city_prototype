@@ -477,7 +477,7 @@ pub fn ai_context_system(
 
         // Send context as a user message. The LLM will think and call game_action tool.
         if let Err(e) = session.prompt_tx.try_send(context) {
-            tracing::debug!("[AI:{}] context send failed: {}", name.0, e);
+            tracing::warn!("[AI:{}] context send failed (channel full or closed): {}", name.0, e);
             continue;
         }
 
