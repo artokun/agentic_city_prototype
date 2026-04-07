@@ -34,11 +34,9 @@ fn main() {
             cfg
         }
         Err(e) => {
-            tracing::warn!("[LLM] Could not load config/llm.toml: {e}; using empty config");
-            llm::config::LlmConfig {
-                providers: Default::default(),
-                profiles: Default::default(),
-            }
+            tracing::error!("[LLM] Could not load config/llm.toml: {e}");
+            tracing::error!("[LLM] Agent sessions require valid provider/profile config. Create config/llm.toml or copy from the repo.");
+            std::process::exit(1);
         }
     };
 

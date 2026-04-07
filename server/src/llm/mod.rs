@@ -15,20 +15,34 @@ pub struct LlmPlugin;
 
 impl Plugin for LlmPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, persist_session_events);
+        app.init_resource::<PersistenceCursor>()
+            .add_systems(Update, persist_session_events);
     }
 }
 
+/// Tracks how many event log entries we've already persisted.
+#[derive(Resource, Default)]
+struct PersistenceCursor(usize);
+
 /// System: persist new event log entries to the supervisor's checkpoint store.
-/// Also logs session lifecycle events (compaction, errors) for durable recovery.
+/// Uses a cursor to avoid re-appending entries that were already written.
 fn persist_session_events(
     event_log: Res<crate::agents::event_log::AgentEventLog>,
     supervisor: Option<ResMut<supervisor::SessionSupervisor>>,
+    mut cursor: ResMut<PersistenceCursor>,
 ) {
     let Some(mut supervisor) = supervisor else { return };
 
-    // Persist agent action/thought events for session recovery.
-    for entry in &event_log.entries {
+    let current_len = event_log.entries.len();
+    if cursor.0 >= current_len {
+        // Event log was drained (ring buffer popped older entries) — reset cursor.
+        if cursor.0 > current_len {
+            cursor.0 = current_len;
+        }
+        return;
+    }
+
+    for entry in event_log.entries.iter().skip(cursor.0) {
         let owner = if entry.agent == "SYSTEM" {
             types::SessionOwner::SystemAi
         } else {
@@ -42,9 +56,11 @@ fn persist_session_events(
             crate::agents::event_log::LogKind::GmVerdict => {
                 types::SessionEvent::TextDelta(entry.text.clone())
             }
-            _ => continue, // Only persist thoughts and GM verdicts to session logs.
+            _ => continue,
         };
 
         supervisor.log_event(&owner, &event);
     }
+
+    cursor.0 = current_len;
 }
