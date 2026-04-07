@@ -1523,10 +1523,13 @@ pub fn apply_mcp_actions_system(
                 let service = mcp_action.service.as_deref().unwrap_or("browse");
 
                 if let Some((bld_entity, entrance, _)) = find_building(building) {
-                    *goal = AgentGoal::GoingToService {
-                        building: bld_entity,
-                        service: service.into(),
-                    };
+                    // Preserve ExecutingBounty goal — walking to a service IS part of executing.
+                    if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                        *goal = AgentGoal::GoingToService {
+                            building: bld_entity,
+                            service: service.into(),
+                        };
+                    }
                     if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
                         let tiles = p.len();
                         commands.entity(entity).insert(Path(p));
@@ -1556,7 +1559,9 @@ pub fn apply_mcp_actions_system(
                     let tiles = p.len();
                     if tiles > 0 {
                         commands.entity(entity).insert(Path(p));
-                        *goal = AgentGoal::Wandering;
+                        if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                            *goal = AgentGoal::Wandering;
+                        }
                         thought.0 = format!("Wandering ({} tiles).", tiles);
                     }
                 }
@@ -1654,7 +1659,10 @@ pub fn apply_mcp_actions_system(
                     } else if let Some(p) = pathfinding::bfs(&map, *pos, target) {
                         let tiles = p.len();
                         commands.entity(entity).insert(Path(p));
-                        *goal = AgentGoal::Wandering;
+                        // Preserve ExecutingBounty goal — don't lose the active bounty context.
+                        if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
+                            *goal = AgentGoal::Wandering;
+                        }
                         thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
                     } else {
                         thought.0 = format!(
@@ -1693,8 +1701,7 @@ pub fn apply_mcp_actions_system(
             }
 
             "claim_bounty" => {
-                // Allow claiming if at the board (any goal state — the board queue
-                // was too strict and agents kept getting stuck).
+                // Allow claiming if at the board entrance.
                 let at_board = known_locs
                     .locations
                     .values()

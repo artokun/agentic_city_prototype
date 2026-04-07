@@ -163,7 +163,7 @@ fn sync_debug_log(
             tick: entry.tick,
             agent: entry.agent.clone(),
             kind: entry.kind.as_str().to_string(),
-            text: entry.text.clone(),
+            text: entry.text.clone(), pos: None,
         });
     }
     cursor.0 = current_len;
@@ -179,7 +179,7 @@ fn sync_debug_log(
                 tick: suggestion.tick,
                 agent: suggestion.agent.clone(),
                 kind: "feedback".to_string(),
-                text: suggestion.text.clone(),
+                text: suggestion.text.clone(), pos: None,
             });
         }
     }
@@ -193,7 +193,7 @@ fn sync_debug_log(
                     tick: tick.0,
                     agent: "SYSTEM".to_string(),
                     kind: format!("gm_{}", entry.kind),
-                    text: entry.text,
+                    text: entry.text, pos: None,
                 });
             }
         }

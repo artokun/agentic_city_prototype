@@ -22,6 +22,8 @@ pub struct DebugEntry {
     pub agent: String,
     pub kind: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pos: Option<(i32, i32)>,
 }
 
 use super::agent_relay::{self, AgentRelays};
