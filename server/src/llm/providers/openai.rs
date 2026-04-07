@@ -439,9 +439,13 @@ async fn process_events_until_done(
         std::collections::HashMap::new();
 
     loop {
-        let msg = ws
-            .next()
+        // Timeout after 120 seconds of no WebSocket messages — reconnect on next turn.
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            ws.next(),
+        )
             .await
+            .map_err(|_| format!("[{}] WebSocket read timeout (120s)", config.label))?
             .ok_or_else(|| "WebSocket closed unexpectedly".to_string())?
             .map_err(|e| format!("WebSocket read error: {e}"))?;
 

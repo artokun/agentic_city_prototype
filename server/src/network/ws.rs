@@ -441,7 +441,7 @@ async fn handle_game_action(
             result_text = "Bounty marked complete! You are now automatically walking back to the bounty board to collect your gold reward. Do NOT call go_to_board — you are already heading there. Wait for the arrival message.".into();
         }
         "leave_shift" => {
-            result_text = "Leaving your shift. Your paycheck is based on ticks worked. Go to the bounty board and use redeem_paycheck to convert it to gold.".into();
+            result_text = "Leaving your shift. Your paycheck is based on ticks worked. Go to the bounty board using go_to_service building='bounty_board' service='redeem_paycheck' to convert paychecks to gold.".into();
         }
         "claim_bounty" => {
             result_text = "Attempting to claim a bounty. You must be at the bounty board (InteractingWithBoard) to claim. Read the bounty description for instructions on how to complete it.".into();
