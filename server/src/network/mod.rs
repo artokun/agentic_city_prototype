@@ -136,9 +136,11 @@ pub struct LibraryJsonArc(pub std::sync::Arc<std::sync::RwLock<String>>);
 #[derive(Resource, Clone)]
 pub struct DebugLogArc(pub std::sync::Arc<std::sync::RwLock<Vec<ws::DebugEntry>>>);
 
-/// Tracks how many event log entries we've already synced to the debug log.
+/// Tracks total events synced using AgentEventLog::total_pushed.
 #[derive(Resource, Default)]
-struct DebugLogCursor(usize);
+struct DebugLogCursor {
+    last_total: u64,
+}
 
 /// Path to the current run's JSONL log file on disk.
 #[derive(Resource)]
@@ -154,19 +156,24 @@ fn sync_debug_log(
     tick: Res<crate::tick::TickCount>,
     log_file: Res<RunLogFile>,
 ) {
-    let current_len = event_log.entries.len();
+    let total = event_log.total_pushed;
     let mut new_entries: Vec<ws::DebugEntry> = Vec::new();
 
-    // Collect new event log entries.
-    for entry in event_log.entries.iter().skip(cursor.0) {
-        new_entries.push(ws::DebugEntry {
-            tick: entry.tick,
-            agent: entry.agent.clone(),
-            kind: entry.kind.as_str().to_string(),
-            text: entry.text.clone(), pos: None,
-        });
+    // Collect new event log entries using total_pushed counter.
+    if total > cursor.last_total {
+        let new_count = (total - cursor.last_total) as usize;
+        let deque_len = event_log.entries.len();
+        let start = deque_len.saturating_sub(new_count);
+        for entry in event_log.entries.iter().skip(start) {
+            new_entries.push(ws::DebugEntry {
+                tick: entry.tick,
+                agent: entry.agent.clone(),
+                kind: entry.kind.as_str().to_string(),
+                text: entry.text.clone(), pos: None,
+            });
+        }
+        cursor.last_total = total;
     }
-    cursor.0 = current_len;
 
     // Collect new feedback entries.
     let guard_read = holder.0.read().unwrap();

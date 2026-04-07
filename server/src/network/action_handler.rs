@@ -1488,8 +1488,8 @@ pub fn apply_mcp_actions_system(
 
         match action_str.as_str() {
             "go_to_board" => {
-                // Preserve ReturningToBoard — agent is heading back to collect reward.
-                if !matches!(*goal, AgentGoal::ReturningToBoard(_)) {
+                // Preserve ReturningToBoard and ExecutingBounty goals.
+                if !matches!(*goal, AgentGoal::ReturningToBoard(_) | AgentGoal::ExecutingBounty(_)) {
                     *goal = AgentGoal::GoingToBoard;
                 }
                 if let Some(board) = known_locs

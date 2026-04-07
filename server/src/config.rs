@@ -39,9 +39,9 @@ pub fn boredom_recovery_active() -> f32 {
 }
 
 // --- AI context ---
-/// Ticks between sending context updates to agents. 50 = every 25s at 2Hz.
+/// Ticks between sending context updates to agents. 15 = every 15s at 1Hz.
 pub fn context_interval() -> u64 {
-    env_or("CONTEXT_INTERVAL", 50)
+    env_or("CONTEXT_INTERVAL", 15)
 }
 /// Ticks between periodic status updates to agents.
 pub fn status_interval() -> u64 {
