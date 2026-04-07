@@ -85,6 +85,17 @@ pub fn execute_system_tool(
                 .and_then(|m| m.as_str())
                 .unwrap_or(if approved { "approved" } else { "rejected" });
 
+            // Enforce approval-state policy (same as mcp-gm).
+            if approved {
+                if let Err(err) = super::policy::validate_approval_state(bounty_id) {
+                    return ToolCallResult {
+                        id: String::new(),
+                        output: format!("BLOCKED: {}", err),
+                        is_error: true,
+                    };
+                }
+            }
+
             // Enforce document inspection policy before allowing verdict.
             if let Some(docs) = inspected_docs {
                 match super::policy::required_document_keys(bounty_id) {
@@ -332,6 +343,18 @@ pub async fn execute_system_tool_async(
             let message = arguments.get("message").and_then(|m| m.as_str())
                 .unwrap_or(if approved { "approved" } else { "rejected" });
 
+            // Enforce approval-state policy (same as mcp-gm).
+            if approved {
+                if let Err(err) = super::policy::validate_approval_state(bounty_id) {
+                    return ToolCallResult {
+                        id: String::new(),
+                        output: format!("BLOCKED: {}", err),
+                        is_error: true,
+                    };
+                }
+            }
+
+            // Enforce document-inspection policy.
             if let Some(ref docs) = inspected_docs {
                 if let Ok(required) = super::policy::required_document_keys(bounty_id) {
                     if let Err(msg) = super::policy::validate_document_inspection(&required, docs) {
@@ -352,6 +375,7 @@ pub async fn execute_system_tool_async(
                 "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
                 "amount": arguments.get("amount").and_then(|a| a.as_u64()).unwrap_or(0),
                 "reason": arguments.get("reason").and_then(|r| r.as_str()).unwrap_or(""),
+                "message": arguments.get("message").and_then(|m| m.as_str()).unwrap_or(""),
             });
             forward_post_async(&format!("{base}/api/gm/grant_gold"), &body).await
         }

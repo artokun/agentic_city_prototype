@@ -137,6 +137,7 @@ impl ScenarioBuilder {
                 // Insert LLM engine resources (empty config for tests).
                 app.insert_resource(server::llm::config::LlmConfig::default());
                 app.init_resource::<server::llm::session_registry::SessionRegistry>();
+                app.insert_resource(server::llm::supervisor::SessionSupervisor::new());
 
                 // Insert scenario-specific resources.
                 app.insert_resource(server::network::ws::ServerPort(port));

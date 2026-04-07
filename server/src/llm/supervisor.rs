@@ -486,6 +486,7 @@ pub fn create_openai_system_ai_adapter(
 }
 
 /// Manages adapter lifecycle, persistence, and recovery.
+#[derive(bevy::prelude::Resource)]
 pub struct SessionSupervisor {
     store: CheckpointStore,
     /// Cached checkpoints loaded at startup.

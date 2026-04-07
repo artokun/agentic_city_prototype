@@ -55,9 +55,11 @@ fn main() {
         .insert_resource(process_manager::ProcessRegistryRes(registry))
         .insert_resource(llm_config)
         .init_resource::<llm::session_registry::SessionRegistry>()
+        .insert_resource(llm::supervisor::SessionSupervisor::new())
         .add_plugins(tick::GameTickPlugin)
         .add_plugins(world::WorldPlugin)
         .add_plugins(agents::AgentPlugin)
         .add_plugins(network::NetworkPlugin)
+        .add_plugins(llm::LlmPlugin)
         .run();
 }
