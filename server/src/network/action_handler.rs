@@ -1488,8 +1488,9 @@ pub fn apply_mcp_actions_system(
 
         match action_str.as_str() {
             "go_to_board" => {
-                // Preserve ReturningToBoard and ExecutingBounty goals.
-                if !matches!(*goal, AgentGoal::ReturningToBoard(_) | AgentGoal::ExecutingBounty(_)) {
+                // Always set GoingToBoard — the agent explicitly wants board access.
+                // The behavior system transitions this to InteractingWithBoard on arrival.
+                if !matches!(*goal, AgentGoal::ReturningToBoard(_)) {
                     *goal = AgentGoal::GoingToBoard;
                 }
                 if let Some(board) = known_locs
@@ -1728,8 +1729,14 @@ pub fn apply_mcp_actions_system(
                     .find(|l| l.name == "bounty_board")
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
                 if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard | AgentGoal::ExecutingBounty(_) | AgentGoal::GoingToBoard | AgentGoal::ReturningToBoard(_)) {
-                    thought.0 =
-                        "Must be at the bounty board to claim a bounty! Go there first.".into();
+                    let board_entrance = known_locs.locations.values()
+                        .find(|l| l.name == "bounty_board")
+                        .map(|l| format!("({},{})", l.entrance.x, l.entrance.y))
+                        .unwrap_or_else(|| "unknown".into());
+                    thought.0 = format!(
+                        "Must be at the bounty board to claim a bounty! Your position: ({},{}), board entrance: {}, goal: {:?}. Use go_to_board first.",
+                        pos.x, pos.y, board_entrance, goal
+                    );
                 } else if bounty_registry.tokens.values().any(|b| {
                     b.claimed_by == Some(entity)
                         && b.state == crate::world::bounty::BountyState::Claimed
