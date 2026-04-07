@@ -20,22 +20,15 @@ impl Plugin for LlmPlugin {
     }
 }
 
-/// Tracks the tick of the last persisted event to avoid duplicates.
-/// Using tick instead of deque position handles the ring buffer correctly —
-/// new events always have ticks >= the last persisted tick.
-#[derive(Resource)]
+/// Tracks how many events have been persisted using the event log's total_pushed counter.
+/// This correctly handles same-tick events and ring buffer evictions because total_pushed
+/// is monotonic and never resets, while the deque length stays capped at 100.
+#[derive(Resource, Default)]
 struct PersistenceCursor {
-    last_tick: u64,
-}
-
-impl Default for PersistenceCursor {
-    fn default() -> Self {
-        Self { last_tick: 0 }
-    }
+    last_total: u64,
 }
 
 /// System: persist new event log entries to the supervisor's checkpoint store.
-/// Tracks by tick value so ring buffer evictions don't cause missed entries.
 fn persist_session_events(
     event_log: Res<crate::agents::event_log::AgentEventLog>,
     supervisor: Option<ResMut<supervisor::SessionSupervisor>>,
@@ -43,11 +36,18 @@ fn persist_session_events(
 ) {
     let Some(mut supervisor) = supervisor else { return };
 
-    for entry in &event_log.entries {
-        if entry.tick <= cursor.last_tick {
-            continue;
-        }
+    let total = event_log.total_pushed;
+    if total <= cursor.last_total {
+        return;
+    }
 
+    // The deque has at most 100 entries. The new events are the last (total - last_total)
+    // entries in the deque, but clamped to deque length (in case we missed more than 100).
+    let new_count = (total - cursor.last_total) as usize;
+    let deque_len = event_log.entries.len();
+    let start = deque_len.saturating_sub(new_count);
+
+    for entry in event_log.entries.iter().skip(start) {
         let owner = if entry.agent == "SYSTEM" {
             types::SessionOwner::SystemAi
         } else {
@@ -65,6 +65,7 @@ fn persist_session_events(
         };
 
         supervisor.log_event(&owner, &event);
-        cursor.last_tick = entry.tick;
     }
+
+    cursor.last_total = total;
 }

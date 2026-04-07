@@ -2,13 +2,26 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 /// Central event log for agent activities. Streamed to the debug monitor.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct AgentEventLog {
     pub entries: VecDeque<LogEvent>,
+    /// Total events ever pushed — monotonic, never resets.
+    /// Used by persistence cursors to track which events have been processed.
+    pub total_pushed: u64,
+}
+
+impl Default for AgentEventLog {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            total_pushed: 0,
+        }
+    }
 }
 
 impl AgentEventLog {
     pub fn push(&mut self, event: LogEvent) {
+        self.total_pushed += 1;
         self.entries.push_back(event);
         // Keep last 100 entries.
         while self.entries.len() > 100 {
