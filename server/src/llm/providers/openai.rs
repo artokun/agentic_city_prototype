@@ -1,6 +1,7 @@
 //! OpenAI Responses API adapter — implements SessionAdapter for GPT-5.4.
 //!
-//! Owns: HTTP SSE streaming, function-tool compilation, tool-result submission,
+//! Owns: WebSocket streaming via `wss://api.openai.com/v1/responses`,
+//! function-tool compilation, tool-result submission via auto-continue,
 //! compaction via context summarization, and hybrid resume with
 //! `previous_response_id` + local checkpoint.
 //!
@@ -19,11 +20,17 @@ use crate::llm::types::{
     UsageData,
 };
 
-/// Default OpenAI API base URL.
+/// Default OpenAI API base URL (HTTP — used for deriving the WebSocket URL).
 const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
+
+/// Default WebSocket URL for the OpenAI Responses API.
+const DEFAULT_WS_URL: &str = "wss://api.openai.com/v1/responses";
 
 /// Environment variable for the API key.
 const API_KEY_ENV: &str = "OPENAI_API_KEY";
+
+/// Maximum tool-call iterations per turn to prevent infinite loops.
+const MAX_TOOL_ITERATIONS: u32 = 20;
 
 // ---------------------------------------------------------------------------
 // OpenAI SSE event types (internal only — never exposed outside this module)
@@ -65,10 +72,12 @@ struct RawUsage {
 }
 
 // ---------------------------------------------------------------------------
-// SSE parsing
+// SSE parsing (event payloads are identical for HTTP SSE and WebSocket)
 // ---------------------------------------------------------------------------
 
-/// Parse a single SSE data line (the JSON payload after "data: ").
+/// Parse a single JSON event payload from the Responses API.
+/// Works for both HTTP SSE (after stripping `data: ` prefix) and WebSocket
+/// (where each message is a complete JSON object).
 fn parse_sse_data(json_str: &str) -> SseEvent {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) else {
         return SseEvent::Ignored;
@@ -94,9 +103,6 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
         }
 
         "response.function_call_arguments.done" => {
-            // The call_id from output_item.added (e.g. "call_XYZ") and the item_id here
-            // (e.g. "fc_ABC") are different. We need to find the right pending function name.
-            // Use call_id if present, otherwise item_id.
             let call_id = val
                 .get("call_id")
                 .and_then(|c| c.as_str())
@@ -107,9 +113,6 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
-            // The call_id for the tool result submission is the call_id from output_item.added.
-            // But fn_args_done only has item_id. We need a mapping.
-            // For now, use the call_id if available, otherwise item_id.
             let effective_id = if !call_id.is_empty() { call_id } else { item_id };
             let name = val
                 .get("name")
@@ -171,8 +174,6 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
             let item = val.get("item").unwrap_or(&val);
             let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
             if item_type == "function_call" {
-                // output_item.added has both "id" (item_id like fc_...) and "call_id" (like call_...).
-                // fn_args_done uses "item_id" which matches "id" here.
                 let item_id = item.get("id")
                     .and_then(|c| c.as_str())
                     .unwrap_or("")
@@ -201,7 +202,7 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
         | "response.function_call_arguments.delta" => SseEvent::Ignored,
 
         _ => {
-            tracing::debug!("[openai] ignoring SSE event: {event_type}");
+            tracing::debug!("[openai] ignoring event: {event_type}");
             SseEvent::Ignored
         }
     }
@@ -211,18 +212,21 @@ fn parse_sse_data(json_str: &str) -> SseEvent {
 // Request building
 // ---------------------------------------------------------------------------
 
-/// Build the JSON body for a Responses API request.
+/// Build the JSON body for a `response.create` event sent over WebSocket.
 fn build_request_body(
     model: &str,
     input: &serde_json::Value,
     tools: &[serde_json::Value],
     system_prompt: Option<&str>,
     previous_response_id: Option<&str>,
+    reasoning_effort: Option<&str>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
+        "type": "response.create",
         "model": model,
         "input": input,
         "stream": true,
+        "store": false,
     });
 
     if !tools.is_empty() {
@@ -235,6 +239,10 @@ fn build_request_body(
 
     if let Some(prev_id) = previous_response_id {
         body["previous_response_id"] = serde_json::json!(prev_id);
+    }
+
+    if let Some(effort) = reasoning_effort {
+        body["reasoning"] = serde_json::json!({ "effort": effort });
     }
 
     body
@@ -269,7 +277,74 @@ fn compaction_input(context_summary: &str) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// Stream processing task
+// WebSocket connection management
+// ---------------------------------------------------------------------------
+
+type WsStream = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+/// Establish a WebSocket connection to the OpenAI Responses API.
+async fn ws_connect(ws_url: &str, api_key: &str) -> Result<WsStream, String> {
+    use tokio_tungstenite::tungstenite::http::Request;
+
+    // Ensure rustls crypto provider is installed (required for wss://).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let request = Request::builder()
+        .uri(ws_url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Host", host_from_url(ws_url))
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header(
+            "Sec-WebSocket-Key",
+            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+        )
+        .body(())
+        .map_err(|e| format!("Failed to build WS request: {e}"))?;
+
+    let (ws, _resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+
+    Ok(ws)
+}
+
+/// Extract the host from a URL string for the Host header.
+fn host_from_url(url: &str) -> String {
+    url.replace("wss://", "")
+        .replace("ws://", "")
+        .split('/')
+        .next()
+        .unwrap_or("api.openai.com")
+        .to_string()
+}
+
+/// Derive the WebSocket URL from the configured API base.
+/// If `OPENAI_API_BASE` starts with `wss://`, use it directly.
+/// Otherwise derive from the HTTP base URL.
+fn derive_ws_url(api_base: &str) -> String {
+    if api_base.starts_with("wss://") || api_base.starts_with("ws://") {
+        // Already a WebSocket URL — ensure it ends with /responses.
+        if api_base.ends_with("/responses") {
+            api_base.to_string()
+        } else {
+            format!("{}/responses", api_base.trim_end_matches('/'))
+        }
+    } else {
+        // Convert HTTP base to WSS.
+        let base = api_base
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+        let base = base.trim_end_matches('/');
+        format!("{base}/responses")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stream processing types
 // ---------------------------------------------------------------------------
 
 /// A tool call collected from the response stream.
@@ -277,12 +352,6 @@ struct CollectedToolCall {
     call_id: String,
     name: String,
     arguments: serde_json::Value,
-}
-
-/// Result of processing one streaming response.
-struct StreamResult {
-    response_id: String,
-    tool_calls: Vec<CollectedToolCall>,
 }
 
 /// Configuration for the streaming task.
@@ -296,10 +365,145 @@ struct StreamConfig {
     label: String,
     /// Agent identity for tool execution (name, id). None for system-AI.
     agent_identity: Option<(String, String)>,
+    /// Reasoning effort level for GPT-5.4 (e.g. "low", "medium", "high").
+    reasoning_effort: Option<String>,
 }
 
-/// Run the streaming loop: reads commands, makes API calls, executes tool calls
-/// through the shared local tool runtime, and emits canonical SessionEvent values.
+// ---------------------------------------------------------------------------
+// WebSocket event processing
+// ---------------------------------------------------------------------------
+
+/// Send a JSON message over the WebSocket.
+async fn ws_send(ws: &mut WsStream, msg: &serde_json::Value) -> Result<(), String> {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let text = serde_json::to_string(msg).map_err(|e| format!("JSON serialize error: {e}"))?;
+    ws.send(Message::Text(text.into()))
+        .await
+        .map_err(|e| format!("WebSocket send error: {e}"))
+}
+
+/// Process WebSocket messages until a `response.completed` event arrives.
+/// Returns the list of tool calls (empty if the model produced only text).
+/// Emits text deltas, usage, and errors via `event_tx`.
+async fn process_events_until_done(
+    ws: &mut WsStream,
+    event_tx: &mpsc::Sender<SessionEvent>,
+    config: &StreamConfig,
+) -> Result<(String, Vec<CollectedToolCall>), String> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let mut response_id = String::new();
+    let mut tool_calls = Vec::new();
+
+    // Track function names from output_item.added events.
+    let mut pending_function_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    // Map item_id -> call_id.
+    let mut item_to_call_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    loop {
+        let msg = ws
+            .next()
+            .await
+            .ok_or_else(|| "WebSocket closed unexpectedly".to_string())?
+            .map_err(|e| format!("WebSocket read error: {e}"))?;
+
+        let text = match msg {
+            Message::Text(t) => t.to_string(),
+            Message::Ping(_) => continue,
+            Message::Pong(_) => continue,
+            Message::Close(_) => return Err("WebSocket closed by server".to_string()),
+            Message::Binary(_) | Message::Frame(_) => continue,
+        };
+
+        match parse_sse_data(&text) {
+            SseEvent::TextDelta(delta) => {
+                let _ = event_tx.send(SessionEvent::TextDelta(delta)).await;
+            }
+            SseEvent::FunctionCallStarted { call_id, item_id, name } => {
+                tracing::info!(
+                    "[{}] FN_START: name={} call_id={} item_id={}",
+                    config.label, name, call_id, item_id
+                );
+                if !name.is_empty() {
+                    pending_function_names.insert(call_id.clone(), name.clone());
+                    if !item_id.is_empty() && item_id != call_id {
+                        pending_function_names.insert(item_id.clone(), name);
+                        item_to_call_id.insert(item_id, call_id);
+                    }
+                }
+            }
+            SseEvent::FunctionCall {
+                call_id: raw_id,
+                name,
+                arguments,
+            } => {
+                let call_id = item_to_call_id.remove(&raw_id).unwrap_or(raw_id.clone());
+                let resolved_name = if name.is_empty() {
+                    pending_function_names.remove(&call_id)
+                        .or_else(|| pending_function_names.remove(&raw_id))
+                        .unwrap_or_default()
+                } else {
+                    pending_function_names.remove(&call_id);
+                    pending_function_names.remove(&raw_id);
+                    name
+                };
+                let args: serde_json::Value =
+                    serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
+                tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, resolved_name, call_id);
+                tool_calls.push(CollectedToolCall {
+                    call_id,
+                    name: resolved_name,
+                    arguments: args,
+                });
+            }
+            SseEvent::Completed { response_id: rid, usage } => {
+                response_id = rid;
+                if let Some(u) = usage {
+                    tracing::info!(
+                        "[{}] usage: in={}, out={}",
+                        config.label,
+                        u.input_tokens,
+                        u.output_tokens
+                    );
+                    let cost_usd = estimate_cost(u.input_tokens, u.output_tokens);
+                    let _ = event_tx
+                        .send(SessionEvent::Usage(UsageData {
+                            input_tokens: u.input_tokens,
+                            output_tokens: u.output_tokens,
+                            cost_usd,
+                        }))
+                        .await;
+                }
+                // response.completed — this response is done.
+                break;
+            }
+            SseEvent::Error(msg) => {
+                tracing::warn!("[{}] stream error: {}", config.label, msg);
+                let _ = event_tx.send(SessionEvent::Error(msg.clone())).await;
+                return Err(msg);
+            }
+            SseEvent::Ignored => {}
+        }
+    }
+
+    Ok((response_id, tool_calls))
+}
+
+// ---------------------------------------------------------------------------
+// Stream loop (persistent WebSocket event loop)
+// ---------------------------------------------------------------------------
+
+/// Run the streaming loop: reads commands, sends `response.create` events over
+/// a persistent WebSocket, executes tool calls through the shared local tool
+/// runtime, and emits canonical SessionEvent values.
+///
+/// The WebSocket is connected lazily on the first `SendUserTurn` and reconnected
+/// automatically if it drops (60 minute server-side timeout).
 async fn stream_loop(
     mut command_rx: mpsc::Receiver<SessionCommand>,
     event_tx: mpsc::Sender<SessionEvent>,
@@ -307,18 +511,34 @@ async fn stream_loop(
     initial_previous_response_id: Option<String>,
     shared_response_id: Arc<tokio::sync::Mutex<Option<String>>>,
 ) {
-    let client = reqwest::Client::new();
     let tools = compile_tools(&config.tool_sets);
+    let ws_url = derive_ws_url(&config.api_base);
     let mut previous_response_id = initial_previous_response_id;
+    let mut ws: Option<WsStream> = None;
+
     // Session-scoped document inspection tracking for System AI policy enforcement.
     let mut inspected_docs = std::collections::HashSet::new();
 
     while let Some(cmd) = command_rx.recv().await {
         match cmd {
             SessionCommand::SendUserTurn(text) => {
+                // Ensure we have a live WebSocket connection (lazy connect / reconnect).
+                if ws.is_none() {
+                    tracing::info!("[{}] connecting to {}", config.label, ws_url);
+                    match ws_connect(&ws_url, &config.api_key).await {
+                        Ok(stream) => ws = Some(stream),
+                        Err(e) => {
+                            tracing::error!("[{}] WS connect failed: {e}", config.label);
+                            let _ = event_tx.send(SessionEvent::Error(e)).await;
+                            continue;
+                        }
+                    }
+                }
+
                 let input = user_message_input(&text);
-                match run_with_tool_loop(
-                    &client,
+
+                match run_ws_tool_loop(
+                    ws.as_mut().unwrap(),
                     &config,
                     &tools,
                     &input,
@@ -334,11 +554,14 @@ async fn stream_loop(
                             previous_response_id = Some(resp_id.clone());
                             *shared_response_id.lock().await = Some(resp_id);
                         }
+                        // Turn completed (no more tool calls).
+                        let _ = event_tx.send(SessionEvent::Completed).await;
                     }
                     Err(e) => {
                         tracing::error!("[{}] stream error: {e}", config.label);
                         let _ = event_tx.send(SessionEvent::Error(e)).await;
-                        // Clear the response chain so the next turn starts fresh.
+                        // Drop the broken connection so we reconnect on next turn.
+                        ws = None;
                         previous_response_id = None;
                         *shared_response_id.lock().await = None;
                     }
@@ -346,8 +569,7 @@ async fn stream_loop(
             }
 
             SessionCommand::SendToolResult(_) => {
-                // Tool results are handled internally by run_with_tool_loop.
-                // External SendToolResult commands are not expected for OpenAI.
+                // Tool results are handled internally by run_ws_tool_loop.
                 tracing::warn!(
                     "[{}] ignoring external SendToolResult — tools are executed internally",
                     config.label
@@ -357,7 +579,22 @@ async fn stream_loop(
             SessionCommand::Compact => {
                 tracing::info!("[{}] compacting — resetting response chain", config.label);
 
-                // Start a new chain — the system prompt re-establishes context.
+                // Clear previous_response_id to break the chain.
+                previous_response_id = None;
+                *shared_response_id.lock().await = None;
+
+                // Ensure we have a live connection.
+                if ws.is_none() {
+                    match ws_connect(&ws_url, &config.api_key).await {
+                        Ok(stream) => ws = Some(stream),
+                        Err(e) => {
+                            tracing::error!("[{}] WS connect failed during compact: {e}", config.label);
+                            let _ = event_tx.send(SessionEvent::Error(e)).await;
+                            continue;
+                        }
+                    }
+                }
+
                 let input = compaction_input(
                     "Session compacted. Previous response chain cleared.",
                 );
@@ -367,26 +604,43 @@ async fn stream_loop(
                     &tools,
                     Some(&config.system_prompt),
                     None, // deliberately break the chain
+                    config.reasoning_effort.as_deref(),
                 );
 
-                match stream_response(&client, &config, &body, &event_tx).await {
-                    Ok(result) => {
-                        if !result.response_id.is_empty() {
-                            previous_response_id = Some(result.response_id.clone());
-                            *shared_response_id.lock().await = Some(result.response_id);
+                let ws_ref = ws.as_mut().unwrap();
+                match ws_send(ws_ref, &body).await {
+                    Ok(()) => {
+                        match process_events_until_done(ws_ref, &event_tx, &config).await {
+                            Ok((resp_id, _)) => {
+                                if !resp_id.is_empty() {
+                                    previous_response_id = Some(resp_id.clone());
+                                    *shared_response_id.lock().await = Some(resp_id);
+                                }
+                                let _ = event_tx.send(SessionEvent::CompactCompleted).await;
+                            }
+                            Err(e) => {
+                                tracing::error!("[{}] compaction error: {e}", config.label);
+                                let _ = event_tx.send(SessionEvent::Error(e)).await;
+                                ws = None;
+                            }
                         }
-                        let _ = event_tx.send(SessionEvent::CompactCompleted).await;
                     }
                     Err(e) => {
-                        tracing::error!("[{}] compaction error: {e}", config.label);
+                        tracing::error!("[{}] compaction send error: {e}", config.label);
                         let _ = event_tx.send(SessionEvent::Error(e)).await;
+                        ws = None;
                     }
                 }
             }
 
             SessionCommand::Shutdown => {
                 tracing::info!("[{}] shutdown requested", config.label);
-                let _ = event_tx.send(SessionEvent::Completed).await;
+                // Close the WebSocket gracefully.
+                if let Some(ref mut stream) = ws {
+                    use futures_util::SinkExt;
+                    use tokio_tungstenite::tungstenite::Message;
+                    let _ = stream.send(Message::Close(None)).await;
+                }
                 break;
             }
         }
@@ -395,10 +649,10 @@ async fn stream_loop(
     tracing::info!("[{}] stream loop exited", config.label);
 }
 
-/// Send a request and loop on tool calls until the model produces a final response.
-/// Tool calls are executed through the shared local tool runtime.
-async fn run_with_tool_loop(
-    client: &reqwest::Client,
+/// Send a `response.create` and loop on tool calls over the persistent WebSocket
+/// until the model produces a final response (no tool calls).
+async fn run_ws_tool_loop(
+    ws: &mut WsStream,
     config: &StreamConfig,
     tools: &[serde_json::Value],
     initial_input: &serde_json::Value,
@@ -410,37 +664,53 @@ async fn run_with_tool_loop(
     let mut current_input = initial_input.clone();
     let mut prev_id = initial_prev_id.map(|s| s.to_string());
     let mut iteration = 0;
-    const MAX_TOOL_ITERATIONS: u32 = 20;
 
     loop {
         iteration += 1;
         if iteration > MAX_TOOL_ITERATIONS {
-            tracing::warn!("[{}] hit max tool iterations ({})", config.label, MAX_TOOL_ITERATIONS);
+            tracing::warn!(
+                "[{}] hit max tool iterations ({})",
+                config.label,
+                MAX_TOOL_ITERATIONS
+            );
             break;
         }
 
+        // Build and send response.create over the WebSocket.
         let body = build_request_body(
             &config.model,
             &current_input,
             tools,
             if iteration == 1 { system_prompt } else { None },
             prev_id.as_deref(),
+            config.reasoning_effort.as_deref(),
         );
 
-        let result = stream_response(client, config, &body, event_tx).await?;
+        tracing::debug!(
+            "[{}] response.create (model={}, iteration={})",
+            config.label,
+            config.model,
+            iteration
+        );
 
-        if !result.response_id.is_empty() {
-            prev_id = Some(result.response_id.clone());
+        ws_send(ws, &body).await?;
+
+        // Process events until response.completed.
+        let (response_id, tool_calls) =
+            process_events_until_done(ws, event_tx, config).await?;
+
+        if !response_id.is_empty() {
+            prev_id = Some(response_id.clone());
         }
 
-        if result.tool_calls.is_empty() {
-            // No tool calls — model produced a final response.
-            return Ok(result.response_id);
+        if tool_calls.is_empty() {
+            // No tool calls — model produced a final response. Turn is done.
+            return Ok(response_id);
         }
 
         // Execute tool calls through the shared local tool runtime.
         let mut tool_outputs = Vec::new();
-        for tc in &result.tool_calls {
+        for tc in &tool_calls {
             // Emit ToolCallRequested so the supervisor can log it.
             let _ = event_tx
                 .send(SessionEvent::ToolCallRequested(ToolCallRequest {
@@ -469,7 +739,7 @@ async fn run_with_tool_loop(
             tool_outputs.push(tool_result_input(&tc.call_id, &tool_result.output));
         }
 
-        // Build combined tool results as input for the next request.
+        // Build combined tool results as input for the next response.create.
         let mut combined_results = Vec::new();
         for output in &tool_outputs {
             if let Some(arr) = output.as_array() {
@@ -503,163 +773,6 @@ async fn execute_tool_call(
     }
 }
 
-/// Make a single streaming request and process SSE events.
-/// Returns a StreamResult with the response ID and any tool calls collected.
-/// Text deltas, usage, completion, and errors are emitted via event_tx.
-/// Tool calls are collected and returned — the caller handles execution.
-async fn stream_response(
-    client: &reqwest::Client,
-    config: &StreamConfig,
-    body: &serde_json::Value,
-    event_tx: &mpsc::Sender<SessionEvent>,
-) -> Result<StreamResult, String> {
-    let url = format!("{}/responses", config.api_base);
-
-    tracing::debug!(
-        "[{}] POST {} (model={})",
-        config.label,
-        url,
-        config.model
-    );
-
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Content-Type", "application/json")
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP error: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {status}: {body_text}"));
-    }
-
-    let mut result = StreamResult {
-        response_id: String::new(),
-        tool_calls: Vec::new(),
-    };
-
-    // True SSE streaming: read chunks as they arrive, split into lines,
-    // and process each "data: " line incrementally.
-    use futures_util::StreamExt;
-    let mut byte_stream = resp.bytes_stream();
-    let mut line_buf = String::new();
-    let mut done = false;
-    // Track function names from output_item.added events (name arrives before arguments).
-    let mut pending_function_names: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    // Map item_id → call_id (fn_args_done has item_id, tool result needs call_id).
-    let mut item_to_call_id: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-
-    while let Some(chunk) = byte_stream.next().await {
-        let chunk = chunk.map_err(|e| format!("Stream read error: {e}"))?;
-        line_buf.push_str(&String::from_utf8_lossy(&chunk));
-
-        // Process all complete lines in the buffer.
-        while let Some(newline_pos) = line_buf.find('\n') {
-            let line: String = line_buf.drain(..=newline_pos).collect();
-            let line = line.trim();
-
-            if line.is_empty() || line.starts_with(':') {
-                continue;
-            }
-
-            if !line.starts_with("data: ") {
-                continue;
-            }
-
-            let data = &line["data: ".len()..];
-
-            if data == "[DONE]" {
-                done = true;
-                break;
-            }
-
-            match parse_sse_data(data) {
-                SseEvent::TextDelta(delta) => {
-                    let _ = event_tx.send(SessionEvent::TextDelta(delta)).await;
-                }
-                SseEvent::FunctionCallStarted { call_id, item_id, name } => {
-                    tracing::info!("[{}] FN_START: name={} call_id={} item_id={}", config.label, name, call_id, item_id);
-                    if !name.is_empty() {
-                        pending_function_names.insert(call_id.clone(), name.clone());
-                        if !item_id.is_empty() && item_id != call_id {
-                            pending_function_names.insert(item_id.clone(), name);
-                            item_to_call_id.insert(item_id, call_id);
-                        }
-                    }
-                }
-                SseEvent::FunctionCall {
-                    call_id: raw_id,
-                    name,
-                    arguments,
-                } => {
-                    // fn_args_done gives us item_id, but tool results need call_id.
-                    // Resolve the real call_id via our mapping.
-                    let call_id = item_to_call_id.remove(&raw_id).unwrap_or(raw_id.clone());
-                    // Use the name from the started event if the done event doesn't have it.
-                    let resolved_name = if name.is_empty() {
-                        pending_function_names.remove(&call_id)
-                            .or_else(|| pending_function_names.remove(&raw_id))
-                            .unwrap_or_default()
-                    } else {
-                        pending_function_names.remove(&call_id);
-                        pending_function_names.remove(&raw_id);
-                        name
-                    };
-                    let args: serde_json::Value =
-                        serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
-                    tracing::info!("[{}] TOOL_CALL: {} ({})", config.label, resolved_name, call_id);
-                    result.tool_calls.push(CollectedToolCall {
-                        call_id,
-                        name: resolved_name,
-                        arguments: args,
-                    });
-                }
-                SseEvent::Completed { response_id: rid, usage } => {
-                    result.response_id = rid;
-                    if let Some(u) = usage {
-                        tracing::info!(
-                            "[{}] usage: in={}, out={}",
-                            config.label,
-                            u.input_tokens,
-                            u.output_tokens
-                        );
-                        let cost_usd = estimate_cost(u.input_tokens, u.output_tokens);
-                        let _ = event_tx
-                            .send(SessionEvent::Usage(UsageData {
-                                input_tokens: u.input_tokens,
-                                output_tokens: u.output_tokens,
-                                cost_usd,
-                            }))
-                            .await;
-                    }
-                }
-                SseEvent::Error(msg) => {
-                    tracing::warn!("[{}] stream error: {}", config.label, msg);
-                    let _ = event_tx.send(SessionEvent::Error(msg)).await;
-                }
-                SseEvent::Ignored => {}
-            }
-        }
-
-        if done {
-            break;
-        }
-    }
-
-    // Emit Completed only if no tool calls need processing.
-    if result.tool_calls.is_empty() {
-        let _ = event_tx.send(SessionEvent::Completed).await;
-    }
-
-    Ok(result)
-}
-
 /// Compile tools from the tool sets specified in the profile.
 fn compile_tools(tool_sets: &[String]) -> Vec<serde_json::Value> {
     let mut all_tools = Vec::new();
@@ -685,13 +798,13 @@ fn estimate_cost(input_tokens: u32, output_tokens: u32) -> f64 {
 
 /// OpenAI Responses API session adapter.
 ///
-/// Streams responses via HTTP SSE, compiles shared tool catalog into OpenAI
-/// function tools, and implements hybrid resume with local checkpoint +
-/// `previous_response_id`.
+/// Streams responses via a persistent WebSocket connection to the Responses API,
+/// compiles shared tool catalog into OpenAI function tools, and implements
+/// hybrid resume with local checkpoint + `previous_response_id`.
 pub struct OpenAiAdapter {
     /// Model to use (e.g. "gpt-5.4").
     model: String,
-    /// API base URL.
+    /// API base URL (HTTP — used to derive WebSocket URL).
     api_base: String,
     /// Command sender — used by send_command().
     command_tx: Option<mpsc::Sender<SessionCommand>>,
@@ -717,6 +830,8 @@ pub struct OpenAiAdapter {
     agent_identity: Option<(String, String)>,
     /// Session owner for checkpoint metadata.
     session_owner: SessionOwner,
+    /// Reasoning effort level (e.g. "medium"). None to omit.
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiAdapter {
@@ -746,6 +861,7 @@ impl OpenAiAdapter {
             api_key_env: API_KEY_ENV.to_string(),
             agent_identity: Some((agent_name.to_string(), agent_id.to_string())),
             session_owner: SessionOwner::Agent(agent_name.to_string()),
+            reasoning_effort: Some("medium".to_string()),
         }
     }
 
@@ -773,6 +889,7 @@ impl OpenAiAdapter {
             api_key_env: API_KEY_ENV.to_string(),
             agent_identity: None,
             session_owner: SessionOwner::SystemAi,
+            reasoning_effort: Some("medium".to_string()),
         }
     }
 
@@ -838,6 +955,7 @@ impl SessionAdapter for OpenAiAdapter {
             tool_sets: self.tool_sets.clone(),
             label: self.label.clone(),
             agent_identity: self.agent_identity.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
         };
 
         // Spawn the streaming task with shared response ID for shutdown access.
@@ -1009,21 +1127,38 @@ mod tests {
     fn build_request_includes_tools_and_system() {
         let tools = vec![serde_json::json!({"type": "function", "name": "test", "parameters": {}})];
         let input = user_message_input("hello");
-        let body = build_request_body("gpt-5.4", &input, &tools, Some("You are helpful"), None);
+        let body = build_request_body("gpt-5.4", &input, &tools, Some("You are helpful"), None, None);
 
         assert_eq!(body["model"], "gpt-5.4");
         assert_eq!(body["stream"], true);
         assert_eq!(body["instructions"], "You are helpful");
         assert!(body["tools"].as_array().unwrap().len() == 1);
         assert!(body.get("previous_response_id").is_none());
+        assert_eq!(body["type"], "response.create");
     }
 
     #[test]
     fn build_request_with_previous_response_id() {
         let input = user_message_input("continue");
-        let body = build_request_body("gpt-5.4", &input, &[], None, Some("resp_abc"));
+        let body = build_request_body("gpt-5.4", &input, &[], None, Some("resp_abc"), None);
 
         assert_eq!(body["previous_response_id"], "resp_abc");
+    }
+
+    #[test]
+    fn build_request_with_reasoning_effort() {
+        let input = user_message_input("think hard");
+        let body = build_request_body("gpt-5.4", &input, &[], None, None, Some("medium"));
+
+        assert_eq!(body["reasoning"]["effort"], "medium");
+    }
+
+    #[test]
+    fn build_request_without_reasoning_effort() {
+        let input = user_message_input("quick");
+        let body = build_request_body("gpt-5.4", &input, &[], None, None, None);
+
+        assert!(body.get("reasoning").is_none());
     }
 
     #[test]
@@ -1069,11 +1204,43 @@ mod tests {
         assert_eq!(adapter.label, "openai:Alice");
         assert_eq!(adapter.model, "gpt-5.4");
         assert_eq!(adapter.agent_identity, Some(("Alice".to_string(), "uuid-123".to_string())));
+        assert_eq!(adapter.reasoning_effort, Some("medium".to_string()));
     }
 
     #[test]
     fn adapter_for_system_ai_sets_label() {
         let adapter = OpenAiAdapter::for_system_ai("gpt-5.4", String::new(), vec![]);
         assert_eq!(adapter.label, "openai:system-ai");
+        assert_eq!(adapter.reasoning_effort, Some("medium".to_string()));
+    }
+
+    #[test]
+    fn derive_ws_url_from_http_base() {
+        assert_eq!(
+            derive_ws_url("https://api.openai.com/v1"),
+            "wss://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn derive_ws_url_from_wss_base() {
+        assert_eq!(
+            derive_ws_url("wss://api.openai.com/v1/responses"),
+            "wss://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn derive_ws_url_from_wss_base_without_path() {
+        assert_eq!(
+            derive_ws_url("wss://api.openai.com/v1"),
+            "wss://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn host_extraction() {
+        assert_eq!(host_from_url("wss://api.openai.com/v1/responses"), "api.openai.com");
+        assert_eq!(host_from_url("wss://custom.host:8080/v1/responses"), "custom.host:8080");
     }
 }
