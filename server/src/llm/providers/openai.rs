@@ -441,7 +441,7 @@ async fn process_events_until_done(
     loop {
         // Timeout after 120 seconds of no WebSocket messages — reconnect on next turn.
         let msg = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_secs(30),
             ws.next(),
         )
             .await
@@ -939,7 +939,7 @@ impl OpenAiAdapter {
             api_key_env: API_KEY_ENV.to_string(),
             agent_identity: Some((agent_name.to_string(), agent_id.to_string())),
             session_owner: SessionOwner::Agent(agent_name.to_string()),
-            reasoning_effort: Some("medium".to_string()),
+            reasoning_effort: Some("low".to_string()),
         }
     }
 
@@ -967,7 +967,7 @@ impl OpenAiAdapter {
             api_key_env: API_KEY_ENV.to_string(),
             agent_identity: None,
             session_owner: SessionOwner::SystemAi,
-            reasoning_effort: Some("medium".to_string()),
+            reasoning_effort: Some("low".to_string()),
         }
     }
 
@@ -1226,9 +1226,9 @@ mod tests {
     #[test]
     fn build_request_with_reasoning_effort() {
         let input = user_message_input("think hard");
-        let body = build_request_body("gpt-5.4", &input, &[], None, None, Some("medium"));
+        let body = build_request_body("gpt-5.4", &input, &[], None, None, Some("low"));
 
-        assert_eq!(body["reasoning"]["effort"], "medium");
+        assert_eq!(body["reasoning"]["effort"], "low");
     }
 
     #[test]
@@ -1282,14 +1282,14 @@ mod tests {
         assert_eq!(adapter.label, "openai:Alice");
         assert_eq!(adapter.model, "gpt-5.4");
         assert_eq!(adapter.agent_identity, Some(("Alice".to_string(), "uuid-123".to_string())));
-        assert_eq!(adapter.reasoning_effort, Some("medium".to_string()));
+        assert_eq!(adapter.reasoning_effort, Some("low".to_string()));
     }
 
     #[test]
     fn adapter_for_system_ai_sets_label() {
         let adapter = OpenAiAdapter::for_system_ai("gpt-5.4", String::new(), vec![]);
         assert_eq!(adapter.label, "openai:system-ai");
-        assert_eq!(adapter.reasoning_effort, Some("medium".to_string()));
+        assert_eq!(adapter.reasoning_effort, Some("low".to_string()));
     }
 
     #[test]
