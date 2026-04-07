@@ -1727,7 +1727,7 @@ pub fn apply_mcp_actions_system(
                     .values()
                     .find(|l| l.name == "bounty_board")
                     .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
-                if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard) {
+                if !at_board && !matches!(*goal, AgentGoal::InteractingWithBoard | AgentGoal::ExecutingBounty(_) | AgentGoal::GoingToBoard | AgentGoal::ReturningToBoard(_)) {
                     thought.0 =
                         "Must be at the bounty board to claim a bounty! Go there first.".into();
                 } else if bounty_registry.tokens.values().any(|b| {
@@ -2207,7 +2207,7 @@ pub fn apply_mcp_actions_system(
                         item_name: item_name.to_string(),
                         building_entity: *bld_entity,
                     });
-                    thought.0 = format!("Depositing {} into {}.", item_name, bld_name);
+                    thought.0 = format!("Depositing {} into {} (you are currently at {}).", item_name, bld_name, bld_name);
 
                     event_log.push(LogEvent {
                         tick: tick.0,
