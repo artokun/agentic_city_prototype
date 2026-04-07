@@ -79,6 +79,10 @@ pub fn spawn_sessions_system(
     server_port: Option<Res<crate::network::ws::ServerPort>>,
     proc_registry: Option<Res<crate::process_manager::ProcessRegistryRes>>,
 ) {
+    // Skip if no profiles configured (e.g. test harness with empty LlmConfig).
+    if llm_config.profiles.is_empty() {
+        return;
+    }
     let port = server_port.map(|p| p.0).unwrap_or(8080);
     let process_registry = proc_registry.map(|r| r.0.clone()).unwrap_or_default();
     for (entity, agent_id, name, personality, profile_ref) in &agents {

@@ -20,12 +20,22 @@ impl Plugin for LlmPlugin {
     }
 }
 
-/// Tracks how many event log entries we've already persisted.
-#[derive(Resource, Default)]
-struct PersistenceCursor(usize);
+/// Tracks the tick of the last persisted event to avoid duplicates.
+/// Using tick instead of deque position handles the ring buffer correctly —
+/// new events always have ticks >= the last persisted tick.
+#[derive(Resource)]
+struct PersistenceCursor {
+    last_tick: u64,
+}
+
+impl Default for PersistenceCursor {
+    fn default() -> Self {
+        Self { last_tick: 0 }
+    }
+}
 
 /// System: persist new event log entries to the supervisor's checkpoint store.
-/// Uses a cursor to avoid re-appending entries that were already written.
+/// Tracks by tick value so ring buffer evictions don't cause missed entries.
 fn persist_session_events(
     event_log: Res<crate::agents::event_log::AgentEventLog>,
     supervisor: Option<ResMut<supervisor::SessionSupervisor>>,
@@ -33,16 +43,11 @@ fn persist_session_events(
 ) {
     let Some(mut supervisor) = supervisor else { return };
 
-    let current_len = event_log.entries.len();
-    if cursor.0 >= current_len {
-        // Event log was drained (ring buffer popped older entries) — reset cursor.
-        if cursor.0 > current_len {
-            cursor.0 = current_len;
+    for entry in &event_log.entries {
+        if entry.tick <= cursor.last_tick {
+            continue;
         }
-        return;
-    }
 
-    for entry in event_log.entries.iter().skip(cursor.0) {
         let owner = if entry.agent == "SYSTEM" {
             types::SessionOwner::SystemAi
         } else {
@@ -60,7 +65,6 @@ fn persist_session_events(
         };
 
         supervisor.log_event(&owner, &event);
+        cursor.last_tick = entry.tick;
     }
-
-    cursor.0 = current_len;
 }

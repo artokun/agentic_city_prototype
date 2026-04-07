@@ -130,6 +130,10 @@ pub fn spawn_system_ai_session_system(
     if system_ai.prompt_tx.is_some() || system_ai.spawning {
         return;
     }
+    // Skip if no profiles configured (e.g. test harness with empty LlmConfig).
+    if llm_config.profiles.is_empty() {
+        return;
+    }
 
     system_ai.spawning = true;
 
