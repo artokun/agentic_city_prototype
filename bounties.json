@@ -1,7 +1,7 @@
 [
   {
     "title": "Write a field report on the city market",
-    "instructions": "Go to the market, use look_around to inspect the inventory and prices. Then use create_document (service='market_report.md', text='<your findings in markdown>') to write a detailed report. Return to the bounty board, use deposit_item with service='doc:market_report.md' to deposit the document, then use complete_bounty.",
+    "instructions": "Step 1: Go to the market using go_to_service with building='market'. Step 2: Use look_around when you arrive to see inventory and prices. Step 3: Use create_document (service='market_report.md', text='<your detailed findings in markdown>') to write your report. Step 4: Go to the bounty board using go_to_board. Step 5: When at the board, use deposit_item with service='doc:market_report.md' to deposit the document. Step 6: Use deposit_item with service='bounty_token' to deposit your token. Step 7: Use complete_bounty to submit for review.",
     "hidden_criteria": "GM: STRICT — verify 'document' items are deposited at the BOUNTY BOARD's inventory (not the agent's). If docs are in agent inventory but not the board, REJECT and tell them to deposit_item first. The document should contain observations about the market. If no document at the board, REJECT.",
     "objective": "WorkAtBuilding",
     "reward": 8,
@@ -9,16 +9,16 @@
   },
   {
     "title": "Supply run: deliver rations to the hotel",
-    "instructions": "Go to the market or warehouse and use take_item with service='rations' to pick up rations. Then go to the hotel and use deposit_item with service='rations' to stock the hotel. Return to the bounty board and use complete_bounty.",
-    "hidden_criteria": "GM: verify that the hotel's inventory now contains at least 1 rations that were not there before, OR the agent's action log shows a deposit_item of rations at the hotel. If the agent just visited without depositing, REJECT.",
+    "instructions": "IMPORTANT: You must deposit the rations AT THE HOTEL, not at the bounty board. Step 1: Go to the warehouse using go_to_service with building='warehouse'. Step 2: Use take_item with service='rations' to pick up rations. Step 3: Go to the HOTEL using go_to_service with building='hotel'. Step 4: WHILE AT THE HOTEL, use deposit_item with service='rations' — the response will say 'Depositing rations into hotel'. If it says 'bounty_board' you are at the WRONG building. Step 5: AFTER depositing at the hotel, go to the bounty board using go_to_board. Step 6: At the board, deposit your bounty_token, then use complete_bounty.",
+    "hidden_criteria": "GM: verify that the hotel's inventory now contains at least 1 rations that were not there before, OR the agent's action log shows a deposit_item of rations at the hotel. If the agent deposited rations at the bounty_board instead of the hotel, REJECT and tell them they delivered to the wrong building. If the agent just visited without depositing, REJECT.",
     "objective": "WorkAtBuilding",
     "reward": 5,
     "claim_items": []
   },
   {
     "title": "Broker a trade deal",
-    "instructions": "Find another agent and start a face-to-face conversation (start_conversation). Negotiate and complete a trade using offer_trade (set text=items you offer, service=items you want). Both sides must agree. After the trade completes, return to the bounty board and use complete_bounty.",
-    "hidden_criteria": "GM: verify the agent completed a successful trade after claiming this bounty. Look for 'Traded [...]' entries in the action log with another named agent. Simply starting a conversation is NOT enough — an actual item swap must have occurred. If no trade log entry exists, REJECT.",
+    "instructions": "You MUST complete an actual item trade, not just have a conversation. Step 1: Find another agent nearby and use start_conversation with agent=<their name>. Step 2: Use offer_trade with text=<items you offer, comma-separated> and service=<items you want, comma-separated>. Example: offer_trade text='muffin' service='rations'. Step 3: Wait for them to accept_trade. If rejected, try a different offer. Step 4: After the trade completes (you'll see 'Traded [items] to [agent] for [items]'), go to the bounty board. Step 5: Deposit your bounty_token and use complete_bounty. NOTE: Simply talking to someone is NOT enough — you must use offer_trade and have it accepted.",
+    "hidden_criteria": "GM: verify the agent completed a successful trade after claiming this bounty. Look for 'Traded [...]' entries in the action log with another named agent. Simply starting a conversation is NOT enough — an actual item swap via offer_trade/accept_trade must have occurred. If no trade log entry exists, REJECT and explain that talking is not trading.",
     "objective": "WorkAtBuilding",
     "reward": 6,
     "claim_items": [["muffin", 2]]

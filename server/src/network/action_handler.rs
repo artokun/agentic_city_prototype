@@ -2207,7 +2207,7 @@ pub fn apply_mcp_actions_system(
                         item_name: item_name.to_string(),
                         building_entity: *bld_entity,
                     });
-                    thought.0 = format!("Depositing {} into {} (you are currently at {}).", item_name, bld_name, bld_name);
+                    thought.0 = format!("Deposited {} at {} (your position: ({},{})). If this is the WRONG building, you need to go_to_service to the correct one first!", item_name, bld_name, pos.x, pos.y);
 
                     event_log.push(LogEvent {
                         tick: tick.0,
@@ -2216,7 +2216,7 @@ pub fn apply_mcp_actions_system(
                         text: format!("DEPOSIT: {} → {}", item_name, bld_name),
                     });
                 } else {
-                    thought.0 = "ERROR: Must be at a building entrance to deposit items. Go to a building first.".into();
+                    thought.0 = format!("ERROR: You are not at any building entrance (your position: ({},{})). Walk to the building first using go_to_service, wait to arrive, then deposit.", pos.x, pos.y);
                 }
             }
 
@@ -2232,7 +2232,7 @@ pub fn apply_mcp_actions_system(
                         item_name: item_name.to_string(),
                         building_entity: *bld_entity,
                     });
-                    thought.0 = format!("Taking {} from {}.", item_name, bld_name);
+                    thought.0 = format!("Taking {} from {} (position: ({},{}))", item_name, bld_name, pos.x, pos.y);
 
                     event_log.push(LogEvent {
                         tick: tick.0,
