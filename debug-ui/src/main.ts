@@ -463,49 +463,6 @@ form?.addEventListener("submit", async (e) => {
     status.style.color = "#f44336";
   }
 });
-nt: string; }
-let libraryCache: LibraryDoc[] = [];
-
-async function fetchLibrary() {
-  try {
-    const resp = await fetch("/api/library");
-    if (resp.ok) {
-      libraryCache = await resp.json();
-      renderLibrary();
-    }
-  } catch { /* ignore */ }
-}
-
-function renderLibrary() {
-  if (libraryCache.length === 0) {
-    libraryPanel.innerHTML = '<span class="muted">No documents archived yet</span>';
-    return;
-  }
-  let html = "";
-  for (const doc of libraryCache) {
-    html += `<div class="lib-entry" data-lib-title="${escapeHtml(doc.title)}" data-lib-author="${escapeHtml(doc.author)}">
-      <div class="lib-title">${escapeHtml(doc.title)}</div>
-      <div class="lib-meta">by ${escapeHtml(doc.author)} — ${escapeHtml(doc.bounty)}</div>
-    </div>`;
-  }
-  libraryPanel.innerHTML = html;
-}
-
-libraryPanel.addEventListener("click", (event) => {
-  const entry = (event.target as HTMLElement).closest(".lib-entry") as HTMLElement | null;
-  if (!entry) return;
-  const title = entry.dataset.libTitle ?? "";
-  const author = entry.dataset.libAuthor ?? "";
-  const doc = libraryCache.find(d => d.title === title && d.author === author);
-  if (doc) {
-    docTitleEl.textContent = `${doc.title} (by ${doc.author})`;
-    docContentEl.textContent = doc.content;
-    docModal.style.display = "flex";
-  }
-});
-
-fetchLibrary();
-setInterval(fetchLibrary, 5000);
 
 agentCardsEl.addEventListener("click", async (event) => {
   const target = event.target as HTMLElement | null;
@@ -522,52 +479,5 @@ agentCardsEl.addEventListener("click", async (event) => {
     docTitleEl.textContent = title;
     docContentEl.textContent = err instanceof Error ? err.message : String(err);
     docModal.style.display = "flex";
-  }
-});
-
-// Contract creation form
-const form = document.getElementById("contract-form") as HTMLFormElement;
-const status = document.getElementById("contract-status")!;
-
-form?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const data = new FormData(form);
-  const title = data.get("title") as string;
-  const description = data.get("description") as string;
-  const reward = parseInt(data.get("reward") as string);
-  const ttl = parseInt(data.get("ttl") as string);
-
-  const steps: any[] = [];
-  const descLower = description.toLowerCase();
-  if (descLower.includes("google") || descLower.includes("search")) {
-    steps.push({ description: "Spend 1g at Google", type: "spend_gold", building: "google", amount: 1 });
-    steps.push({ description: "Perform web search", type: "web_search", min_count: 1 });
-  }
-  if (descLower.includes("report") || descLower.includes("document") || descLower.includes("write")) {
-    steps.push({ description: "Produce document", type: "produce_document", title: `${title.replace(/\s+/g, "_").toLowerCase()}.md` });
-  }
-  if (descLower.includes("visit") || descLower.includes("go to")) {
-    const buildings = ["cafe", "library", "warehouse", "shop", "restaurant", "office", "google", "hotel"];
-    for (const b of buildings) {
-      if (descLower.includes(b)) {
-        steps.push({ description: `Visit ${b}`, type: "visit_building", building: b });
-      }
-    }
-  }
-  steps.push({ description: "Return to bounty board", type: "return_to_board" });
-
-  try {
-    const resp = await fetch("/api/contracts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, description, reward_gold: reward, ttl_ticks: ttl, steps }),
-    });
-    const result = await resp.json();
-    status.textContent = `Created: ${result.title} (${result.step_count} steps)`;
-    status.style.color = "#4caf50";
-    setTimeout(() => { status.textContent = ""; }, 3000);
-  } catch (err) {
-    status.textContent = `Error: ${err}`;
-    status.style.color = "#f44336";
   }
 });
