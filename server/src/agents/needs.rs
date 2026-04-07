@@ -80,6 +80,49 @@ pub fn needs_decay_system(
     }
 }
 
+/// System: auto-consume food when hunger drops below critical threshold.
+/// Safety net so agents don't starve while waiting for AI decisions or status updates.
+pub fn auto_eat_system(
+    mut agents: Query<
+        (&mut Needs, &mut crate::items::Inventory, &crate::agents::components::AgentName),
+        Without<crate::world::hospital::Incapacitated>,
+    >,
+    mut event_log: ResMut<crate::agents::event_log::AgentEventLog>,
+    tick: Res<crate::tick::TickCount>,
+) {
+    use crate::items::ItemType;
+
+    for (mut needs, mut inv, name) in &mut agents {
+        if needs.hunger >= 15.0 {
+            continue;
+        }
+
+        // Try to eat the best food available.
+        let food_priority = [
+            (ItemType::Sandwich, 60.0),
+            (ItemType::Rations, 50.0),
+            (ItemType::Soup, 45.0),
+            (ItemType::Muffin, 30.0),
+        ];
+
+        for (item, hunger_boost) in &food_priority {
+            if inv.has(*item, 1) {
+                inv.remove(*item, 1);
+                needs.hunger = (needs.hunger + hunger_boost).min(100.0);
+                tracing::info!("[AUTO-EAT] {} auto-consumed {} (hunger was {:.0}, now {:.0})",
+                    name.0, item, needs.hunger - hunger_boost, needs.hunger);
+                event_log.push(crate::agents::event_log::LogEvent {
+                    tick: tick.0,
+                    agent: name.0.clone(),
+                    kind: crate::agents::event_log::LogKind::System,
+                    text: format!("Auto-consumed {} (hunger critical)", item),
+                });
+                break;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

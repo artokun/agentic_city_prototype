@@ -44,6 +44,7 @@ impl Plugin for AgentPlugin {
                 (
                     (
                         needs::needs_decay_system,
+                        needs::auto_eat_system,
                         movement::movement_system,
                         actions::action_timer_system,
                         perception::tracking_update_system,
