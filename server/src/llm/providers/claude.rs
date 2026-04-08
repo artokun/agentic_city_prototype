@@ -289,7 +289,8 @@ impl ClaudeAdapter {
         // The system AI (GM) needs Bash/Read for document inspection, so skip for it.
         if !self.is_system_ai {
             args.push("--disallowedTools".to_string());
-            args.push("Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,NotebookEdit".to_string());
+            // Space-separated list: each tool name is a separate token.
+            args.push("Bash Read Write Edit Glob Grep WebFetch WebSearch NotebookEdit Agent Skill".to_string());
         }
 
         // System AI gets a settings file for autoCompactWindow.
