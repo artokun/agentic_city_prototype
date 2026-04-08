@@ -24,7 +24,7 @@ pub fn movement_system(
     )>,
     structures: Query<(&SpriteType, &Entrance), With<StructureId>>,
 ) {
-    for (_name, mut pos, mut anim, mut move_timer, path, active_convo, mut action_log) in
+    for (_name, mut pos, mut anim, mut move_timer, path, _active_convo, mut action_log) in
         &mut agents
     {
         // Agents can walk and talk simultaneously.

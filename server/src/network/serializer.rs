@@ -88,7 +88,7 @@ pub fn serialize_world(
                 tracking,
                 known_locs,
                 action,
-                active_convo,
+                _active_convo,
             )| {
                 let (convo_log, cards, ctx_window, agent_cost, doc_inv, contained) = agent_extras
                     .get(entity)

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::items::ItemType;
 use crate::tick::TickCount;
-use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyTokenStore};
 
 /// Whether initial bounties have been seeded.
 #[derive(Resource)]

@@ -18,6 +18,7 @@ const SEND_RANGE: i32 = 2;
 
 /// A single message stored in an agent's mailbox.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MailMessage {
     /// Display name of the sender.
     pub sender: String,

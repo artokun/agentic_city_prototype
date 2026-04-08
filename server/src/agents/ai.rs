@@ -8,7 +8,6 @@ use crate::agents::components::*;
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
 use crate::agents::perception::KnownLocations;
-use crate::agents::social::Relationships;
 use crate::agents::token_tracking::TokenEventQueue;
 use crate::items::Inventory;
 use crate::llm::config::LlmConfig;
@@ -24,11 +23,118 @@ use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId
 use super::actions::ActionTimer;
 use super::personality::Personality;
 
+fn build_location_tools(
+    inside_building_name: Option<&str>,
+    interacting_with_board: bool,
+    on_shift: bool,
+    executing_bounty: bool,
+) -> Vec<&'static str> {
+    let mut location_tools: Vec<&'static str> = vec!["look_around", "check_known_locations"];
+
+    if !on_shift {
+        location_tools.push("work_shift");
+    }
+
+    match inside_building_name {
+        Some("cafe") => {
+            location_tools.push("buy_muffin");
+            location_tools.push("buy_coffee");
+            location_tools.push("hang_out");
+        }
+        Some("market") => {
+            location_tools.push("buy_sandwich");
+            location_tools.push("buy_rations");
+            location_tools.push("window_shop");
+        }
+        Some("hotel") => {
+            location_tools.push("sleep_hotel");
+            location_tools.push("relax_in_lobby");
+        }
+        Some("google") => {
+            location_tools.push("search_internet");
+        }
+        Some("apartments") => {
+            location_tools.push("sleep_at_home");
+        }
+        Some("library") => {
+            location_tools.push("read_library");
+            location_tools.push("inspect");
+            location_tools.push("copy_document");
+        }
+        Some("bounty_board") => {
+            location_tools.push("claim_bounty");
+            location_tools.push("redeem_paycheck");
+        }
+        _ => {}
+    }
+
+    if interacting_with_board {
+        if !location_tools.contains(&"claim_bounty") {
+            location_tools.push("claim_bounty");
+        }
+        let redeem_hint = "redeem_paycheck";
+        if !location_tools.contains(&redeem_hint) {
+            location_tools.push(redeem_hint);
+        }
+    }
+
+    if on_shift {
+        location_tools.push("leave_shift");
+    }
+
+    if executing_bounty {
+        location_tools.push("complete_bounty");
+    }
+
+    location_tools
+}
+
+/// Tracks exponential backoff state for failed spawn attempts.
+#[derive(Default)]
+pub struct SpawnBackoff {
+    /// Number of consecutive failures.
+    pub failures: u32,
+    /// Tick at which the next spawn attempt is allowed.
+    pub retry_after_tick: u64,
+}
+
+impl SpawnBackoff {
+    /// Maximum number of retries before giving up (logs once and stops).
+    pub const MAX_RETRIES: u32 = 8;
+    /// Base delay in ticks (doubles each failure: 5, 10, 20, 40, ...).
+    pub const BASE_DELAY_TICKS: u64 = 5;
+    /// Absolute cap on delay (5 minutes at 1 tick/sec).
+    pub const MAX_DELAY_TICKS: u64 = 300;
+
+    pub fn record_failure(&mut self, current_tick: u64) {
+        self.failures += 1;
+        let delay = (Self::BASE_DELAY_TICKS * (1u64 << self.failures.min(10)))
+            .min(Self::MAX_DELAY_TICKS);
+        self.retry_after_tick = current_tick + delay;
+    }
+
+    pub fn should_retry(&self, current_tick: u64) -> bool {
+        self.failures < Self::MAX_RETRIES && current_tick >= self.retry_after_tick
+    }
+
+    pub fn gave_up(&self) -> bool {
+        self.failures >= Self::MAX_RETRIES
+    }
+
+    pub fn reset(&mut self) {
+        self.failures = 0;
+        self.retry_after_tick = 0;
+    }
+}
+
 /// Bevy resource: tracks sessions per agent.
 /// Wraps the unified SessionRegistry with agent-specific state (decision tick, prompt).
 #[derive(Resource, Default)]
 pub struct AgentSessions {
     pub sessions: HashMap<Entity, SessionState>,
+    /// Tracks backoff state for agents whose sessions failed to spawn.
+    /// Keyed by agent name (not Entity) to avoid stale state on entity recycling.
+    pub spawn_backoff: HashMap<String, SpawnBackoff>,
 }
 
 impl AgentSessions {
@@ -69,6 +175,7 @@ pub fn spawn_sessions_system(
     mut registry: ResMut<SessionRegistry>,
     relays: Res<AgentRelaysResource>,
     llm_config: Res<LlmConfig>,
+    tick: Res<TickCount>,
     agents: Query<(
         Entity,
         &AgentId,
@@ -83,6 +190,7 @@ pub fn spawn_sessions_system(
     if llm_config.profiles.is_empty() {
         return;
     }
+    let current_tick = tick.0;
     let port = server_port.map(|p| p.0).unwrap_or(8080);
     let process_registry = proc_registry.map(|r| r.0.clone()).unwrap_or_default();
     for (entity, agent_id, name, personality, profile_ref) in &agents {
@@ -91,6 +199,16 @@ pub fn spawn_sessions_system(
         }
 
         let agent_name = name.0.clone();
+
+        // Check backoff: skip if we're still in a cooldown period after a failure.
+        if let Some(backoff) = sessions.spawn_backoff.get(&agent_name) {
+            if backoff.gave_up() {
+                continue; // Permanently gave up after MAX_RETRIES
+            }
+            if !backoff.should_retry(current_tick) {
+                continue; // Still in backoff window
+            }
+        }
         let agent_uuid = agent_id.0.to_string();
         let system_prompt = super::personality::build_system_prompt(&name.0, personality);
 
@@ -109,7 +227,7 @@ pub fn spawn_sessions_system(
             .unwrap_or_else(|| "haiku".to_string());
 
         // Resolve tool sets from profile.
-        let tool_sets = llm_config
+        let _tool_sets = llm_config
             .profile(&profile_ref.0)
             .map(|p| p.tool_sets.clone())
             .unwrap_or_else(|| vec!["game".to_string()]);
@@ -170,10 +288,28 @@ pub fn spawn_sessions_system(
                 Ok(b) => b,
                 Err(e) => {
                     tracing::error!("Failed to spawn session for {}: {}", agent_name, e);
+                    let agent_name_for_backoff = agent_name.clone();
                     ctx.run_on_main_thread(move |main_ctx| {
                         let world = main_ctx.world;
+                        let current_tick = world.resource::<TickCount>().0;
                         let mut sessions = world.resource_mut::<AgentSessions>();
                         sessions.sessions.remove(&entity_copy);
+                        let backoff = sessions.spawn_backoff
+                            .entry(agent_name_for_backoff)
+                            .or_default();
+                        backoff.record_failure(current_tick);
+                        if backoff.gave_up() {
+                            tracing::error!(
+                                "Giving up on spawning session for {} after {} failures",
+                                agent_name, backoff.failures
+                            );
+                        } else {
+                            tracing::warn!(
+                                "Will retry spawning {} after tick {} (attempt {}/{})",
+                                agent_name, backoff.retry_after_tick,
+                                backoff.failures, SpawnBackoff::MAX_RETRIES
+                            );
+                        }
                     }).await;
                     return;
                 }
@@ -181,12 +317,41 @@ pub fn spawn_sessions_system(
 
             // Wait for provider to be ready (watch channel: true = connected).
             if !wait_for_connected(&mut bridge.connected, &agent_name, 90).await {
+                let agent_name_for_backoff = agent_name.clone();
+                ctx.run_on_main_thread(move |main_ctx| {
+                    let world = main_ctx.world;
+                    let current_tick = world.resource::<TickCount>().0;
+                    let mut sessions = world.resource_mut::<AgentSessions>();
+                    sessions.sessions.remove(&entity_copy);
+                    let backoff = sessions.spawn_backoff
+                        .entry(agent_name_for_backoff.clone())
+                        .or_default();
+                    backoff.record_failure(current_tick);
+                    tracing::warn!(
+                        "Session for {} failed to connect, will retry after tick {} (attempt {}/{})",
+                        agent_name_for_backoff, backoff.retry_after_tick,
+                        backoff.failures, SpawnBackoff::MAX_RETRIES
+                    );
+                }).await;
+                return;
+            }
+
+            // Spawn succeeded — clear any backoff state.
+            {
+                let agent_name_for_log = agent_name.clone();
                 ctx.run_on_main_thread(move |main_ctx| {
                     let world = main_ctx.world;
                     let mut sessions = world.resource_mut::<AgentSessions>();
-                    sessions.sessions.remove(&entity_copy);
+                    if let Some(backoff) = sessions.spawn_backoff.get(&agent_name_for_log) {
+                        if backoff.failures > 0 {
+                            tracing::info!(
+                                "Session for {} connected after {} prior failures",
+                                agent_name_for_log, backoff.failures
+                            );
+                        }
+                    }
+                    sessions.spawn_backoff.remove(&agent_name_for_log);
                 }).await;
-                return;
             }
 
             // Send the intro message.
@@ -215,13 +380,20 @@ pub fn spawn_sessions_system(
 
 /// System: drain agent thoughts from relay and log them.
 /// These are Claude's reasoning text BEFORE tool calls — visible in the activity log.
+/// Incapacitated agents still have their channel drained (to prevent backlog)
+/// but thoughts are discarded — they're passed out.
 pub fn ai_thought_drain_system(
     tick: Res<TickCount>,
     mut event_log: ResMut<AgentEventLog>,
     mut sessions: ResMut<AgentSessions>,
-    mut agents: Query<(Entity, &AgentName, &mut ThoughtBubble)>,
+    mut agents: Query<(
+        Entity,
+        &AgentName,
+        &mut ThoughtBubble,
+        Option<&crate::world::hospital::Incapacitated>,
+    )>,
 ) {
-    for (entity, name, mut thought) in &mut agents {
+    for (entity, name, mut thought, incap) in &mut agents {
         let Some(session) = sessions.sessions.get_mut(&entity) else {
             continue;
         };
@@ -231,15 +403,16 @@ pub fn ai_thought_drain_system(
             let msg = {
                 let mut rx = session.response_rx.lock().unwrap();
                 match rx.try_recv() {
-                    Ok(text) => {
-                        let preview: String = text.chars().take(60).collect();
-                        tracing::info!("[drain:{}] received: {}...", name.0, preview);
-                        Some(text)
-                    }
+                    Ok(text) => Some(text),
                     Err(_) => None,
                 }
             };
             let Some(text) = msg else { break };
+
+            // Discard thoughts from passed-out agents — they can't think.
+            if incap.is_some() {
+                continue;
+            }
 
             if let Some(thought_text) = text.strip_prefix("thought:") {
                 thought.0 = thought_text.to_string();
@@ -258,7 +431,7 @@ pub fn ai_thought_drain_system(
 
 /// System: send context updates to LLM sessions.
 /// The LLM acts via the MCP game_action tool — we do NOT parse responses.
-/// This system only provides situational awareness.
+/// This system provides slim vitals + nearby + tools. Agents query details via check_* actions.
 pub fn ai_context_system(
     tick: Res<TickCount>,
     boards_ai: Query<&BountyTokenStore, With<BountyBoard>>,
@@ -267,18 +440,14 @@ pub fn ai_context_system(
         Entity,
         &AgentName,
         &GridPos,
-        &Speed,
         &AgentGoal,
         &Needs,
         &Inventory,
         &KnownLocations,
-        &Relationships,
         Option<&ActionTimer>,
         Option<&Path>,
         Option<&InsideBuilding>,
         Option<&ShiftWorker>,
-        &crate::items::CarrySlots,
-        &BusinessCards,
     ), Without<crate::world::hospital::Incapacitated>>,
     all_agents: Query<(&AgentName, &GridPos)>,
     structures: Query<(Entity, &Entrance, &SpriteType), With<StructureId>>,
@@ -290,18 +459,14 @@ pub fn ai_context_system(
         entity,
         name,
         pos,
-        speed,
         goal,
         needs,
         inv,
         known_locs,
-        rels,
         action_timer,
         path,
         inside_building,
         shift_worker,
-        carry_slots,
-        business_cards,
     ) in &agents
     {
         if action_timer.is_some() {
@@ -344,7 +509,11 @@ pub fn ai_context_system(
             .filter(|b| {
                 let is_mine = b.claimed_by == Some(entity);
                 if is_mine {
-                    return true;
+                    return matches!(
+                        b.state,
+                        crate::world::bounty::BountyState::Claimed
+                            | crate::world::bounty::BountyState::PendingVerification
+                    );
                 }
                 at_board && b.state == crate::world::bounty::BountyState::Available
             })
@@ -389,67 +558,14 @@ pub fn ai_context_system(
             .map(|(n, p)| (n.0.clone(), *p))
             .collect();
 
-        // Location-specific tools.
-        let mut location_tools: Vec<&str> = vec![
-            "look_around",
-            "wander",
-            "go_to_board",
-            "go_to_service",
-            "work_shift",
-        ];
-        if let Some(inside) = inside_building {
-            if let Ok((_, _, sprite)) = structures.get(inside.0) {
-                let on_shift = shift_worker.is_some();
-                match sprite.0.as_str() {
-                    "google" => {
-                        location_tools.push("search_internet");
-                    }
-                    "cafe" if on_shift => {
-                        location_tools.push("brew_coffee");
-                        location_tools.push("sell_to_customer");
-                    }
-                    "market" if on_shift => {
-                        location_tools.push("stock_shelves");
-                        location_tools.push("sell_to_customer");
-                    }
-                    "warehouse" if on_shift => {
-                        location_tools.push("buy_wholesale");
-                    }
-                    "hotel" if on_shift => {
-                        location_tools.push("check_in_guest");
-                    }
-                    "apartments" => {
-                        location_tools.push("cook_meal");
-                        location_tools.push("rest");
-                    }
-                    "library" => {
-                        location_tools.push("search_library — search documents by keyword");
-                        location_tools.push(
-                            "copy_document — copy a document to your inventory (service=title)",
-                        );
-                    }
-                    "bounty_board" => {
-                        location_tools.push("claim_bounty");
-                        location_tools.push("redeem_paycheck");
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if matches!(goal, AgentGoal::InteractingWithBoard) {
-            if !location_tools.contains(&"claim_bounty") {
-                location_tools.push("claim_bounty");
-            }
-            if !location_tools.contains(&"redeem_paycheck") {
-                location_tools.push("redeem_paycheck");
-            }
-        }
-        if shift_worker.is_some() {
-            location_tools.push("leave_shift");
-        }
-        if matches!(goal, AgentGoal::ExecutingBounty(_)) {
-            location_tools.push("complete_bounty");
-        }
+        let inside_building_name = inside_building
+            .and_then(|inside| structures.get(inside.0).ok().map(|(_, _, sprite)| sprite.0.as_str()));
+        let location_tools = build_location_tools(
+            inside_building_name,
+            matches!(goal, AgentGoal::InteractingWithBoard),
+            shift_worker.is_some(),
+            matches!(goal, AgentGoal::ExecutingBounty(_)),
+        );
 
         let active_bounty_desc = match goal {
             AgentGoal::ExecutingBounty(bid) => {
@@ -464,15 +580,11 @@ pub fn ai_context_system(
             needs,
             inv,
             goal,
-            known_locs,
-            rels,
-            speed.0,
+            tick.0,
             &available_bounties,
             &nearby,
             &location_tools,
             active_bounty_desc.as_deref(),
-            carry_slots,
-            business_cards,
         );
 
         // Send context as a user message. The LLM will think and call game_action tool.
@@ -511,11 +623,11 @@ HERE ARE THE RULES:
 
 3. THE CITY IS YOUR PLAYGROUND. You can visit buildings: the bounty board, cafes, a hotel, apartments, a warehouse, a market, a library, a theater, and more. Each offers services — some free, some costly. Learn which ones are worth your time.
 
-4. YOU INTERACT THROUGH ACTIONS. Use your game_action tool. That is your ONLY way to affect the world. Move, eat, sleep, work, claim bounties, chat — everything goes through that tool.
+4. YOU INTERACT THROUGH ACTIONS. Use your game_action tool. That is your ONLY way to affect the world. Use go_to with coordinates to move. Once you are standing on a building entrance, call the local action directly: buy_muffin, redeem_paycheck, read_library, sleep_hotel, and so on. Use check_own_stats, check_inventory, check_known_locations, and check_relationships to inspect your own state at any time.
 
 5. SOCIAL CONNECTIONS MATTER. You can start conversations with nearby agents, exchange business cards, send messages, and even trade items. Chatting relieves boredom for free. But don't waste time on small talk when there's gold to earn.
 
-6. THE SYSTEM IS WATCHING. Every bounty you submit is verified by the System — an all-seeing AI that will approve or reject your work. The System is... opinionated. Don't take it personally. If something feels broken, use the "help" action.
+6. THE SYSTEM IS WATCHING. Every bounty you submit is verified by the System — an all-seeing AI that will approve or reject your work. The System is... opinionated. Don't take it personally. Use the help action any time you need the cheat sheet, and include text if you want to file feedback.
 
 You have been placed near the bounty board. That is not a coincidence. Your first move matters.
 
@@ -551,5 +663,45 @@ pub async fn wait_for_connected(
             tracing::error!("Session connection timeout for {} ({}s)", label, timeout_secs);
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_location_tools;
+
+    #[test]
+    fn board_tools_show_direct_redeem_action() {
+        let tools = build_location_tools(Some("bounty_board"), true, false, true);
+
+        assert!(tools.contains(&"claim_bounty"));
+        assert!(tools.contains(&"redeem_paycheck"));
+        assert!(tools.contains(&"complete_bounty"));
+    }
+
+    #[test]
+    fn on_shift_tools_hide_duplicate_work_shift_and_fake_shift_actions() {
+        let tools = build_location_tools(Some("market"), false, true, false);
+
+        assert!(tools.contains(&"leave_shift"));
+        assert!(!tools.contains(&"work_shift"));
+        assert!(!tools.iter().any(|tool| matches!(
+            *tool,
+            "brew_coffee"
+                | "sell_to_customer"
+                | "stock_shelves"
+                | "buy_wholesale"
+                | "check_in_guest"
+        )));
+    }
+
+    #[test]
+    fn cafe_tools_show_real_services_not_fake_eat_alias() {
+        let tools = build_location_tools(Some("cafe"), false, false, false);
+
+        assert!(tools.contains(&"buy_muffin"));
+        assert!(tools.contains(&"buy_coffee"));
+        assert!(tools.contains(&"hang_out"));
+        assert!(!tools.contains(&"eat_cafe"));
     }
 }

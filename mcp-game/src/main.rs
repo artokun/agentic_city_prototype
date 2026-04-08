@@ -35,8 +35,6 @@ fn main() {
         .or_else(|_| args.get(2).cloned().ok_or(()))
         .unwrap_or_default();
 
-    eprintln!("[mcp-game] Agent: {} ({})", agent_name, agent_id);
-
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -107,16 +105,6 @@ fn handle_tool_call(
     if tool_name != "game_action" {
         return json_rpc_error(id, -32602, &format!("Unknown tool: {}", tool_name));
     }
-
-    eprintln!(
-        "[mcp-game] tool_call: agent={} action={} args={}",
-        agent_name,
-        arguments
-            .get("action")
-            .and_then(|a| a.as_str())
-            .unwrap_or("?"),
-        serde_json::to_string(&arguments).unwrap_or_default()
-    );
 
     let result = execute_game_action(&arguments, agent_name, agent_id);
 

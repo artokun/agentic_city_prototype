@@ -28,6 +28,7 @@ impl Needs {
     }
 
     /// The most urgent need, if any is below the threshold.
+    #[allow(dead_code)]
     pub fn most_urgent(&self, threshold: f32) -> Option<NeedType> {
         let mut worst = None;
         let mut worst_val = threshold;
@@ -49,6 +50,7 @@ impl Needs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum NeedType {
     Energy,
     Hunger,

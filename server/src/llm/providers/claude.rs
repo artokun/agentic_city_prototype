@@ -285,6 +285,13 @@ impl ClaudeAdapter {
             "--verbose".to_string(),
         ];
 
+        // Restrict agent tools to MCP only — no Bash, file access, or web tools.
+        // The system AI (GM) needs Bash/Read for document inspection, so skip for it.
+        if !self.is_system_ai {
+            args.push("--disallowedTools".to_string());
+            args.push("Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,NotebookEdit".to_string());
+        }
+
         // System AI gets a settings file for autoCompactWindow.
         if self.is_system_ai {
             let settings_path = "/tmp/system-ai-settings.json".to_string();

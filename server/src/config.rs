@@ -88,6 +88,12 @@ pub fn chat_boredom_boost() -> f32 {
     env_or("CHAT_BOREDOM_BOOST", 5.0)
 }
 
+// --- System AI ---
+/// Ticks before a stuck GM review is requeued. 60 = 60s at 1Hz.
+pub fn gm_review_timeout_ticks() -> u64 {
+    env_or("GM_REVIEW_TIMEOUT_TICKS", 60)
+}
+
 // --- LLM sessions ---
 /// Base directory for durable session state (checkpoints and event logs).
 pub fn runtime_dir() -> String {

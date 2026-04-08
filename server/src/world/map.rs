@@ -67,6 +67,7 @@ impl TileInventory {
         false
     }
 
+    #[allow(dead_code)]
     pub fn items_at(&self, x: i32, y: i32) -> &[String] {
         self.items
             .get(&tile_key(x, y))

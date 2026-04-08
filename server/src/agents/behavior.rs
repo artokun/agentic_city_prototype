@@ -17,7 +17,6 @@ use super::needs::{NeedType, Needs};
 use super::pathfinding;
 use crate::world::shifts::{ShiftWorker, Staffable};
 
-use crate::config;
 
 fn at_pos(a: &GridPos, b: &GridPos) -> bool {
     a.x == b.x && a.y == b.y
@@ -62,6 +61,7 @@ fn extract_research_topic(text: &str) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn pick_service_for_need(
     need: NeedType,
     agent_pos: &GridPos,
@@ -158,12 +158,12 @@ pub fn execution_system(
         agent_entity,
         name,
         pos,
-        speed,
+        _speed,
         mut goal,
         mut thought,
         mut anim,
         mut inv,
-        needs,
+        _needs,
         path,
         action_timer,
         inside,
@@ -215,7 +215,7 @@ pub fn execution_system(
         }
 
         let has_path = path.is_some_and(|p| !p.0.is_empty());
-        let gold = inv.count(ItemType::GoldCoin);
+        let _gold = inv.count(ItemType::GoldCoin);
         let current_goal = goal.clone();
 
         match current_goal {
@@ -283,6 +283,25 @@ pub fn execution_system(
                                 .find(|(e, _, _)| *e == building)
                                 .map(|(_, _, s)| s.clone())
                                 .unwrap_or_default();
+
+                            let arrival_only =
+                                service.is_empty() || service == "browse" || service == "entrance";
+
+                            if arrival_only {
+                                if svc_building_name == "bounty_board" {
+                                    thought.0 = "At the bounty board. Browse or claim a bounty when ready.".into();
+                                    anim.0 = AnimState::Working;
+                                    *goal = AgentGoal::InteractingWithBoard;
+                                } else {
+                                    thought.0 = format!(
+                                        "Arrived at {}. Use a valid service or another action from here.",
+                                        svc_building_name
+                                    );
+                                    anim.0 = AnimState::Idle;
+                                    *goal = AgentGoal::Idle;
+                                }
+                                continue;
+                            }
 
                             // Validate service is available at THIS building.
                             let svc = services::all_services().into_iter().find(|s| {
@@ -408,10 +427,10 @@ pub fn execution_system(
                 // It only handles the expired-bounty safety net above.
                 // The AI system will see ExecutingBounty in the agent's goal,
                 // include the bounty details in the context, and Claude decides
-                // the next action (go_to_service, look_around, etc.)
+                // the next action (go_to, local service actions, look_around, etc.)
                 //
                 // When Claude decides the bounty is complete, it should choose
-                // "go_to_board" which transitions to ReturningToBoard.
+                // a board return action, which transitions to ReturningToBoard.
             }
 
             AgentGoal::ReturningToBoard(bounty_id) => {

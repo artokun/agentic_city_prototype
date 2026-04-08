@@ -30,14 +30,17 @@ pub struct ItemName(pub String);
 
 /// ECS component: human-readable description for an item entity.
 #[derive(Component, Debug, Clone)]
+#[allow(dead_code)]
 pub struct ItemDescription(pub String);
 
 /// ECS component: arbitrary textual contents for an item entity.
 #[derive(Component, Debug, Clone)]
+#[allow(dead_code)]
 pub struct ItemContents(pub String);
 
 /// ECS component: optional image URL for an item entity.
 #[derive(Component, Debug, Clone)]
+#[allow(dead_code)]
 pub struct ItemImageUrl(pub String);
 
 /// ECS component: attaches item entities to a container entity such as an agent or structure.
@@ -130,6 +133,7 @@ impl ItemType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_food(&self) -> bool {
         matches!(
             self,
@@ -142,6 +146,7 @@ impl ItemType {
     }
 }
 
+#[allow(dead_code)]
 impl ItemType {
     pub fn is_carry_food(&self) -> bool {
         matches!(
@@ -156,6 +161,7 @@ impl ItemType {
 }
 
 #[derive(Component, Debug, Clone)]
+#[allow(dead_code)]
 pub struct CarrySlots {
     pub food: [Option<ItemType>; 2],
     pub drink: Option<ItemType>,
@@ -170,6 +176,7 @@ impl Default for CarrySlots {
     }
 }
 
+#[allow(dead_code)]
 impl CarrySlots {
     pub fn add_food(&mut self, item: ItemType) -> bool {
         if !item.is_carry_food() {
@@ -269,6 +276,7 @@ impl Inventory {
         *self.items.entry(item).or_insert(0) += count;
     }
 
+    #[allow(dead_code)]
     pub fn add_capped(&mut self, item: ItemType, count: u32, max: u32) -> u32 {
         let current = self.count(item);
         let can_add = (max - current).min(count);
@@ -307,6 +315,7 @@ impl Inventory {
     }
 
     /// Net gold balance (negative if in debt).
+    #[allow(dead_code)]
     pub fn gold_balance(&self) -> i32 {
         self.count(ItemType::GoldCoin) as i32 - self.gold_debt as i32
     }
@@ -340,6 +349,7 @@ impl DocumentInventory {
         self.documents.insert(title, content);
     }
 
+    #[allow(dead_code)]
     pub fn has(&self, title: &str) -> bool {
         self.documents.contains_key(title)
     }

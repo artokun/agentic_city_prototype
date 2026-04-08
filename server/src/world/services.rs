@@ -152,15 +152,6 @@ pub fn all_services() -> Vec<BuildingService> {
         // --- Bounty board ---
         BuildingService {
             building_name: "bounty_board",
-            action_name: "check_board",
-            gold_cost: 0,
-            duration_ticks: 5,
-            effects: ServiceEffects::default(),
-            consumes_item: None,
-            produces_item: None,
-        },
-        BuildingService {
-            building_name: "bounty_board",
             action_name: "redeem_paycheck",
             gold_cost: 0,
             duration_ticks: 5,
@@ -172,6 +163,7 @@ pub fn all_services() -> Vec<BuildingService> {
 }
 
 /// Get services available at a building.
+#[allow(dead_code)]
 pub fn services_at(building_name: &str) -> Vec<BuildingService> {
     all_services()
         .into_iter()

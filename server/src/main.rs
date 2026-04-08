@@ -14,6 +14,11 @@ use bevy_tokio_tasks::TokioTasksPlugin;
 use std::time::Duration;
 
 fn main() {
+    // Load .env file for API keys (OPENAI_API_KEY, etc.).
+    if let Err(e) = dotenvy::dotenv() {
+        eprintln!("[ENV] No .env file loaded: {e}");
+    }
+
     tracing_subscriber::fmt::init();
 
     // Load LLM config from TOML.

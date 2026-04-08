@@ -15,6 +15,7 @@ use crate::agents::token_tracking::{AgentCost, ContextWindow};
 use crate::items::Inventory;
 use crate::tick::TickCount;
 use crate::world::bounty::*;
+use crate::world::hospital::Incapacitated;
 use crate::world::map::GridPos;
 use crate::world::structures::*;
 
@@ -176,6 +177,9 @@ pub fn update_world_state_json(
             &AgentCost,
             &ActionLog,
             Option<&crate::items::DocumentInventory>,
+            &KnownLocations,
+            &Relationships,
+            Option<&Incapacitated>,
         ),
         bevy::prelude::With<AgentId>,
     >,
@@ -201,7 +205,7 @@ pub fn update_world_state_json(
         return;
     };
 
-    let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards, ctx_window, agent_cost, action_log, docs)| {
+    let agents_json: Vec<serde_json::Value> = agents.iter().map(|(name, pos, goal, needs, inv, cards, ctx_window, agent_cost, action_log, docs, known_locs, rels, incap)| {
         let items: std::collections::HashMap<String, u32> = inv.items.iter()
             .map(|(k, v)| (k.to_string(), *v)).collect();
         let documents: Vec<serde_json::Value> = docs
@@ -230,6 +234,20 @@ pub fn update_world_state_json(
                 })
             })
             .collect();
+        let locations_json: Vec<serde_json::Value> = known_locs.locations.values().map(|loc| {
+            serde_json::json!({
+                "name": loc.name,
+                "position": { "x": loc.pos.x, "y": loc.pos.y },
+                "entrance": { "x": loc.entrance.x, "y": loc.entrance.y },
+            })
+        }).collect();
+        let relationships_json: Vec<serde_json::Value> = rels.known.values().map(|mem| {
+            serde_json::json!({
+                "name": mem.name,
+                "friendship": mem.friendship,
+                "last_known_goal": mem.last_known_goal,
+            })
+        }).collect();
         serde_json::json!({
             "name": name.0,
             "position": { "x": pos.x, "y": pos.y },
@@ -245,6 +263,9 @@ pub fn update_world_state_json(
             "total_cost_usd": agent_cost.total_cost_usd,
             "documents": documents,
             "action_log_tail": action_log_tail,
+            "known_locations": locations_json,
+            "relationships": relationships_json,
+            "incapacitated": incap.is_some(),
         })
     }).collect();
 

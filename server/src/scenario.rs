@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Scenario test framework for running the real Bevy ECS game with injectable configs.
 //! Used by integration tests to spawn isolated game instances with custom agents, bounties,
 //! and deterministic shutdown.

@@ -6,12 +6,14 @@ use serde_json::{json, Value};
 use super::catalog::{ParamType, ToolDef};
 
 /// Compile a tool list into MCP `tools/list` response format.
+#[allow(dead_code)]
 pub fn to_mcp_tools_list(tools: &[ToolDef]) -> Value {
     let tool_schemas: Vec<Value> = tools.iter().map(|t| to_mcp_tool(t)).collect();
     json!({ "tools": tool_schemas })
 }
 
 /// Compile a single tool into MCP tool schema.
+#[allow(dead_code)]
 fn to_mcp_tool(tool: &ToolDef) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
@@ -67,6 +69,7 @@ fn to_openai_function(tool: &ToolDef) -> Value {
 }
 
 /// Compile a tool list into raw JSON Schema (for generic use).
+#[allow(dead_code)]
 pub fn to_json_schemas(tools: &[ToolDef]) -> Vec<Value> {
     tools
         .iter()

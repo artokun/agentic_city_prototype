@@ -12,9 +12,9 @@ use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
 use crate::agents::needs::Needs;
 use crate::agents::token_tracking::ContextWindow;
 use crate::config;
-use crate::items::{Inventory, ItemType};
+use crate::items::Inventory;
 use crate::tick::TickCount;
-use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
+use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyTokenStore};
 use crate::world::map::GridPos;
 use crate::world::map::TileInventory;
 
@@ -22,6 +22,7 @@ use crate::world::map::TileInventory;
 
 /// Marks an agent as incapacitated — can't think, move, or act.
 #[derive(Component)]
+#[allow(dead_code)]
 pub struct Incapacitated {
     pub reason: String,
     pub passed_out_tick: u64,
@@ -95,7 +96,7 @@ pub fn pass_out_system(
         bounty.hidden_criteria = format!(
             "Instructions for agent: Step 1: Go to ({},{}) where {} passed out. \
              Step 2: Use take_item with service='body:{}' to pick up their body. \
-             Step 3: Go to the hospital using go_to_service with building='hospital'. \
+             Step 3: Go to the hospital entrance coordinates. \
              Step 4: Use deposit_item with service='body:{}' to drop them off at the hospital. \
              Step 5: Return to the bounty board, deposit your bounty_token, and complete_bounty.\n\n\
              GM: Verify the rescuer picked up body:{} (take_item in action log) AND deposited body:{} at the hospital (deposit_item in action log). \

@@ -46,6 +46,7 @@ pub struct ProcessingTask {
 
 /// A paycheck item — redeemable at the bounty board.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Paycheck {
     pub building_name: String,
     pub ticks_worked: u32,
@@ -74,6 +75,25 @@ impl PaycheckWallet {
         self.paychecks.clear();
         total
     }
+}
+
+pub fn redeem_paychecks(inv: &mut Inventory, wallet: &mut PaycheckWallet) -> Option<(usize, u32)> {
+    if wallet.paychecks.is_empty() {
+        return None;
+    }
+
+    let count = wallet.paychecks.len();
+    let paycheck_items = inv.count(ItemType::Paycheck);
+    let gold = wallet.redeem_all();
+
+    if gold > 0 {
+        inv.add(ItemType::GoldCoin, gold);
+    }
+    if paycheck_items > 0 {
+        inv.remove(ItemType::Paycheck, paycheck_items);
+    }
+
+    Some((count, gold))
 }
 
 /// System: shift workers process raw materials into finished goods.
@@ -219,14 +239,31 @@ pub fn shift_tracking_system(
         &mut AgentGoal,
         &mut ThoughtBubble,
         &mut PaycheckWallet,
+        Option<&crate::agents::components::WantsToLeaveShift>,
     )>,
     mut staffable: Query<&mut Staffable>,
 ) {
-    for (entity, name, mut shift, mut needs, mut inv, mut goal, mut thought, mut wallet) in
+    for (
+        entity,
+        name,
+        mut shift,
+        mut needs,
+        mut inv,
+        mut goal,
+        mut thought,
+        mut wallet,
+        wants_leave,
+    ) in
         &mut workers
     {
-        // Detect voluntary exit: AI set goal away from WorkingShift (e.g. LeaveShift).
-        let voluntary_exit = !matches!(*goal, AgentGoal::WorkingShift { .. });
+        // Keep an active shift stable unless the agent explicitly leaves or critical needs eject them.
+        let voluntary_exit = wants_leave.is_some();
+
+        if !voluntary_exit {
+            *goal = AgentGoal::WorkingShift {
+                building: shift.building,
+            };
+        }
 
         if !voluntary_exit {
             shift.ticks_worked += 1;
@@ -299,55 +336,11 @@ pub fn shift_tracking_system(
             commands.entity(entity).remove::<ShiftWorker>();
             commands.entity(entity).remove::<ProcessingTask>();
             commands.entity(entity).remove::<InsideBuilding>();
+            commands
+                .entity(entity)
+                .remove::<crate::agents::components::WantsToLeaveShift>();
             *goal = AgentGoal::Idle;
         }
-    }
-}
-
-/// System: redeem paychecks when the `redeem_paycheck` action timer hits 0.
-/// Must run after `action_timer_system` (which decrements and schedules removal).
-/// The `ActionTimer` component is still visible this tick because removal is deferred.
-pub fn paycheck_redemption_system(
-    tick: Res<TickCount>,
-    mut event_log: ResMut<AgentEventLog>,
-    mut agents: Query<(
-        &AgentName,
-        &mut Inventory,
-        &mut PaycheckWallet,
-        &mut ThoughtBubble,
-        &crate::agents::actions::ActionTimer,
-    )>,
-) {
-    for (name, mut inv, mut wallet, mut thought, timer) in &mut agents {
-        if timer.action_name != "redeem_paycheck" || timer.remaining_ticks != 0 {
-            continue;
-        }
-        if wallet.paychecks.is_empty() {
-            thought.0 = "No paychecks to redeem.".into();
-            continue;
-        }
-
-        let count = wallet.paychecks.len();
-        let paycheck_items = inv.count(ItemType::Paycheck);
-        let gold = wallet.redeem_all();
-        if gold > 0 {
-            inv.add(ItemType::GoldCoin, gold);
-        }
-        // Remove the Paycheck item tokens from inventory.
-        if paycheck_items > 0 {
-            inv.remove(ItemType::Paycheck, paycheck_items);
-        }
-
-        thought.0 = format!("Cashed {} paycheck(s) for {}g!", count, gold);
-
-        event_log.push(LogEvent {
-            tick: tick.0,
-            agent: name.0.clone(),
-            kind: LogKind::Action,
-            text: format!("Redeemed {} paycheck(s) → {}g", count, gold),
-        });
-
-        tracing::info!("{} redeemed {} paycheck(s) for {}g", name.0, count, gold);
     }
 }
 
@@ -415,5 +408,31 @@ mod tests {
         let mut w = PaycheckWallet::default();
         assert_eq!(w.redeem_all(), 0);
         assert!(w.paychecks.is_empty());
+    }
+
+    #[test]
+    fn redeem_paychecks_moves_value_into_gold() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Paycheck, 2);
+
+        let mut w = PaycheckWallet::default();
+        w.paychecks.push(paycheck(30, 10)); // 3g
+        w.paychecks.push(paycheck(50, 10)); // 5g
+
+        assert_eq!(redeem_paychecks(&mut inv, &mut w), Some((2, 8)));
+        assert_eq!(inv.count(ItemType::Paycheck), 0);
+        assert_eq!(inv.count(ItemType::GoldCoin), 8);
+        assert!(w.paychecks.is_empty());
+    }
+
+    #[test]
+    fn redeem_paychecks_empty_wallet_is_noop() {
+        let mut inv = Inventory::default();
+        inv.add(ItemType::Paycheck, 1);
+        let mut w = PaycheckWallet::default();
+
+        assert_eq!(redeem_paychecks(&mut inv, &mut w), None);
+        assert_eq!(inv.count(ItemType::Paycheck), 1);
+        assert_eq!(inv.count(ItemType::GoldCoin), 0);
     }
 }

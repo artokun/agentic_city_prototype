@@ -36,6 +36,7 @@ pub trait SessionAdapter: Send + 'static {
     fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<SessionEvent>>;
 
     /// Shut down gracefully, returning a checkpoint for later resume.
+    #[allow(dead_code)]
     async fn shutdown(&mut self) -> Result<Option<SessionCheckpoint>, AdapterError>;
 }
 
@@ -447,6 +448,7 @@ async fn run_oneshot_openai(prompt: &str, model: &str) -> Result<String, String>
 // Legacy factory functions kept for backwards compatibility during transition.
 
 /// Spawn a Claude CLI process for an agent session.
+#[allow(dead_code)]
 pub async fn spawn_agent_process(
     identity: &AgentIdentity,
     model: &str,
@@ -460,6 +462,7 @@ pub async fn spawn_agent_process(
 }
 
 /// Spawn a Claude CLI process for the system-AI session.
+#[allow(dead_code)]
 pub async fn spawn_system_ai_process(
     model: &str,
     system_prompt: &str,
@@ -472,6 +475,7 @@ pub async fn spawn_system_ai_process(
 }
 
 /// Create an OpenAI adapter for an agent session.
+#[allow(dead_code)]
 pub fn create_openai_agent_adapter(
     agent_name: &str,
     agent_id: &str,
@@ -485,6 +489,7 @@ pub fn create_openai_agent_adapter(
 }
 
 /// Create an OpenAI adapter for the system-AI session.
+#[allow(dead_code)]
 pub fn create_openai_system_ai_adapter(
     model: &str,
     system_prompt: String,
@@ -496,6 +501,7 @@ pub fn create_openai_system_ai_adapter(
 }
 
 /// Manages adapter lifecycle, persistence, and recovery.
+#[allow(dead_code)]
 #[derive(bevy::prelude::Resource)]
 pub struct SessionSupervisor {
     store: CheckpointStore,
@@ -503,6 +509,7 @@ pub struct SessionSupervisor {
     checkpoints: HashMap<SessionOwner, SessionCheckpoint>,
 }
 
+#[allow(dead_code)]
 impl SessionSupervisor {
     /// Create a supervisor with config-driven persistence directory.
     pub fn new() -> Self {

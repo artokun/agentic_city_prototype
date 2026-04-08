@@ -14,6 +14,7 @@ pub struct LlmConfig {
 }
 
 /// A configured LLM provider (e.g. a CLI adapter or API adapter).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
     /// Provider type string: "claude_cli", "openai_responses", etc.
@@ -30,6 +31,7 @@ pub struct ProviderConfig {
 }
 
 /// A session profile that binds a provider + model + tuning.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionProfile {
     /// Key into `providers` table.

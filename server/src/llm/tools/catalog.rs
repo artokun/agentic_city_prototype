@@ -2,7 +2,6 @@
 //! Single source of truth — both MCP binaries and in-process adapters use these.
 
 use serde::Serialize;
-use serde_json::{json, Value};
 use std::sync::LazyLock;
 
 /// A parameter on a tool.
@@ -48,20 +47,30 @@ pub struct ActionDef {
 /// Canonical list of all game actions. Source of truth for MCP schema AND manual generation.
 pub fn game_action_catalog() -> Vec<ActionDef> {
     vec![
-        ActionDef { name: "go_to_board", description: "Walk to the bounty board", params: "" },
-        ActionDef { name: "go_to_service", description: "Walk to a building and use a service", params: "building=name, service=name" },
         ActionDef { name: "go_to", description: "Walk to specific coordinates", params: "x=int, y=int" },
         ActionDef { name: "look_around", description: "Scan nearby entities and discover buildings", params: "" },
-        ActionDef { name: "wander", description: "Walk to a random nearby spot", params: "" },
         ActionDef { name: "work_shift", description: "Start a paid shift at a building", params: "building=name" },
         ActionDef { name: "leave_shift", description: "End your current shift", params: "" },
+        ActionDef { name: "buy_muffin", description: "Buy a muffin at the cafe", params: "" },
+        ActionDef { name: "buy_sandwich", description: "Buy a sandwich at the market", params: "" },
+        ActionDef { name: "buy_rations", description: "Buy rations at the market", params: "" },
+        ActionDef { name: "sleep_hotel", description: "Sleep at the hotel", params: "" },
+        ActionDef { name: "sleep_at_home", description: "Sleep at your apartment", params: "" },
+        ActionDef { name: "buy_coffee", description: "Buy coffee at the cafe", params: "" },
+        ActionDef { name: "read_library", description: "Read quietly in the library", params: "" },
+        ActionDef { name: "hang_out", description: "Hang out at the cafe", params: "" },
+        ActionDef { name: "relax_in_lobby", description: "Relax in the hotel lobby", params: "" },
+        ActionDef { name: "window_shop", description: "Window shop at the market", params: "" },
+        ActionDef { name: "search_internet", description: "Do paid online research at Google", params: "" },
+        ActionDef { name: "redeem_paycheck", description: "Cash your paychecks at the bounty board", params: "" },
         ActionDef { name: "claim_bounty", description: "Claim a bounty at the board", params: "text=bounty ID (6-char hex)" },
         ActionDef { name: "complete_bounty", description: "Submit bounty for GM review (must be at board)", params: "" },
         ActionDef { name: "cancel_bounty", description: "Abandon your current bounty (must be at board)", params: "" },
         ActionDef { name: "deposit_item", description: "Put an item into a building's inventory", params: "service=item name" },
         ActionDef { name: "take_item", description: "Take an item from a building's inventory", params: "service=item name" },
         ActionDef { name: "consume_item", description: "Eat/drink an item from your inventory", params: "service=item name (coffee, muffin, rations, sandwich, soup)" },
-        ActionDef { name: "inspect_item", description: "Examine an item for details", params: "service=item name" },
+        ActionDef { name: "inspect", description: "Inspect an item, document, or local library shelf", params: "service=target name (optional at the library to browse the catalog)" },
+        ActionDef { name: "copy_document", description: "Copy a document from the current building into your inventory", params: "service=document title" },
         ActionDef { name: "create_document", description: "Write a new document", params: "service=title, text=markdown content" },
         ActionDef { name: "append_document", description: "Add an addendum to an existing document", params: "service=doc title, text=addendum" },
         ActionDef { name: "start_conversation", description: "Begin face-to-face chat with nearby agent", params: "agent=name" },
@@ -71,15 +80,16 @@ pub fn game_action_catalog() -> Vec<ActionDef> {
         ActionDef { name: "offer_trade", description: "Propose a trade in conversation", params: "text=offered items (comma-sep), service=wanted items (comma-sep)" },
         ActionDef { name: "accept_trade", description: "Accept a pending trade offer", params: "" },
         ActionDef { name: "reject_trade", description: "Reject a pending trade offer", params: "" },
-        ActionDef { name: "search_library", description: "Search library documents by keyword", params: "service=keyword (empty for full catalog)" },
-        ActionDef { name: "copy_document", description: "Copy a library document to your inventory", params: "service=document title" },
-        ActionDef { name: "leave_board", description: "Leave the bounty board area", params: "" },
-        ActionDef { name: "chat_with", description: "Quick chat with nearby agent (legacy)", params: "agent=name" },
-        ActionDef { name: "help", description: "Submit feedback/bug report to developers", params: "text=your feedback" },
+        ActionDef { name: "check_own_stats", description: "View your vitals, position, gold, goal, and energy", params: "" },
+        ActionDef { name: "check_inventory", description: "View your full inventory and carried items", params: "" },
+        ActionDef { name: "check_known_locations", description: "View discovered building entrances with distances", params: "" },
+        ActionDef { name: "check_relationships", description: "View your business cards and known relationships", params: "" },
+        ActionDef { name: "help", description: "Show the cheat sheet; include text to also submit feedback", params: "text=optional feedback or bug report" },
     ]
 }
 
 /// Generate the game manual text from the action catalog.
+#[allow(dead_code)]
 pub fn generate_action_manual() -> String {
     let actions = game_action_catalog();
     let mut manual = String::from("## Actions (use game_action MCP tool)\n\n");
@@ -101,11 +111,12 @@ pub fn generate_action_manual() -> String {
     manual += "| sandwich | +60 hunger, +10 boredom |\n";
     manual += "| soup | +45 hunger |\n";
     manual += "\n## Tips\n";
-    manual += "- Bounties pay 5-20g — much faster than shifts\n";
-    manual += "- Coffee extends thinking capacity — save it for when you need it\n";
-    manual += "- Trading requires a face-to-face conversation first\n";
-    manual += "- bounty_token and paycheck CANNOT be traded\n";
-    manual += "- Use help action to report bugs or request features\n";
+    manual += "- Use check_known_locations to get entrance coordinates, then go_to x=... y=... for the exact entrance tile you want\n";
+    manual += "- Once you are standing at a building entrance, call the local action directly (buy_muffin, redeem_paycheck, read_library, etc.)\n";
+    manual += "- At the bounty board: claim_bounty, deposit_item bounty_token, deposit proof, complete_bounty, then wait for the GM verdict\n";
+    manual += "- inspect with no target at the library shows the catalog; inspect service='doc:title.md' reads a specific document\n";
+    manual += "- copy_document pulls a readable document from the current place into your inventory\n";
+    manual += "- help with no text returns this cheat sheet; help with text also files feedback\n";
 
     manual
 }
@@ -161,19 +172,19 @@ fn game_tools() -> Vec<ToolDef> {
             },
             ParamDef {
                 name: "building",
-                description: "Target building name (for go_to_service, work_shift)",
+                description: "Target building name (mainly for work_shift)",
                 param_type: ParamType::String,
                 required: false,
             },
             ParamDef {
                 name: "service",
-                description: "Service name, item name, or document title — depends on the action. For deposit_item/take_item/consume_item: the item name. For create_document/append_document: the document title. For offer_trade: comma-separated requested items. For search_library: keyword.",
+                description: "Item name, document title, or secondary action payload depending on the action. For deposit_item/take_item/consume_item: the item name. For inspect: the target item or document title. For copy_document/create_document/append_document: the document title. For offer_trade: comma-separated requested items.",
                 param_type: ParamType::String,
                 required: false,
             },
             ParamDef {
                 name: "agent",
-                description: "Agent name (for start_conversation, chat_with, send_message)",
+                description: "Agent name (for start_conversation, send_message)",
                 param_type: ParamType::String,
                 required: false,
             },

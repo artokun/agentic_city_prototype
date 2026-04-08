@@ -2,10 +2,9 @@
 //! This is the authoritative bridge between Claude's tool calls and the game world.
 
 use bevy::prelude::*;
-use tokio::sync::mpsc;
 
 use crate::agents::ai::AgentSessions;
-use crate::agents::ai_decision::AgentAction;
+use crate::agents::actions::ActionTimer;
 use crate::agents::components::*;
 use crate::agents::conversation::{ActiveConversation, ConversationLog, ConversationMessage};
 use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
@@ -19,7 +18,7 @@ use crate::tick::TickCount;
 use crate::world::bounty::{BountyBoard, BountyDropbox, BountyTokenStore, Library};
 use crate::world::map::{GridPos, WorldMap};
 use crate::world::shifts::ShiftWorker;
-use crate::world::structures::{Entrance, InsideBuilding, SpriteType, StructureId};
+use crate::world::structures::{Entrance, SpriteType, StructureId};
 
 /// Pending action from an MCP tool call, waiting to be applied.
 #[derive(Resource, Default)]
@@ -41,6 +40,7 @@ pub struct Suggestion {
 
 pub struct MpcAction {
     pub agent_name: String,
+    #[allow(dead_code)]
     pub agent_id: String,
     pub action: String,
     pub building: Option<String>,
@@ -97,7 +97,7 @@ fn queue_dropbox_return(
     entity: Entity,
     contained_items: &mut crate::items::ContainedItems,
     slot: crate::world::bounty::DropboxSlot,
-    bounty: Option<&crate::world::bounty::BountyTokenData>,
+    _bounty: Option<&crate::world::bounty::BountyTokenData>,
 ) {
     let mut return_items: Vec<(crate::items::ItemType, u32)> = Vec::new();
 
@@ -135,6 +135,74 @@ fn queue_dropbox_return(
         commands.entity(entity).insert(PendingClaimItems {
             items: return_items,
         });
+    }
+}
+
+fn action_requires_leaving_shift(action: &str) -> bool {
+    matches!(
+        action,
+        "go_to_board"
+            | "go_to_service"
+            | "wander"
+            | "go_to"
+            | "work_shift"
+            | "claim_bounty"
+            | "complete_bounty"
+            | "deposit_item"
+            | "take_item"
+            | "start_conversation"
+            | "send_message"
+            | "offer_trade"
+            | "accept_trade"
+            | "reject_trade"
+            | "create_document"
+            | "append_document"
+    ) || crate::world::services::all_services()
+        .into_iter()
+        .any(|service| service.action_name == action)
+}
+
+fn bounty_allows_board_submission_item(
+    bounty: &crate::world::bounty::BountyTokenData,
+    item: crate::items::ItemType,
+) -> bool {
+    use crate::items::ItemType;
+
+    if matches!(item, ItemType::BountyToken | ItemType::Document) {
+        return true;
+    }
+
+    let item_name = item.to_string().to_ascii_lowercase();
+    let criteria = format!(
+        "{}\n{}",
+        bounty.description.to_ascii_lowercase(),
+        bounty.hidden_criteria.to_ascii_lowercase()
+    );
+
+    let mentions_item = criteria.contains(&item_name);
+    let mentions_board_submission = (criteria.contains("deposit") || criteria.contains("submit"))
+        && (criteria.contains("board") || criteria.contains("dropbox"));
+
+    mentions_item && mentions_board_submission
+}
+
+fn send_gm_direct_message(
+    sessions: &crate::agents::ai::AgentSessions,
+    event_log: &mut crate::agents::event_log::AgentEventLog,
+    tick: u64,
+    agent_entity: Entity,
+    agent_name: &str,
+    text: String,
+) {
+    event_log.push(crate::agents::event_log::LogEvent {
+        tick,
+        agent: "SYSTEM".into(),
+        kind: crate::agents::event_log::LogKind::Speech,
+        text: format!("[to {}] {}", agent_name, text),
+    });
+
+    if let Some(session) = sessions.sessions.get(&agent_entity) {
+        let _ = session.prompt_tx.try_send(text);
     }
 }
 
@@ -277,11 +345,17 @@ pub fn process_gm_verdicts_system(
                     text: format!("APPROVED {}'s bounty '{}' ({}g): {}", name.0, bounty.description, bounty.reward_gold, reason),
                 });
 
-                if let Some(session) = sessions.sessions.get(&agent_entity) {
-                    let _ = session.prompt_tx.try_send(
-                        format!("BOUNTY APPROVED by the Game Master! You earned {} gold for '{}'. Reason: {}", bounty.reward_gold, bounty.description, reason),
-                    );
-                }
+                send_gm_direct_message(
+                    &sessions,
+                    &mut event_log,
+                    tick.0,
+                    agent_entity,
+                    &name.0,
+                    format!(
+                        "BOUNTY APPROVED by the Game Master! You earned {} gold for '{}'. Reason: {}",
+                        bounty.reward_gold, bounty.description, reason
+                    ),
+                );
             } else {
                 agent_name_str = "unknown".into();
             }
@@ -326,7 +400,7 @@ pub fn process_gm_verdicts_system(
             }
         } else {
             // Rejected — return all items from dropbox to agent, keep bounty Claimed.
-            if let Ok((_, name, _inv, mut contained, mut thought, _goal)) =
+            if let Ok((_, name, _inv, _contained, mut thought, _goal)) =
                 agents.get_mut(agent_entity)
             {
                 thought.0 = format!("GM rejected bounty: {}", reason);
@@ -344,11 +418,17 @@ pub fn process_gm_verdicts_system(
                     text: format!("REJECTED {}'s bounty '{}': {}", name.0, bounty.description, reason),
                 });
 
-                if let Some(session) = sessions.sessions.get(&agent_entity) {
-                    let _ = session.prompt_tx.try_send(
-                        format!("BOUNTY REJECTED by the Game Master. Your submission for '{}' was not approved. Reason: {}. Your items have been returned — fix the issues and try again.", bounty.description, reason),
-                    );
-                }
+                send_gm_direct_message(
+                    &sessions,
+                    &mut event_log,
+                    tick.0,
+                    agent_entity,
+                    &name.0,
+                    format!(
+                        "BOUNTY REJECTED by the Game Master. Your submission for '{}' was not approved. Reason: {}. Your items have been returned — fix the issues and try again.",
+                        bounty.description, reason
+                    ),
+                );
             }
 
             // Return all items from dropbox to agent.
@@ -373,7 +453,9 @@ pub fn process_gm_verdicts_system(
             }
 
             // Keep bounty as Claimed — agent can retry.
-            // (Don't change state; it stays Claimed with the same agent.)
+            if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
+                b.state = crate::world::bounty::BountyState::Claimed;
+            }
         }
     }
 }
@@ -478,6 +560,10 @@ pub fn process_deposits_system(
     deposits: Query<(Entity, &AgentName, &PendingDeposit)>,
     mut agent_inventories: Query<&mut Inventory, With<AgentName>>,
     mut agent_docs: Query<&mut crate::items::DocumentInventory, With<AgentName>>,
+    mut agent_thoughts: Query<
+        &mut ThoughtBubble,
+        (With<AgentName>, Without<crate::world::hospital::Incapacitated>),
+    >,
     mut contained_items: Query<&mut crate::items::ContainedItems>,
     mut structure_inventories: Query<&mut Inventory, (With<StructureId>, Without<AgentName>)>,
     mut structure_docs: Query<
@@ -495,6 +581,7 @@ pub fn process_deposits_system(
         (Entity, &AgentName, &mut ThoughtBubble),
         With<crate::world::hospital::Incapacitated>,
     >,
+    board_bounties: Query<&BountyTokenStore, With<BountyBoard>>,
     mut dropbox_boards: Query<&mut BountyDropbox, With<BountyBoard>>,
     board_entities: Query<Entity, With<BountyBoard>>,
     item_lookup: Query<(
@@ -510,6 +597,16 @@ pub fn process_deposits_system(
 
     for (entity, name, deposit) in &deposits {
         let is_bounty_board = board_entity_set.contains(&deposit.building_entity);
+        let active_bounty = board_bounties.iter().next().and_then(|store| {
+            store
+                .tokens
+                .values()
+                .find(|bounty| {
+                    bounty.claimed_by == Some(entity)
+                        && bounty.state == crate::world::bounty::BountyState::Claimed
+                })
+                .cloned()
+        });
 
         // Special case: depositing a body at the hospital.
         if deposit.item_name.starts_with("body:") {
@@ -549,6 +646,18 @@ pub fn process_deposits_system(
         } else if is_bounty_board {
             // --- Bounty board: route into BountyDropbox ---
             if deposit.item_name == "bounty_token" || deposit.item_name == "bountytoken" {
+                if active_bounty.is_none() {
+                    if let Ok(mut thought) = agent_thoughts.get_mut(entity) {
+                        thought.0 = "ERROR: You do not have an active bounty to submit. Claim one first, then deposit its bounty_token at the board.".into();
+                    }
+                    tracing::warn!(
+                        "[Dropbox] {} tried to deposit bounty_token without an active bounty",
+                        name.0
+                    );
+                    commands.entity(entity).remove::<PendingDeposit>();
+                    continue;
+                }
+
                 // Validate: agent must actually have a BountyToken in inventory.
                 let has_token = agent_inventories
                     .get(entity)
@@ -556,6 +665,11 @@ pub fn process_deposits_system(
                     .unwrap_or(false);
 
                 if !has_token {
+                    if let Ok(mut thought) = agent_thoughts.get_mut(entity) {
+                        thought.0 =
+                            "ERROR: You tried to submit a bounty token, but you are not carrying one."
+                                .into();
+                    }
                     tracing::warn!(
                         "[Dropbox] {} tried to deposit bounty_token but doesn't have one",
                         name.0
@@ -619,6 +733,19 @@ pub fn process_deposits_system(
                     }
                 }
             } else if deposit.item_name.starts_with("doc:") || deposit.item_name.ends_with(".md") {
+                if active_bounty.is_none() {
+                    if let Ok(mut thought) = agent_thoughts.get_mut(entity) {
+                        thought.0 = "ERROR: Documents can only be submitted at the board when you have an active bounty.".into();
+                    }
+                    tracing::warn!(
+                        "[Dropbox] {} tried to deposit document '{}' without an active bounty",
+                        name.0,
+                        deposit.item_name
+                    );
+                    commands.entity(entity).remove::<PendingDeposit>();
+                    continue;
+                }
+
                 // Deposit document into dropbox.
                 let doc_title = deposit
                     .item_name
@@ -678,6 +805,51 @@ pub fn process_deposits_system(
                 // Regular item deposit into dropbox.
                 let item_type = parse_item_name(&deposit.item_name);
                 if let Some(item) = item_type {
+                    if item == crate::items::ItemType::Paycheck {
+                        if let Ok(mut thought) = agent_thoughts.get_mut(entity) {
+                            thought.0 = "ERROR: Paychecks cannot go into the bounty dropbox. Stand at the bounty board entrance and use redeem_paycheck instead.".into();
+                        }
+                        tracing::warn!(
+                            "[Dropbox] {} tried to deposit paycheck into bounty board dropbox",
+                            name.0
+                        );
+                        commands.entity(entity).remove::<PendingDeposit>();
+                        continue;
+                    }
+
+                    let Some(active_bounty) = active_bounty.as_ref() else {
+                        if let Ok(mut thought) = agent_thoughts.get_mut(entity) {
+                            thought.0 = format!(
+                                "ERROR: {} is not a valid board submission item without an active bounty. Claim a bounty first.",
+                                deposit.item_name
+                            );
+                        }
+                        tracing::warn!(
+                            "[Dropbox] {} tried to deposit {} without an active bounty",
+                            name.0,
+                            deposit.item_name
+                        );
+                        commands.entity(entity).remove::<PendingDeposit>();
+                        continue;
+                    };
+
+                    if !bounty_allows_board_submission_item(active_bounty, item) {
+                        if let Ok(mut thought) = agent_thoughts.get_mut(entity) {
+                            thought.0 = format!(
+                                "ERROR: {} is not valid proof for your active bounty. Only deposit the bounty_token, submitted documents, or proof items explicitly required by the bounty.",
+                                deposit.item_name
+                            );
+                        }
+                        tracing::warn!(
+                            "[Dropbox] {} tried to deposit irrelevant board item {} for bounty {}",
+                            name.0,
+                            deposit.item_name,
+                            active_bounty.id
+                        );
+                        commands.entity(entity).remove::<PendingDeposit>();
+                        continue;
+                    }
+
                     if item == crate::items::ItemType::Document {
                         let mut deposited = false;
                         if let Ok(mut docs) = agent_docs.get_mut(entity) {
@@ -1457,10 +1629,10 @@ pub fn apply_mcp_actions_system(
         };
 
         let action_str = &mcp_action.action;
-        tracing::info!(
-            "[MCP:{}] action={} building={:?} service={:?}",
-            name.0,
-            action_str,
+            tracing::debug!(
+                "[MCP:{}] action={} building={:?} service={:?}",
+                name.0,
+                action_str,
             mcp_action.building,
             mcp_action.service
         );
@@ -1485,6 +1657,123 @@ pub fn apply_mcp_actions_system(
 
         let known_buildings: Vec<String> =
             structure_list.iter().map(|(_, _, s)| s.clone()).collect();
+
+        if let Some(current_shift) = shift_worker {
+            if action_str != "leave_shift"
+                && action_str != "work_shift"
+                && action_requires_leaving_shift(action_str)
+            {
+                thought.0 = format!(
+                    "ERROR: You are currently working a shift at {}. Use leave_shift first before doing '{}'.",
+                    current_shift.building_name, action_str
+                );
+                continue;
+            }
+        }
+
+        if let Some(service_def) = crate::world::services::all_services()
+            .into_iter()
+            .find(|service| service.action_name == action_str)
+        {
+            let building_info = structure_list
+                .iter()
+                .find(|(_, _, s)| *s == service_def.building_name)
+                .map(|(e, entrance, name)| (*e, *entrance, name.clone()));
+
+            let Some((building_entity, building_entrance, building_name)) = building_info else {
+                thought.0 = format!(
+                    "ERROR: Service '{}' is configured for unknown building '{}'.",
+                    action_str, service_def.building_name
+                );
+                continue;
+            };
+
+            let at_building = pos.x == building_entrance.x && pos.y == building_entrance.y;
+            if !at_building {
+                thought.0 = format!(
+                    "ERROR: {} is only available at {} entrance ({},{}). Use go_to x={} y={} first.",
+                    action_str,
+                    building_name,
+                    building_entrance.x,
+                    building_entrance.y,
+                    building_entrance.x,
+                    building_entrance.y
+                );
+                continue;
+            }
+
+            if action_str == "search_internet" {
+                let has_gold = agent_inventories_mcp
+                    .get(entity)
+                    .map(|inv| inv.has(crate::items::ItemType::GoldCoin, service_def.gold_cost))
+                    .unwrap_or(false);
+
+                if !has_gold {
+                    let gold = agent_inventories_mcp
+                        .get(entity)
+                        .map(|inv| inv.count(crate::items::ItemType::GoldCoin))
+                        .unwrap_or(0);
+                    thought.0 = format!(
+                        "ERROR: search_internet costs {}g but you only have {}g.",
+                        service_def.gold_cost, gold
+                    );
+                    continue;
+                }
+
+                if let Ok(mut inv) = agent_inventories_mcp.get_mut(entity) {
+                    inv.remove(crate::items::ItemType::GoldCoin, service_def.gold_cost);
+                }
+                let topic = bounty_registry
+                    .tokens
+                    .values()
+                    .find(|bounty| bounty.claimed_by == Some(entity))
+                    .map(|bounty| {
+                        bounty
+                            .hidden_criteria
+                            .split("\n\nGM:")
+                            .next()
+                            .unwrap_or("")
+                            .strip_prefix("Instructions for agent: ")
+                            .unwrap_or("")
+                            .trim()
+                            .to_string()
+                    })
+                    .filter(|topic| !topic.is_empty())
+                    .unwrap_or_else(|| format!("Research task for {}", name.0));
+                commands
+                    .entity(entity)
+                    .insert(crate::world::structures::InsideBuilding(building_entity));
+                commands
+                    .entity(entity)
+                    .insert(crate::agents::gm::PendingResearch { topic });
+                *goal = AgentGoal::PerformingAction;
+                thought.0 =
+                    "Researching... (a research agent is doing real web searches)".into();
+            } else {
+                commands
+                    .entity(entity)
+                    .insert(crate::world::structures::InsideBuilding(building_entity));
+                commands.entity(entity).insert(ActionTimer {
+                    action_name: service_def.action_name.to_string(),
+                    remaining_ticks: service_def.duration_ticks,
+                    effects: service_def.effects,
+                    gold_cost: service_def.gold_cost,
+                    paid: false,
+                    consumes_item: service_def.consumes_item,
+                    produces_item: service_def.produces_item,
+                });
+                *goal = AgentGoal::PerformingAction;
+                thought.0 = format!("{}...", service_def.action_name);
+            }
+
+            event_log.push(LogEvent {
+                tick: tick.0,
+                agent: name.0.clone(),
+                kind: LogKind::Action,
+                text: format!("→ service {} at {}", action_str, building_name),
+            });
+            continue;
+        }
 
         match action_str.as_str() {
             "go_to_board" => {
@@ -1522,6 +1811,8 @@ pub fn apply_mcp_actions_system(
             "go_to_service" => {
                 let building = mcp_action.building.as_deref().unwrap_or("unknown");
                 let service = mcp_action.service.as_deref().unwrap_or("browse");
+                let arrival_only =
+                    service.is_empty() || service == "browse" || service == "entrance";
 
                 if let Some((bld_entity, entrance, _)) = find_building(building) {
                     // Preserve ExecutingBounty goal — walking to a service IS part of executing.
@@ -1534,8 +1825,14 @@ pub fn apply_mcp_actions_system(
                     if let Some(p) = pathfinding::bfs(&map, *pos, entrance) {
                         let tiles = p.len();
                         commands.entity(entity).insert(Path(p));
-                        thought.0 =
-                            format!("Walking to {} for {} ({} tiles).", building, service, tiles);
+                        thought.0 = if arrival_only {
+                            format!(
+                                "Walking to {} ({} tiles). You'll be able to act once you arrive.",
+                                building, tiles
+                            )
+                        } else {
+                            format!("Walking to {} for {} ({} tiles).", building, service, tiles)
+                        };
                     } else {
                         thought.0 =
                             format!("ERROR: Can't find path to {}. Try look_around.", building);
@@ -1572,6 +1869,21 @@ pub fn apply_mcp_actions_system(
                 let building = mcp_action.building.as_deref().unwrap_or("unknown");
 
                 if let Some((bld_entity, entrance, _)) = find_building(building) {
+                    if let Some(current_shift) = shift_worker {
+                        if current_shift.building == bld_entity {
+                            thought.0 = format!(
+                                "Already working a shift at {}. Stay on shift or use leave_shift when you're ready to stop.",
+                                current_shift.building_name
+                            );
+                        } else {
+                            thought.0 = format!(
+                                "ERROR: Already working a shift at {}. Use leave_shift before switching to {}.",
+                                current_shift.building_name, building
+                            );
+                        }
+                        continue;
+                    }
+
                     // Check if agent is already at the building.
                     let at_building = pos.x == entrance.x && pos.y == entrance.y;
                     if at_building {
@@ -1604,7 +1916,7 @@ pub fn apply_mcp_actions_system(
                     }
                 } else {
                     thought.0 = format!(
-                        "ERROR: Unknown building '{}'. Shiftable buildings: cafe, market, warehouse, hotel. Use go_to_service to walk there first.",
+                        "ERROR: Unknown building '{}'. Shiftable buildings: cafe, market, warehouse, hotel. Use check_known_locations and go_to to reach one first.",
                         building,
                     );
                 }
@@ -1615,11 +1927,10 @@ pub fn apply_mcp_actions_system(
                 // (the agent may be working a shift as part of a bounty).
                 let on_shift = shift_worker.is_some();
                 if on_shift {
-                    // Preserve ExecutingBounty goal — shift was part of bounty work.
-                    if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
-                        *goal = AgentGoal::Idle;
-                    }
-                    thought.0 = "Left the shift. Paycheck earned based on ticks worked.".into();
+                    commands
+                        .entity(entity)
+                        .insert(crate::agents::components::WantsToLeaveShift);
+                    thought.0 = "Ending your shift. Your paycheck will be based on ticks worked.".into();
                 } else {
                     thought.0 = "ERROR: Not currently working a shift. Nothing to leave.".into();
                 }
@@ -1627,22 +1938,40 @@ pub fn apply_mcp_actions_system(
 
             "complete_bounty" => {
                 // Must be at the bounty board to submit completion.
-                let at_board = known_locs
-                    .locations
-                    .values()
-                    .find(|l| l.name == "bounty_board")
-                    .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
+                let at_board = structure_list
+                    .iter()
+                    .find(|(_, entrance, name)| name == "bounty_board"
+                        && pos.x == entrance.x
+                        && pos.y == entrance.y)
+                    .is_some()
+                    || known_locs
+                        .locations
+                        .values()
+                        .find(|l| l.name == "bounty_board")
+                        .is_some_and(|l| pos.x == l.entrance.x && pos.y == l.entrance.y);
 
                 if !at_board {
-                    thought.0 = "You must be at the bounty board to submit a bounty for completion. Use go_to_board first.".into();
+                    thought.0 = "You must be at the bounty board entrance to submit a bounty. Use check_known_locations, then go_to the bounty_board entrance coordinates first.".into();
                 } else {
                     // Check if agent has deposited a bounty token in the dropbox.
                     let dropbox_slot = dropbox.get_slot(entity);
                     let dropbox_bounty_id = dropbox_slot.and_then(|s| s.bounty_token_id);
 
                     if let Some(bounty_id) = dropbox_bounty_id {
-                        // Token is in the dropbox — submit for GM verification.
-                        *goal = AgentGoal::ReturningToBoard(bounty_id);
+                        // Token is in the dropbox — submit for GM verification immediately.
+                        if let Some(b) = bounty_registry.tokens.get_mut(&bounty_id) {
+                            b.state = crate::world::bounty::BountyState::PendingVerification;
+                        }
+                        commands
+                            .entity(entity)
+                            .insert(crate::agents::gm::PendingGmReview { bounty_id });
+                        event_log.push(LogEvent {
+                            tick: tick.0,
+                            agent: name.0.clone(),
+                            kind: LogKind::Action,
+                            text: format!("SUBMITTED: bounty {} for GM review", bounty_id),
+                        });
+                        *goal = AgentGoal::Idle;
                         thought.0 = "Bounty submitted for Game Master review! Your token and proof items are in the dropbox. Waiting for verdict...".into();
                     } else {
                         // No token in dropbox — check if they have an active bounty.
@@ -1668,7 +1997,7 @@ pub fn apply_mcp_actions_system(
                     // Treat x=0 AND y=0 as "no coordinates" unless agent is already near (0,0).
                     let near_origin = pos.x.abs() <= 2 && pos.y.abs() <= 2;
                     if x == 0 && y == 0 && !near_origin {
-                        thought.0 = "ERROR: go_to requires explicit x and y coordinates. If you want to visit a building, use go_to_service instead. Map is 100x40 (x: 0-39, y: 0-199).".into();
+                        thought.0 = "ERROR: go_to requires explicit x and y coordinates. Use check_known_locations to find a building entrance first. Map is 100x40 (x: 0-39, y: 0-199).".into();
                     } else {
                         let target = GridPos { x, y };
                         if !map.is_walkable(&target) {
@@ -1734,7 +2063,7 @@ pub fn apply_mcp_actions_system(
                         .map(|l| format!("({},{})", l.entrance.x, l.entrance.y))
                         .unwrap_or_else(|| "unknown".into());
                     thought.0 = format!(
-                        "Must be at the bounty board to claim a bounty! Your position: ({},{}), board entrance: {}, goal: {:?}. Use go_to_board first.",
+                        "Must be at the bounty board to claim a bounty! Your position: ({},{}), board entrance: {}, goal: {:?}. Use check_known_locations and go_to the board entrance first.",
                         pos.x, pos.y, board_entrance, goal
                     );
                 } else if bounty_registry.tokens.values().any(|b| {
@@ -2207,14 +2536,14 @@ pub fn apply_mcp_actions_system(
                 // Must be inside a building.
                 let building = structure_list
                     .iter()
-                    .find(|(_, entrance, name)| pos.x == entrance.x && pos.y == entrance.y);
+                    .find(|(_, entrance, _name)| pos.x == entrance.x && pos.y == entrance.y);
 
                 if let Some((bld_entity, _, bld_name)) = building {
                     commands.entity(entity).insert(PendingDeposit {
                         item_name: item_name.to_string(),
                         building_entity: *bld_entity,
                     });
-                    thought.0 = format!("Deposited {} at {} (your position: ({},{})). If this is the WRONG building, you need to go_to_service to the correct one first!", item_name, bld_name, pos.x, pos.y);
+                    thought.0 = format!("Deposited {} at {} (your position: ({},{})). If this is the wrong building, use check_known_locations and go_to the correct entrance first.", item_name, bld_name, pos.x, pos.y);
 
                     event_log.push(LogEvent {
                         tick: tick.0,
@@ -2223,7 +2552,7 @@ pub fn apply_mcp_actions_system(
                         text: format!("DEPOSIT: {} → {}", item_name, bld_name),
                     });
                 } else {
-                    thought.0 = format!("ERROR: You are not at any building entrance (your position: ({},{})). Walk to the building first using go_to_service, wait to arrive, then deposit.", pos.x, pos.y);
+                    thought.0 = format!("ERROR: You are not at any building entrance (your position: ({},{})). Use check_known_locations and go_to the building entrance first, then deposit.", pos.x, pos.y);
                 }
             }
 
@@ -2349,8 +2678,101 @@ pub fn apply_mcp_actions_system(
                 }
             }
 
-            "inspect_item" => {
-                let item_name = mcp_action.service.as_deref().unwrap_or("unknown");
+            "inspect" | "inspect_item" | "search_library" => {
+                let requested_target = mcp_action
+                    .service
+                    .as_deref()
+                    .or(mcp_action.text.as_deref())
+                    .unwrap_or("");
+                let at_library = structure_list.iter().any(|(_, entrance, sname)| {
+                    sname == "library" && pos.x == entrance.x && pos.y == entrance.y
+                });
+
+                if at_library && requested_target.is_empty() {
+                    if library.documents.is_empty() {
+                        thought.0 =
+                            "The library is empty — no documents have been archived yet.".into();
+                    } else {
+                        let listing: Vec<String> = library
+                            .documents
+                            .iter()
+                            .enumerate()
+                            .map(|(i, doc)| {
+                                format!(
+                                    "{}. \"{}\" by {} (bounty: {})",
+                                    i + 1,
+                                    doc.title,
+                                    doc.author,
+                                    doc.bounty_description
+                                )
+                            })
+                            .collect();
+                        if let Some(session) = sessions.sessions.get(&entity) {
+                            let _ = session.prompt_tx.try_send(format!(
+                                "=== LIBRARY CATALOG ({} documents) ===\n{}\n=== Use inspect service=<title> to read one or copy_document service=<title> to copy one ===",
+                                library.documents.len(),
+                                listing.join("\n"),
+                            ));
+                        }
+                        thought.0 =
+                            format!("Browsing the library catalog ({} documents).", library.documents.len());
+                    }
+                    continue;
+                }
+
+                if at_library
+                    && !requested_target.is_empty()
+                    && !requested_target.ends_with(".md")
+                    && !requested_target.starts_with("doc:")
+                    && requested_target != "document"
+                    && requested_target != "bounty_token"
+                {
+                    let query_lower = requested_target.to_lowercase();
+                    let matches: Vec<_> = library
+                        .documents
+                        .iter()
+                        .filter(|doc| {
+                            doc.title.to_lowercase().contains(&query_lower)
+                                || doc.author.to_lowercase().contains(&query_lower)
+                                || doc.bounty_description.to_lowercase().contains(&query_lower)
+                                || doc.content.to_lowercase().contains(&query_lower)
+                        })
+                        .collect();
+
+                    if !matches.is_empty() {
+                        let listing: Vec<String> = matches
+                            .iter()
+                            .map(|doc| {
+                                format!(
+                                    "- \"{}\" by {} (bounty: {})",
+                                    doc.title, doc.author, doc.bounty_description
+                                )
+                            })
+                            .collect();
+                        if let Some(session) = sessions.sessions.get(&entity) {
+                            let _ = session.prompt_tx.try_send(format!(
+                                "=== LIBRARY MATCHES for '{}' ({} matches) ===\n{}\n=== Use inspect service=<title> to read one or copy_document service=<title> to copy one ===",
+                                requested_target,
+                                matches.len(),
+                                listing.join("\n"),
+                            ));
+                        }
+                        thought.0 = format!(
+                            "Found {} library documents matching '{}'.",
+                            matches.len(),
+                            requested_target
+                        );
+                        continue;
+                    }
+                }
+
+                if requested_target.is_empty() {
+                    thought.0 =
+                        "ERROR: inspect needs a target here. At the library you can call inspect with no target to browse the catalog.".into();
+                    continue;
+                }
+
+                let item_name = requested_target;
 
                 if item_name == "bounty_token" || item_name.starts_with("bounty") {
                     // Show bounty token details via session message.
@@ -2417,7 +2839,7 @@ pub fn apply_mcp_actions_system(
                             format!("Reading document '{}' from {}.", doc_title, found_location);
                     } else {
                         thought.0 = format!(
-                            "ERROR: Could not find document '{}'. Carry it or stand at the building holding it.",
+                            "ERROR: Could not find document '{}'. Carry it, stand at the building holding it, or inspect the library catalog first.",
                             doc_title
                         );
                     }
@@ -2441,7 +2863,7 @@ pub fn apply_mcp_actions_system(
                     if let Some(title) = titles.first() {
                         if let Some(session) = sessions.sessions.get(&entity) {
                             let _ = session.prompt_tx.try_send(format!(
-                                "Generic 'document' selected. Available document: '{}'. Use inspect_item with service='doc:{}' for the full contents, or take_item with service='document' to pick up the first one.",
+                                "Generic 'document' selected. Available document: '{}'. Use inspect with service='doc:{}' for the full contents, or take_item with service='document' to pick up the first one.",
                                 title,
                                 title,
                             ));
@@ -2602,164 +3024,99 @@ pub fn apply_mcp_actions_system(
                 }
             }
 
-            "search_library" => {
-                let at_library = structure_list.iter().any(|(_, entrance, sname)| {
-                    sname == "library" && pos.x == entrance.x && pos.y == entrance.y
-                });
-
-                if !at_library {
-                    thought.0 = "ERROR: You must be at the library to search documents. Use go_to_service with building='library'.".into();
+            "copy_document" => {
+                let title = mcp_action.service.as_deref().unwrap_or("");
+                if title.is_empty() {
+                    thought.0 = "ERROR: copy_document requires service=<document title>.".into();
                 } else {
-                    let query = mcp_action
-                        .service
-                        .as_deref()
-                        .or(mcp_action.text.as_deref())
-                        .unwrap_or("");
+                    let current_building = structure_list
+                        .iter()
+                        .find(|(_, entrance, _)| pos.x == entrance.x && pos.y == entrance.y)
+                        .map(|(entity, _, name)| (*entity, name.clone()));
 
-                    if query.is_empty() {
-                        if library.documents.is_empty() {
-                            thought.0 =
-                                "The library is empty — no documents have been archived yet."
-                                    .into();
-                        } else {
-                            let listing: Vec<String> = library
-                                .documents
-                                .iter()
-                                .enumerate()
-                                .map(|(i, doc)| {
-                                    format!(
-                                        "{}. \"{}\" by {} (bounty: {})",
-                                        i + 1,
-                                        doc.title,
-                                        doc.author,
-                                        doc.bounty_description
-                                    )
-                                })
-                                .collect();
-                            let msg = format!("=== LIBRARY CATALOG ({} documents) ===\n{}\n=== Use copy_document with service=<title> to copy one ===",
-                                library.documents.len(), listing.join("\n"));
-                            if let Some(session) = sessions.sessions.get(&entity) {
-                                let _ = session.prompt_tx.try_send(msg);
-                            }
-                            thought.0 = format!(
-                                "Found {} documents in the library.",
-                                library.documents.len()
-                            );
-                        }
-                    } else {
-                        let query_lower = query.to_lowercase();
-                        let matches: Vec<&crate::world::bounty::LibraryEntry> = library
-                            .documents
-                            .iter()
-                            .filter(|doc| {
-                                doc.title.to_lowercase().contains(&query_lower)
-                                    || doc.author.to_lowercase().contains(&query_lower)
-                                    || doc.bounty_description.to_lowercase().contains(&query_lower)
-                                    || doc.content.to_lowercase().contains(&query_lower)
-                            })
-                            .collect();
+                    let mut copied_from = None;
+                    let mut content = None;
 
-                        if matches.is_empty() {
-                            thought.0 =
-                                format!("No documents matching '{}' in the library.", query);
-                        } else {
-                            let listing: Vec<String> = matches
-                                .iter()
-                                .map(|doc| {
-                                    format!(
-                                        "- \"{}\" by {} (bounty: {})",
-                                        doc.title, doc.author, doc.bounty_description
-                                    )
-                                })
-                                .collect();
-                            let msg = format!("=== SEARCH RESULTS for '{}' ({} matches) ===\n{}\n=== Use copy_document with service=<title> to copy one ===",
-                                query, matches.len(), listing.join("\n"));
-                            if let Some(session) = sessions.sessions.get(&entity) {
-                                let _ = session.prompt_tx.try_send(msg);
+                    if let Some((building_entity, building_name)) = current_building.as_ref() {
+                        if building_name == "library" {
+                            if let Some(doc) = library.documents.iter().find(|doc| doc.title == title)
+                            {
+                                copied_from = Some("library archive".to_string());
+                                content = Some(doc.content.clone());
                             }
-                            thought.0 =
-                                format!("Found {} documents matching '{}'.", matches.len(), query);
+                        } else if let Ok(docs) = item_params.p2().get_mut(*building_entity) {
+                            if let Some(doc) = docs.documents.get(title) {
+                                copied_from = Some(building_name.clone());
+                                content = Some(doc.clone());
+                            }
                         }
                     }
 
-                    event_log.push(LogEvent {
-                        tick: tick.0,
-                        agent: name.0.clone(),
-                        kind: LogKind::Action,
-                        text: format!(
-                            "Searched library for '{}'",
-                            mcp_action.service.as_deref().unwrap_or("all")
-                        ),
-                    });
-                }
-            }
-
-            "copy_document" => {
-                let at_library = structure_list.iter().any(|(_, entrance, sname)| {
-                    sname == "library" && pos.x == entrance.x && pos.y == entrance.y
-                });
-
-                if !at_library {
-                    thought.0 = "ERROR: You must be at the library to copy documents.".into();
-                } else {
-                    let title = mcp_action.service.as_deref().unwrap_or("");
-                    if title.is_empty() {
-                        thought.0 =
-                            "ERROR: copy_document requires service=<document title>.".into();
-                    } else {
-                        let found = library.documents.iter().find(|doc| doc.title == title);
-                        if let Some(doc) = found {
-                            commands.entity(entity).insert(PendingCreateDocument {
-                                title: doc.title.clone(),
-                                content: doc.content.clone(),
-                            });
-
-                            thought.0 =
-                                format!("Copied '{}' from the library to your inventory.", title);
-
-                            if let Some(session) = sessions.sessions.get(&entity) {
-                                let _ = session.prompt_tx.try_send(format!(
-                                    "=== LIBRARY COPY: {} ===\nAuthor: {}\nBounty: {}\n\n{}\n=== END ===",
-                                    doc.title, doc.author, doc.bounty_description, doc.content,
-                                ));
+                    if content.is_none() {
+                        if let Ok(docs) = item_params.p1().get_mut(entity) {
+                            if docs.documents.contains_key(title) {
+                                thought.0 =
+                                    format!("You already carry '{}'. No copy was needed.", title);
+                                continue;
                             }
-
-                            event_log.push(LogEvent {
-                                tick: tick.0,
-                                agent: name.0.clone(),
-                                kind: LogKind::Action,
-                                text: format!("Copied '{}' from library", title),
-                            });
-                        } else {
-                            thought.0 = format!("ERROR: No document titled '{}' in the library. Use search_library to browse.", title);
                         }
+                    }
+
+                    if let Some(content) = content {
+                        commands.entity(entity).insert(PendingCreateDocument {
+                            title: title.to_string(),
+                            content,
+                        });
+                        thought.0 = format!(
+                            "Copied '{}' from {} to your inventory.",
+                            title,
+                            copied_from.unwrap_or_else(|| "the current building".into())
+                        );
+
+                        event_log.push(LogEvent {
+                            tick: tick.0,
+                            agent: name.0.clone(),
+                            kind: LogKind::Action,
+                            text: format!("Copied '{}' into inventory", title),
+                        });
+                    } else {
+                        thought.0 = format!(
+                            "ERROR: No inspectable document titled '{}'. Stand at the building holding it, inspect the library catalog, or take the document first.",
+                            title
+                        );
                     }
                 }
             }
 
             "help" => {
-                let feedback = mcp_action
-                    .feedback
-                    .clone()
-                    .or_else(|| mcp_action.text.clone())
-                    .unwrap_or_else(|| "general feedback".into());
+                let feedback = mcp_action.feedback.clone().or_else(|| mcp_action.text.clone());
+                let cheat_sheet = "CHEAT SHEET:\n- check_known_locations shows the entrance coordinates you have discovered.\n- go_to x y moves you to the exact tile you specify.\n- Once you are standing on an entrance tile, call the local action directly: buy_muffin, buy_coffee, read_library, redeem_paycheck, sleep_hotel, and so on.\n- At the bounty board: claim_bounty -> deposit_item bounty_token -> deposit proof -> complete_bounty -> wait for the GM verdict.\n- inspect with no target at the library browses the catalog. inspect service='doc:title.md' reads a document. copy_document pulls a readable document from the current place into your inventory.\n- check_own_stats, check_inventory, check_known_locations, and check_relationships inspect your own state.";
 
-                suggestion_box.entries.push(Suggestion {
-                    tick: tick.0,
-                    agent: name.0.clone(),
-                    text: feedback.clone(),
-                });
+                if let Some(feedback) = feedback {
+                    suggestion_box.entries.push(Suggestion {
+                        tick: tick.0,
+                        agent: name.0.clone(),
+                        text: feedback.clone(),
+                    });
 
-                thought.0 = "Submitted feedback to the developers.".into();
+                    thought.0 =
+                        "Submitted feedback to the developers and refreshed your cheat sheet.".into();
 
-                event_log.push(LogEvent {
-                    tick: tick.0,
-                    agent: name.0.clone(),
-                    kind: LogKind::System,
-                    text: format!("FEEDBACK: {}", feedback),
-                });
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: name.0.clone(),
+                        kind: LogKind::System,
+                        text: format!("FEEDBACK: {}", feedback),
+                    });
 
-                tracing::warn!("[FEEDBACK:{}] {}", name.0, feedback);
+                    tracing::warn!("[FEEDBACK:{}] {}", name.0, feedback);
+                } else {
+                    thought.0 = "Opened the cheat sheet.".into();
+                }
+
+                if let Some(session) = sessions.sessions.get(&entity) {
+                    let _ = session.prompt_tx.try_send(cheat_sheet.to_string());
+                }
             }
 
             _ => {
@@ -2792,7 +3149,7 @@ pub fn cleanup_abandoned_dropbox_slots_system(
     mut event_log: ResMut<AgentEventLog>,
     tick: Res<TickCount>,
 ) {
-    let Some((board_entity, bounty_registry, mut dropbox, board_entrance, mut board_items)) =
+    let Some((_, bounty_registry, mut dropbox, board_entrance, mut board_items)) =
         boards.iter_mut().next()
     else {
         return;

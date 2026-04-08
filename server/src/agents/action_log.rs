@@ -1,14 +1,13 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
-use crate::world::map::GridPos;
-
 /// Append-only log of actions an agent has performed. Used for bounty verification.
 #[derive(Component, Default, Debug)]
 pub struct ActionLog {
     pub entries: Vec<LogEntry>,
 }
 
+#[allow(dead_code)]
 impl ActionLog {
     pub fn log(&mut self, tick: u64, event: ActionEvent) {
         self.entries.push(LogEntry { tick, event });
@@ -47,6 +46,7 @@ pub struct LogEntry {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ActionEvent {
     /// Spent gold at a building.
     GoldSpent { amount: u32, building: String },

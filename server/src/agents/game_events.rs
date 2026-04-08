@@ -155,7 +155,7 @@ pub fn game_events_system(
                         if !instructions.is_empty() {
                             status += &format!("\n  HOW TO COMPLETE: {}", instructions);
                         }
-                        status += "\n  When done, go to the bounty board and use complete_bounty.";
+                        status += "\n  When done, return to the bounty board, deposit your bounty_token first, deposit any proof documents/items, then use complete_bounty and wait for the GM verdict.";
                     }
                 }
                 AgentGoal::Idle => {
@@ -199,8 +199,8 @@ pub fn game_events_system(
                 }
             }
 
-            status += "\nReminder: Use inspect_item with service='game_manual' to review the full rules and action list.";
-            status += "\nReminder: Use the help action to report bugs or give feedback to the developers.";
+            status += "\nReminder: Use inspect with service='game_manual' to review the full rules and action list.";
+            status += "\nReminder: Use help for the cheat sheet, and include text if you want to file feedback.";
             status += "\n=== END STATUS ===";
             messages.push(status);
             event_state.last_stat_tick = tick.0;
@@ -231,16 +231,16 @@ fn building_arrival_message(building_name: &str) -> String {
             - claim_bounty — pick a bounty from the board to work on\n\
             - redeem_paycheck — convert any paychecks from shifts into gold\n\
             - deposit_item — deposit your bounty_token and proof items/documents into the dropbox\n\
-            - complete_bounty — submit for GM review (you MUST deposit bounty_token first!)\n\
+            - complete_bounty — submit for GM review after your bounty_token and proof are deposited\n\
             - look_around — see nearby agents and buildings\n\
-            WORKFLOW: deposit_item(bounty_token) → deposit_item(doc:yourfile.md) → complete_bounty"
+            WORKFLOW: claim_bounty → do the work → deposit_item(bounty_token) → deposit_item(doc:yourfile.md or required proof) → complete_bounty → wait for GM verdict"
             .to_string(),
 
         "cafe" => "You arrived at the CAFE.\n\
             A cozy spot for food, coffee, and socializing.\n\
             Available services:\n\
-            - eat_cafe (1g, 10 ticks) — +40 hunger\n\
-            - buy_coffee (1g, 5 ticks) — +20 energy\n\
+            - buy_muffin (1g, 5 ticks) — gives a muffin you can consume for hunger\n\
+            - buy_coffee (1g, 5 ticks) — gives coffee you can consume for energy/context\n\
             - hang_out (free, 15 ticks) — +25 boredom\n\
             Available shifts: work_shift (1g per 120 ticks, food perk)"
             .to_string(),
@@ -256,8 +256,7 @@ fn building_arrival_message(building_name: &str) -> String {
         "apartments" => "You arrived at the APARTMENTS.\n\
             Your free home base — no gold required.\n\
             Available services:\n\
-            - sleep_at_home (free, 50 ticks) — +80 energy\n\
-            - cook_at_home (free, 30 ticks) — +60 hunger"
+            - sleep_at_home (free, 50 ticks) — +80 energy"
             .to_string(),
 
         "warehouse" => "You arrived at the WAREHOUSE.\n\
@@ -269,6 +268,8 @@ fn building_arrival_message(building_name: &str) -> String {
         "market" => "You arrived at the MARKET.\n\
             Buy and sell goods.\n\
             Available services:\n\
+            - buy_sandwich (2g, 5 ticks) — gives a sandwich you can consume for hunger\n\
+            - buy_rations (1g, 5 ticks) — gives rations you can consume for hunger\n\
             - window_shop (free, 10 ticks) — +15 boredom\n\
             Available shifts: work_shift (1g per 120 ticks, food perk)"
             .to_string(),
@@ -276,7 +277,7 @@ fn building_arrival_message(building_name: &str) -> String {
         "library" => "You arrived at the LIBRARY.\n\
             Archive of all completed bounty research documents.\n\
             Available actions:\n\
-            - search_library (free) — search documents by keyword (use service=keyword)\n\
+            - inspect (free) — browse the catalog here, or inspect service=<title> to read a document\n\
             - copy_document (free) — copy a document to your inventory (use service=title)\n\
             You cannot take originals, only copies."
             .to_string(),
@@ -293,5 +294,37 @@ fn building_arrival_message(building_name: &str) -> String {
             .to_string(),
 
         other => format!("You arrived at {}.", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::building_arrival_message;
+
+    #[test]
+    fn bounty_board_arrival_message_uses_current_submission_flow() {
+        let message = building_arrival_message("bounty_board");
+
+        assert!(message.contains("redeem_paycheck"));
+        assert!(message.contains("deposit_item(bounty_token)"));
+        assert!(message.contains("wait for GM verdict"));
+        assert!(!message.contains("collect your reward"));
+    }
+
+    #[test]
+    fn cafe_arrival_message_lists_real_food_services() {
+        let message = building_arrival_message("cafe");
+
+        assert!(message.contains("buy_muffin"));
+        assert!(message.contains("buy_coffee"));
+        assert!(!message.contains("eat_cafe"));
+    }
+
+    #[test]
+    fn market_arrival_message_lists_real_food_services() {
+        let message = building_arrival_message("market");
+
+        assert!(message.contains("buy_sandwich"));
+        assert!(message.contains("buy_rations"));
     }
 }

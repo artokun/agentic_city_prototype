@@ -34,7 +34,7 @@ fn persist_session_events(
     supervisor: Option<ResMut<supervisor::SessionSupervisor>>,
     mut cursor: ResMut<PersistenceCursor>,
 ) {
-    let Some(mut supervisor) = supervisor else { return };
+    let Some(supervisor) = supervisor else { return };
 
     let total = event_log.total_pushed;
     if total <= cursor.last_total {

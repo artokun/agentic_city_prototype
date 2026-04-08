@@ -11,8 +11,11 @@ use crate::tick::TickCount;
 use crate::world::map::GridPos;
 use crate::world::services::ServiceEffects;
 
+#[allow(dead_code)]
 const CHAT_DURATION: u32 = 15;
+#[allow(dead_code)]
 const CHAT_BOREDOM_BOOST: f32 = 20.0;
+#[allow(dead_code)]
 const CHAT_RANGE: i32 = 2;
 
 /// Tracks an agent's relationships with other agents.
@@ -23,6 +26,7 @@ pub struct Relationships {
 
 /// What an agent remembers about another agent.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AgentMemory {
     pub name: String,
     pub friendship: u32,
@@ -36,6 +40,7 @@ pub struct AgentMemory {
 
 /// A single message in a conversation.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChatMessage {
     pub tick: u64,
     pub speaker: String,
@@ -44,6 +49,7 @@ pub struct ChatMessage {
 
 /// Active conversation state.
 #[derive(Component)]
+#[allow(dead_code)]
 pub struct ChattingWith {
     pub partner: Entity,
     pub messages: Vec<ChatMessage>,
@@ -52,10 +58,11 @@ pub struct ChattingWith {
 }
 
 /// System: find pairs of nearby idle/bored agents and start conversations.
+#[allow(dead_code)]
 pub fn social_matchmaking_system(
     mut commands: Commands,
-    tick: Res<TickCount>,
-    mut event_log: ResMut<AgentEventLog>,
+    _tick: Res<TickCount>,
+    mut _event_log: ResMut<AgentEventLog>,
     agents: Query<(
         Entity,
         &AgentName,

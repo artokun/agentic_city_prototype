@@ -27,11 +27,13 @@ pub fn query_world_state_json(query: &str) -> Option<Value> {
 }
 
 /// Try to read a document from focused world state queries (dropbox, then agent).
+#[allow(dead_code)]
 pub fn try_read_from_focused_state(agent_name: &str, title: &str) -> Option<String> {
     find_document_in_query(&format!("dropbox:{agent_name}"), agent_name, title)
         .or_else(|| find_document_in_query(&format!("agent:{agent_name}"), agent_name, title))
 }
 
+#[allow(dead_code)]
 fn find_document_in_query(query: &str, agent_name: &str, title: &str) -> Option<String> {
     let body = query_world_state_json(query)?;
 
@@ -62,6 +64,7 @@ fn find_document_in_query(query: &str, agent_name: &str, title: &str) -> Option<
     None
 }
 
+#[allow(dead_code)]
 fn match_document(documents: &[Value], title: &str) -> Option<String> {
     documents.iter().find_map(|doc| {
         doc.get("title")

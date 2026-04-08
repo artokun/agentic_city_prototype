@@ -5,8 +5,9 @@ use super::ai::AgentSessions;
 use super::components::{AgentAnimation, AgentId, AnimState, ThoughtBubble};
 use super::needs::Needs;
 use super::token_tracking::ContextWindow;
-use crate::items::{DocumentInventory, Inventory, ItemType};
+use crate::items::{Inventory, ItemType};
 use crate::tick::TickCount;
+use crate::world::shifts::{redeem_paychecks, PaycheckWallet};
 use crate::world::economy::GoldReserve;
 use crate::world::services::ServiceEffects;
 use crate::world::structures::{InsideBuilding, SpriteType, StructureId};
@@ -29,12 +30,14 @@ pub struct ActionTimer {
 pub fn action_timer_system(
     mut commands: Commands,
     tick: Res<TickCount>,
+    mut event_log: ResMut<super::event_log::AgentEventLog>,
     mut agents: Query<
         (
             Entity,
             &mut ActionTimer,
             &mut Needs,
             &mut Inventory,
+            Option<&mut PaycheckWallet>,
             &mut AgentAnimation,
             &mut ThoughtBubble,
             &super::components::AgentName,
@@ -55,10 +58,11 @@ pub fn action_timer_system(
         mut timer,
         mut needs,
         mut inv,
+        paycheck_wallet,
         mut anim,
         mut thought,
         name,
-        agent_id,
+        _agent_id,
         mut action_log,
         mut ctx_window,
         inside,
@@ -122,10 +126,10 @@ pub fn action_timer_system(
             // Give produced item if any.
             if let Some(item) = timer.produces_item {
                 inv.add(item, 1);
-                tracing::info!("{} received {} from '{}'", name.0, item, timer.action_name);
+                tracing::debug!("{} received {} from '{}'", name.0, item, timer.action_name);
             }
 
-            tracing::info!(
+            tracing::debug!(
                 "{} finished '{}' (E:{:.0} H:{:.0} B:{:.0})",
                 name.0,
                 timer.action_name,
@@ -142,6 +146,25 @@ pub fn action_timer_system(
                 },
             );
 
+            if timer.action_name == "redeem_paycheck" {
+                if let Some(mut paycheck_wallet) = paycheck_wallet {
+                    if let Some((count, gold)) = redeem_paychecks(&mut inv, &mut paycheck_wallet) {
+                        thought.0 = format!("Cashed {} paycheck(s) for {}g!", count, gold);
+                        event_log.push(super::event_log::LogEvent {
+                            tick: tick.0,
+                            agent: name.0.clone(),
+                            kind: super::event_log::LogKind::Action,
+                            text: format!("Redeemed {} paycheck(s) → {}g", count, gold),
+                        });
+                        tracing::debug!("{} redeemed {} paycheck(s) for {}g", name.0, count, gold);
+                    } else {
+                        thought.0 = "No paychecks to redeem.".into();
+                    }
+                } else {
+                    thought.0 = "No paycheck wallet found.".into();
+                }
+            }
+
             // Sleep actions trigger context compaction.
             let is_sleep = timer.action_name.contains("sleep");
             if is_sleep {
@@ -151,7 +174,7 @@ pub fn action_timer_system(
                 let old = ctx_window.tokens_used;
                 ctx_window.tokens_used = 0;
                 ctx_window.context_limit = crate::config::context_limit();
-                tracing::info!(
+                tracing::debug!(
                     "[COMPACT] {} slept → compact sent, tokens {} → 0",
                     name.0,
                     old,
@@ -164,11 +187,12 @@ pub fn action_timer_system(
                     "Finished {}. Feeling energized! (token limit +10k)",
                     timer.action_name
                 );
-                tracing::info!(
+                tracing::debug!(
                     "[COFFEE] {} drank coffee — token limit now {}",
                     name.0,
                     ctx_window.context_limit
                 );
+            } else if timer.action_name == "redeem_paycheck" {
             } else {
                 thought.0 = format!("Finished {}.", timer.action_name);
             }

@@ -22,6 +22,7 @@ pub struct BoardQueue {
 
 impl BoardQueue {
     /// Try to start interacting. Returns true if this agent got access.
+    #[allow(dead_code)]
     pub fn try_interact(&mut self, agent: Entity) -> bool {
         if self.interacting.is_none() {
             self.interacting = Some(agent);
@@ -34,6 +35,7 @@ impl BoardQueue {
     }
 
     /// Join the wait queue (if not already in it and not interacting).
+    #[allow(dead_code)]
     pub fn join_queue(&mut self, agent: Entity) {
         if self.interacting == Some(agent) {
             return;
@@ -90,12 +92,14 @@ pub enum BountyObjective {
 
 /// A single verifiable step in a bounty contract.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BountyStep {
     pub description: String,
     pub condition: StepCondition,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum StepCondition {
     /// Agent must spend at least N gold at a specific building.
     SpendGold { building: String, amount: u32 },
@@ -111,6 +115,7 @@ pub enum StepCondition {
     ReturnToBoard,
 }
 
+#[allow(dead_code)]
 impl BountyStep {
     fn verify(
         &self,
@@ -177,6 +182,7 @@ pub struct BountyTokenData {
     /// Items given to the agent upon claiming (e.g., the egg to hide).
     pub claim_items: Vec<(ItemType, u32)>,
     /// Tick when the bounty was created.
+    #[allow(dead_code)]
     pub created_tick: u64,
     /// Tick when the bounty was picked up by an agent.
     pub picked_up_tick: Option<u64>,
@@ -185,6 +191,7 @@ pub struct BountyTokenData {
     /// Is this bounty expired?
     pub expired: bool,
     /// Optional multi-step verification (for contract-style bounties).
+    #[allow(dead_code)]
     pub steps: Vec<BountyStep>,
     /// Hidden acceptance criteria — only the game master can see this.
     /// Agents never see this field. The GM uses it to verify completion.
@@ -247,6 +254,7 @@ impl BountyTokenData {
         }
     }
 
+    #[allow(dead_code)]
     pub fn ticks_remaining(&self, current_tick: u64) -> Option<u32> {
         if self.ttl_ticks == 0 {
             return Some(u32::MAX); // no TTL
@@ -269,6 +277,7 @@ impl BountyTokenData {
     }
 
     /// Check all steps against an agent's action log and document inventory.
+    #[allow(dead_code)]
     pub fn verify_steps(&self, log: &ActionLog, docs: Option<&DocumentInventory>) -> Vec<bool> {
         if self.steps.is_empty() {
             return vec![];
@@ -286,6 +295,7 @@ impl BountyTokenData {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn all_steps_complete(&self, log: &ActionLog, docs: Option<&DocumentInventory>) -> bool {
         if self.steps.is_empty() {
             return true;
@@ -385,11 +395,13 @@ pub struct BountyTokenStore {
 }
 
 /// Backward-compat: other files import `BountyRegistry`. Remove in Phase 2.
+#[allow(dead_code)]
 pub type BountyRegistry = BountyTokenStore;
 
 impl BountyTokenStore {
     /// Convenience accessor: iterate tokens as a flat slice-like view.
     /// Many callers used `.bounties` directly; this bridges the gap.
+    #[allow(dead_code)]
     pub fn bounties_iter(&self) -> impl Iterator<Item = &BountyTokenData> {
         self.tokens.values()
     }
@@ -422,6 +434,7 @@ impl BountyTokenStore {
         self.tokens.get(&bounty_id)
     }
 
+    #[allow(dead_code)]
     pub fn mark_completed(&mut self, bounty_id: Uuid) {
         if let Some(b) = self.tokens.get_mut(&bounty_id) {
             b.state = BountyState::Completed;
@@ -432,6 +445,7 @@ impl BountyTokenStore {
         self.tokens.get(&bounty_id)
     }
 
+    #[allow(dead_code)]
     pub fn agent_bounty(&self, agent: Entity) -> Option<&BountyTokenData> {
         self.tokens
             .values()

@@ -54,6 +54,7 @@ pub struct AppState {
     pub documents_dir: String,
 }
 
+#[allow(dead_code)]
 pub async fn start_server(state: AppState) {
     start_server_on_port(state, 8080).await;
 }
@@ -409,28 +410,33 @@ async fn handle_game_action(
         }));
     }
 
+    // Block actions from incapacitated (passed out) agents.
+    if let Some(agent_name) = req.agent_name.as_deref() {
+        if is_agent_incapacitated(&state, agent_name) {
+            return Json(serde_json::json!({
+                "result": "You are PASSED OUT and cannot act. You must wait for another agent to rescue you and carry you to the hospital. Do not attempt any actions.",
+                "success": false,
+            }));
+        }
+    }
+
     // Build the command to forward to the game engine.
     let mut result_text = format!("Action '{}' acknowledged.", req.action);
 
     match req.action.as_str() {
-        "go_to_service" => {
-            let building = req.building.as_deref().unwrap_or("unknown");
-            let service = req.service.as_deref().unwrap_or("browse");
+        "go_to" => {
+            let x = req.x.unwrap_or_default();
+            let y = req.y.unwrap_or_default();
             result_text = format!(
-                "Walking to {}. You'll be notified when you arrive. \
-                 Once there, you can choose from available services. \
-                 Requested service: {}.",
-                building, service,
+                "Walking to ({},{}). Use check_known_locations to find entrance coordinates, then trigger the local action once you arrive.",
+                x, y
             );
-        }
-        "go_to_board" => {
-            result_text = "Walking to the bounty board. You'll see available bounties when you arrive. Use claim_bounty to pick one.".into();
         }
         "work_shift" => {
             let building = req.building.as_deref().unwrap_or("unknown");
             result_text = format!(
                 "Heading to {} to work a shift. You must physically arrive at the building before the shift starts. \
-                 Shifts earn paychecks (redeem at bounty board). Use 'leave_shift' to end your shift.",
+                 Shifts earn paychecks (cash them with redeem_paycheck at the bounty board). Use 'leave_shift' to end your shift.",
                 building,
             );
         }
@@ -438,22 +444,16 @@ async fn handle_game_action(
             result_text = "Scanning your surroundings. Results will appear in your next status update — you'll see nearby agents and buildings with their locations.".into();
         }
         "complete_bounty" => {
-            result_text = "Bounty marked complete! You are now automatically walking back to the bounty board to collect your gold reward. Do NOT call go_to_board — you are already heading there. Wait for the arrival message.".into();
+            result_text = "Submitting your bounty for GM review. You must already be at the bounty board, with your bounty_token deposited first and any proof documents/items deposited before calling complete_bounty. After submission, wait for the GM verdict.".into();
         }
         "leave_shift" => {
-            result_text = "Leaving your shift. Your paycheck is based on ticks worked. Go to the bounty board using go_to_service building='bounty_board' service='redeem_paycheck' to convert paychecks to gold.".into();
+            result_text = "Leaving your shift. Your paycheck is based on ticks worked. Stand at the bounty board entrance and use redeem_paycheck to convert paychecks to gold.".into();
         }
         "claim_bounty" => {
-            result_text = "Attempting to claim a bounty. You must be at the bounty board (InteractingWithBoard) to claim. Read the bounty description for instructions on how to complete it.".into();
-        }
-        "leave_board" => {
-            result_text =
-                "Left the bounty board. You can go_to_board again later to check for new bounties."
-                    .into();
+            result_text = "Attempting to claim a bounty. You must already be standing at the bounty board entrance to claim it. Read the bounty description carefully before starting.".into();
         }
         "send_message" => {
             let recipient = req.agent.as_deref().unwrap_or("unknown");
-            let text = req.text.as_deref().unwrap_or("");
             result_text = format!("Message sent to {}.", recipient);
         }
         "start_conversation" => {
@@ -503,24 +503,54 @@ async fn handle_game_action(
                 title
             );
         }
-        "inspect_item" => {
-            let item = req.service.as_deref().unwrap_or("unknown");
-            result_text = format!(
-                "Inspecting '{}'. Details will appear in your next status update.",
-                item
-            );
+        "inspect" => {
+            let item = req.service.as_deref().unwrap_or("");
+            result_text = if item.is_empty() {
+                "Inspecting the local environment. At the library this browses the document catalog.".into()
+            } else {
+                format!(
+                    "Inspecting '{}'. Details will appear in your next status update.",
+                    item
+                )
+            };
         }
         "cancel_bounty" => {
             result_text =
                 "Cancelling your active bounty and returning the token to the board.".into();
         }
         "help" => {
-            result_text = "Thank you for your feedback! Your suggestion has been logged and will be reviewed. \
-                          The fix will be applied in your next reincarnation. \
-                          For now, try to work around the issue. \
-                          Known buildings: bounty_board, cafe, market, warehouse, hotel, apartments, google, hospital.".into();
+            result_text = "CHEAT SHEET: 1) Use check_known_locations to get discovered entrance coordinates. 2) Use go_to x y to stand on the entrance tile you want. 3) Once you are there, call the local action directly: buy_muffin, buy_coffee, read_library, redeem_paycheck, sleep_hotel, and so on. 4) At the bounty board: claim_bounty, deposit_item bounty_token, deposit proof, complete_bounty, then wait for the GM verdict. 5) Use inspect to examine nearby items or library docs, copy_document to pull a readable document into your inventory, and check_own_stats / check_inventory / check_relationships to inspect your state. If you include text, your feedback will also be submitted.".into();
         }
+
+        // --- Self-inspection tools: return data directly, no ECS round-trip ---
+        "check_own_stats"
+        | "check_inventory"
+        | "check_known_locations"
+        | "check_relationships"
+        | "check_stats"
+        | "check_map"
+        | "check_contacts" => {
+            let agent_name = req.agent_name.as_deref().unwrap_or("");
+            let result = query_agent_self(&state, agent_name, req.action.as_str());
+            return Json(serde_json::json!({
+                "result": result,
+                "success": true,
+            }));
+        }
+
         _ => {}
+    }
+
+    if result_text == format!("Action '{}' acknowledged.", req.action) {
+        if let Some(service) = crate::world::services::all_services()
+            .into_iter()
+            .find(|service| service.action_name == req.action)
+        {
+            result_text = format!(
+                "Using {} at {}. You must already be standing on that building's entrance tile for it to work.",
+                service.action_name, service.building_name
+            );
+        }
     }
 
     // Forward as a game command.
@@ -549,6 +579,247 @@ async fn handle_game_action(
         "result": result_text,
         "success": true,
     }))
+}
+
+// --- Incapacitated check ---
+
+fn is_agent_incapacitated(state: &AppState, agent_name: &str) -> bool {
+    let world_json = state.world_state_json.read().unwrap().clone();
+    let Ok(world) = serde_json::from_str::<serde_json::Value>(&world_json) else {
+        return false;
+    };
+    world
+        .get("agents")
+        .and_then(|a| a.as_array())
+        .and_then(|agents| {
+            agents
+                .iter()
+                .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(agent_name))
+        })
+        .and_then(|a| a.get("incapacitated"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+// --- Agent self-inspection (read-only, no ECS command) ---
+
+fn query_agent_self(state: &AppState, agent_name: &str, action: &str) -> String {
+    let world_json = state.world_state_json.read().unwrap().clone();
+    let Ok(world) = serde_json::from_str::<serde_json::Value>(&world_json) else {
+        return "ERROR: World state unavailable.".into();
+    };
+
+    let tick = world.get("tick").and_then(|t| t.as_u64()).unwrap_or(0);
+
+    let agent = world
+        .get("agents")
+        .and_then(|a| a.as_array())
+        .and_then(|agents| {
+            agents
+                .iter()
+                .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(agent_name))
+        });
+
+    let Some(agent) = agent else {
+        return format!("ERROR: Agent '{}' not found.", agent_name);
+    };
+
+    let pos_x = agent
+        .pointer("/position/x")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let pos_y = agent
+        .pointer("/position/y")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    match action {
+        "check_own_stats" | "check_stats" => {
+            let energy = agent
+                .pointer("/needs/energy")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let hunger = agent
+                .pointer("/needs/hunger")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let boredom = agent
+                .pointer("/needs/boredom")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let gold = agent.get("gold").and_then(|v| v.as_u64()).unwrap_or(0);
+            let debt = agent
+                .get("gold_debt")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let goal = agent
+                .get("goal")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let tokens_used = agent
+                .get("tokens_used")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let ctx_limit = agent
+                .get("context_limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            let mut out = format!(
+                "=== YOUR STATS (tick {tick}) ===\n\
+                 Position: ({pos_x}, {pos_y})\n\
+                 Gold: {gold}",
+            );
+            if debt > 0 {
+                out += &format!(" (DEBT: {debt}g)");
+            }
+            out += &format!(
+                "\nEnergy: {energy:.0}/100\n\
+                 Hunger: {hunger:.0}/100\n\
+                 Boredom: {boredom:.0}/100\n\
+                 Goal: {goal}\n\
+                 Context: {tokens_used}/{ctx_limit} tokens",
+            );
+
+            if energy < 25.0 {
+                out += "\nWARNING: ENERGY LOW";
+            }
+            if hunger < 25.0 {
+                out += "\nWARNING: HUNGER LOW";
+            }
+            if boredom < 10.0 {
+                out += "\nWARNING: BOREDOM CRITICAL";
+            }
+
+            out
+        }
+        "check_inventory" => {
+            let items = agent.get("inventory").and_then(|v| v.as_object());
+            let mut out = format!("=== YOUR INVENTORY (tick {tick}) ===\n");
+            if let Some(items) = items {
+                if items.is_empty() {
+                    out += "Empty.\n";
+                } else {
+                    for (item, count) in items {
+                        out += &format!("- {} x{}\n", item, count.as_u64().unwrap_or(0));
+                    }
+                }
+            } else {
+                out += "Empty.\n";
+            }
+
+            let docs = agent.get("documents").and_then(|v| v.as_array());
+            if let Some(docs) = docs {
+                if !docs.is_empty() {
+                    out += "\nDocuments:\n";
+                    for doc in docs {
+                        let title =
+                            doc.get("title").and_then(|t| t.as_str()).unwrap_or("?");
+                        let len = doc
+                            .get("content_length")
+                            .and_then(|l| l.as_u64())
+                            .unwrap_or(0);
+                        out += &format!("- {} ({} chars)\n", title, len);
+                    }
+                }
+            }
+
+            out
+        }
+        "check_known_locations" | "check_map" => {
+            let locations = agent.get("known_locations").and_then(|v| v.as_array());
+            let mut out = format!("=== KNOWN LOCATIONS (tick {tick}) ===\n");
+            out += &format!("Your position: ({pos_x}, {pos_y})\n\n");
+
+            if let Some(locs) = locations {
+                if locs.is_empty() {
+                    out += "No locations discovered yet. Use look_around to explore.\n";
+                } else {
+                    let mut sorted: Vec<_> = locs.iter().collect();
+                    sorted.sort_by_key(|loc| {
+                        let ex = loc
+                            .pointer("/entrance/x")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let ey = loc
+                            .pointer("/entrance/y")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        (ex - pos_x).abs() + (ey - pos_y).abs()
+                    });
+
+                    for loc in sorted {
+                        let name =
+                            loc.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                        let ex = loc
+                            .pointer("/entrance/x")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let ey = loc
+                            .pointer("/entrance/y")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let dist = (ex - pos_x).abs() + (ey - pos_y).abs();
+                        out += &format!(
+                            "- {} at entrance ({},{}) — {} tiles away\n",
+                            name, ex, ey, dist
+                        );
+                    }
+                }
+            } else {
+                out += "No locations discovered yet. Use look_around to explore.\n";
+            }
+
+            out
+        }
+        "check_relationships" | "check_contacts" => {
+            let mut out = format!("=== CONTACTS & RELATIONSHIPS (tick {tick}) ===\n");
+
+            let contacts = agent.get("contacts").and_then(|v| v.as_array());
+            let cards_remaining = agent
+                .get("cards_remaining")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            out += &format!("\nBusiness cards remaining: {cards_remaining}\n");
+
+            if let Some(contacts) = contacts {
+                if contacts.is_empty() {
+                    out += "No contacts yet. Start a conversation to exchange cards.\n";
+                } else {
+                    out += "Contacts (can send_message):\n";
+                    for c in contacts {
+                        if let Some(name) = c.as_str() {
+                            out += &format!("- {name}\n");
+                        }
+                    }
+                }
+            }
+
+            let rels = agent.get("relationships").and_then(|v| v.as_array());
+            if let Some(rels) = rels {
+                if !rels.is_empty() {
+                    out += "\nKnown agents:\n";
+                    for r in rels {
+                        let name =
+                            r.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                        let friendship =
+                            r.get("friendship").and_then(|f| f.as_u64()).unwrap_or(0);
+                        let goal = r
+                            .get("last_known_goal")
+                            .and_then(|g| g.as_str())
+                            .unwrap_or("unknown");
+                        out += &format!(
+                            "- {} (friendship: {}, last seen: {})\n",
+                            name, friendship, goal
+                        );
+                    }
+                }
+            }
+
+            out
+        }
+        _ => "ERROR: Unknown check action.".into(),
+    }
 }
 
 // --- Game Master endpoints ---

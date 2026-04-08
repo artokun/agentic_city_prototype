@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use super::types::{SessionCheckpoint, SessionEvent, SessionOwner, UsageData};
 
 /// Default base directory for session state.
+#[allow(dead_code)]
 const DEFAULT_SESSIONS_DIR: &str = "runtime/llm-sessions";
 
 /// Persistent event entry written to events.jsonl.
@@ -41,6 +42,7 @@ pub struct CheckpointStore {
     base_dir: PathBuf,
 }
 
+#[allow(dead_code)]
 impl CheckpointStore {
     /// Create a store rooted at the given directory.
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
@@ -365,6 +367,7 @@ pub fn session_event_to_persisted(event: &SessionEvent) -> PersistedEvent {
 }
 
 /// Build a fresh checkpoint from parts (useful for initial save).
+#[allow(dead_code)]
 pub fn build_checkpoint(
     owner: SessionOwner,
     provider_id: Option<&str>,

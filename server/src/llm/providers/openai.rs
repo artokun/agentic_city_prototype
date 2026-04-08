@@ -24,6 +24,7 @@ use crate::llm::types::{
 const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 
 /// Default WebSocket URL for the OpenAI Responses API.
+#[allow(dead_code)]
 const DEFAULT_WS_URL: &str = "wss://api.openai.com/v1/responses";
 
 /// Environment variable for the API key.
@@ -428,7 +429,7 @@ async fn process_events_until_done(
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
 
-    let mut response_id = String::new();
+    let mut _response_id = String::new();
     let mut tool_calls = Vec::new();
 
     // Track function names from output_item.added events.
@@ -512,7 +513,7 @@ async fn process_events_until_done(
                 });
             }
             SseEvent::Completed { response_id: rid, usage } => {
-                response_id = rid;
+                _response_id = rid;
                 if let Some(u) = usage {
                     tracing::info!(
                         "[{}] usage: in={}, out={}",
@@ -541,7 +542,7 @@ async fn process_events_until_done(
         }
     }
 
-    Ok((response_id, tool_calls))
+    Ok((_response_id, tool_calls))
 }
 
 // ---------------------------------------------------------------------------
@@ -879,6 +880,7 @@ fn estimate_cost(input_tokens: u32, output_tokens: u32) -> f64 {
 /// Streams responses via a persistent WebSocket connection to the Responses API,
 /// compiles shared tool catalog into OpenAI function tools, and implements
 /// hybrid resume with local checkpoint + `previous_response_id`.
+#[allow(dead_code)]
 pub struct OpenAiAdapter {
     /// Model to use (e.g. "gpt-5.4").
     model: String,

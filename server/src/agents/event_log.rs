@@ -30,6 +30,7 @@ impl AgentEventLog {
     }
 
     /// Drain new entries since last read.
+    #[allow(dead_code)]
     pub fn recent(&self, since_index: usize) -> &[LogEvent] {
         if since_index >= self.entries.len() {
             return &[];
@@ -62,6 +63,7 @@ pub enum LogKind {
     /// Game Master verdict on a bounty.
     GmVerdict,
     /// Game Master thinking/reasoning.
+    #[allow(dead_code)]
     GmThinking,
 }
 

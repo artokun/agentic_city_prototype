@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use super::types::{SessionCommand, SessionEvent, SessionOwner};
 
 /// Handle for communicating with a running session.
+#[allow(dead_code)]
 pub struct SessionHandle {
     pub command_tx: mpsc::Sender<SessionCommand>,
     pub event_rx: mpsc::Receiver<SessionEvent>,
@@ -21,6 +22,7 @@ pub struct SessionRegistry {
     handles: HashMap<SessionOwner, SessionHandle>,
 }
 
+#[allow(dead_code)]
 impl SessionRegistry {
     /// Register a new session. Returns the old handle if one existed.
     pub fn register(

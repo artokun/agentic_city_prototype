@@ -29,6 +29,7 @@ impl std::fmt::Display for SessionOwner {
 }
 
 /// Commands sent into a running session.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum SessionCommand {
     /// Send a user-turn message.

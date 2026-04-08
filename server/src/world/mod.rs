@@ -24,11 +24,6 @@ impl Plugin for WorldPlugin {
             .add_systems(Update, shifts::shift_processing_system)
             .add_systems(Update, shifts::shift_demand_system)
             .add_systems(Update, shifts::shift_tracking_system)
-            .add_systems(
-                Update,
-                shifts::paycheck_redemption_system
-                    .after(crate::agents::actions::action_timer_system),
-            )
             .add_systems(Update, transactions::transaction_system)
             .init_resource::<bounty::Library>()
             .init_resource::<bounty_injector::InjectorState>()

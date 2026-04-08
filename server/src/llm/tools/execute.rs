@@ -14,6 +14,7 @@ fn game_server_url() -> String {
 
 /// Execute a game-agent tool call (the `game_action` tool).
 /// Injects agent identity and forwards to the game server via HTTP.
+#[allow(dead_code)]
 pub fn execute_game_action(
     arguments: &Value,
     agent_name: &str,
@@ -41,6 +42,7 @@ pub fn execute_game_action(
 /// Execute a system-AI tool call by name.
 /// `inspected_docs` tracks which documents have been read — must be non-None to enforce
 /// the same document-inspection policy as mcp-gm (must read all docs before approve/reject).
+#[allow(dead_code)]
 pub fn execute_system_tool(
     tool_name: &str,
     arguments: &Value,
@@ -145,8 +147,10 @@ pub fn execute_system_tool(
 
 // --- Internal helpers ---
 
+#[allow(dead_code)]
 const ALLOWED_QUERY_PREFIXES: [&str; 4] = ["agent:", "bounty:", "dropbox:", "structure:"];
 
+#[allow(dead_code)]
 fn execute_query_world_state(query: &str, base: &str) -> Result<String, String> {
     let query = query.trim();
     if query == "full" || query.is_empty() {
@@ -180,6 +184,7 @@ fn execute_query_world_state(query: &str, base: &str) -> Result<String, String> 
     }
 }
 
+#[allow(dead_code)]
 fn execute_read_document(agent_name: &str, title: &str, base: &str) -> Result<String, String> {
     let agent_name = agent_name.trim().to_ascii_lowercase();
     let title = title.trim();
@@ -205,6 +210,7 @@ fn execute_read_document(agent_name: &str, title: &str, base: &str) -> Result<St
     }
 }
 
+#[allow(dead_code)]
 fn execute_verdict(
     bounty_id: &str,
     approved: bool,
@@ -223,6 +229,7 @@ fn execute_verdict(
 }
 
 /// POST JSON to the game server, extract the result string.
+#[allow(dead_code)]
 fn forward_post(url: &str, body: &Value) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
     let resp = client

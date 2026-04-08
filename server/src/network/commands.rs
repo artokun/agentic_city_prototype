@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::items::{DocumentInventory, Inventory, ItemType};
+use crate::items::ItemType;
 use crate::network::action_handler::{MpcAction, PendingActions};
 use crate::world::bounty::{
     Bounty, BountyBoard, BountyObjective, BountyStep, BountyTokenStore, StepCondition,
@@ -134,7 +134,7 @@ pub fn process_commands_system(
                         x: val.get("x").and_then(|v| v.as_i64()).map(|v| v as i32),
                         y: val.get("y").and_then(|v| v.as_i64()).map(|v| v as i32),
                     });
-                    tracing::info!(
+                    tracing::debug!(
                         "[MCP] Queued action from {}",
                         val.get("agent_name")
                             .and_then(|a| a.as_str())
@@ -167,7 +167,7 @@ pub fn process_commands_system(
 
                 let bounty = Bounty::simple(id, description, obj, reward_gold, claim_items);
 
-                tracing::info!(
+                tracing::debug!(
                     "New bounty created via API: {} ({} gold)",
                     bounty.description,
                     reward_gold,
@@ -223,7 +223,7 @@ pub fn process_commands_system(
                     bounty_steps,
                 );
 
-                tracing::info!(
+                tracing::debug!(
                     "Contract created: '{}' ({} gold, {} ticks TTL)",
                     title,
                     reward_gold,
@@ -238,7 +238,7 @@ pub fn process_commands_system(
                 title,
                 content,
             } => {
-                tracing::info!(
+                tracing::debug!(
                     "[DOC] Delivering '{}' to {} ({} chars)",
                     title,
                     agent_name,
@@ -253,7 +253,7 @@ pub fn process_commands_system(
                 reason,
             } => {
                 if let Ok(uuid) = Uuid::parse_str(&bounty_id) {
-                    tracing::info!(
+                    tracing::debug!(
                         "[GM] Verdict for {}: approved={} reason={}",
                         bounty_id,
                         approved,
@@ -271,7 +271,7 @@ pub fn process_commands_system(
                 reason,
                 message,
             } => {
-                tracing::info!(
+                tracing::debug!(
                     "[GM] Queued discretionary grant: {}g to {} ({})",
                     amount,
                     agent_name,

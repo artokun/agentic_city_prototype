@@ -97,7 +97,7 @@ fn spawn_agents(
     )>,
     scenario_config: Option<Res<crate::scenario::ScenarioAgentConfig>>,
 ) {
-    let walkable = map.walkable_positions();
+    let _walkable = map.walkable_positions();
 
     // Generate game manual by calling mcp-game --generate-manual.
     let manual_content = generate_game_manual_from_mcp();
@@ -225,7 +225,7 @@ fn generate_game_manual_from_mcp() -> String {
     manual += "\n";
 
     // Services from server-side data.
-    manual += "## Services (use go_to_service)\n";
+    manual += "## Services (go_to the entrance first, then call the service action directly)\n";
     manual += "| Service | Building | Cost | Duration | Effect |\n";
     manual += "|---------|----------|------|----------|--------|\n";
     for svc in &all_services() {
@@ -247,7 +247,7 @@ fn generate_game_manual_from_mcp() -> String {
         manual += &mcp_section;
     } else {
         tracing::warn!("[MANUAL] mcp-game --generate-manual failed, using fallback");
-        manual += "## Actions\nUse the game_action MCP tool. Run inspect_item service='game_manual' for the latest reference.\n";
+        manual += "## Actions\nUse the game_action MCP tool. Run inspect service='game_manual' for the latest reference.\n";
     }
 
     manual

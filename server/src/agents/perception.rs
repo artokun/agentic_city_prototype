@@ -26,6 +26,7 @@ impl Default for KnownLocations {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct KnownPlace {
     pub name: String,
     pub pos: GridPos,
@@ -35,6 +36,7 @@ pub struct KnownPlace {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DiscoverySource {
     /// Agent started knowing this (bounty board).
     Initial,
@@ -49,14 +51,17 @@ pub enum DiscoverySource {
 // --- Constants ---
 
 pub const LOOK_RADIUS: i32 = 8;
+#[allow(dead_code)]
 pub const LOOK_DURATION: u32 = 5;
 pub const TRACK_RANGE: i32 = 10;
 pub const INSPECT_RANGE: i32 = 1;
+#[allow(dead_code)]
 pub const INSPECT_DURATION: u32 = 3;
 
 // --- Vision (result of looking around) ---
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VisibleEntity {
     pub entity: Entity,
     pub pos: GridPos,
@@ -81,6 +86,7 @@ pub struct Vision {
 // --- Tracking ---
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TrackedTarget {
     pub name: String,
     pub last_known_pos: GridPos,
@@ -97,6 +103,7 @@ pub struct Tracking {
 // --- Inspection result ---
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum InspectionData {
     Agent {
         name: String,
@@ -115,6 +122,7 @@ pub enum InspectionData {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Inspection {
     pub target: Entity,
     pub tick: u64,

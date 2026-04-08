@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::tick::TickCount;
 use crate::world::bounty::{Bounty, BountyBoard, BountyObjective, BountyState, BountyTokenStore};
-use crate::world::structures::{Entrance, SpriteType, StructureId};
+use crate::world::structures::{Entrance, SpriteType};
 
 /// A building that can offer jobs.
 #[derive(Component)]
@@ -19,6 +19,7 @@ pub struct JobTemplate {
     pub title: String,
     pub pay_gold: u32,
     /// How long the work takes in ticks.
+    #[allow(dead_code)]
     pub work_duration: u32,
 }
 
@@ -31,7 +32,7 @@ pub fn job_posting_system(
     let Some(mut bounty_registry) = boards_jobs.iter_mut().next() else {
         return;
     };
-    for (sprite, entrance, mut employer) in &mut employers {
+    for (sprite, _entrance, mut employer) in &mut employers {
         if tick.0 - employer.last_posted_tick < employer.post_interval as u64 {
             continue;
         }

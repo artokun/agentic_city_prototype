@@ -19,6 +19,7 @@ pub struct RetailConfig {
 #[derive(Debug, Clone)]
 pub struct StockItem {
     pub item: ItemType,
+    #[allow(dead_code)]
     pub max: u32,
     /// Below this level, auto-generate a restock bounty.
     pub reorder_at: u32,
@@ -123,6 +124,7 @@ pub fn auto_restock_system(
 }
 
 /// System: when an agent uses a paid service, transfer gold to the building's reserve.
+#[allow(dead_code)]
 pub fn building_revenue_system(// This is handled inline by the action_timer_system when gold_cost > 0.
     // We just need a system that deducts the bounty reward from the building's reserve
     // when a restock bounty is claimed.

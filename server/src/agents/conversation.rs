@@ -5,6 +5,7 @@ use bevy::prelude::*;
 
 /// Marks an agent as being in an active face-to-face conversation.
 #[derive(Component)]
+#[allow(dead_code)]
 pub struct ActiveConversation {
     pub partner: Entity,
     pub partner_name: String,
@@ -13,6 +14,7 @@ pub struct ActiveConversation {
 
 /// A single message within a conversation.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ConversationMessage {
     pub speaker: String,
     pub text: String,

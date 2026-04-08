@@ -340,16 +340,18 @@ fn game_action_catalog_has_core_actions() {
     let actions = game_action_catalog();
     let names: Vec<&str> = actions.iter().map(|a| a.name).collect();
 
-    assert!(names.contains(&"go_to_board"));
+    assert!(names.contains(&"go_to"));
     assert!(names.contains(&"look_around"));
     assert!(names.contains(&"claim_bounty"));
     assert!(names.contains(&"complete_bounty"));
     assert!(names.contains(&"work_shift"));
+    assert!(names.contains(&"buy_muffin"));
+    assert!(names.contains(&"redeem_paycheck"));
     assert!(names.contains(&"consume_item"));
     assert!(names.contains(&"start_conversation"));
     assert!(names.contains(&"say"));
     assert!(names.contains(&"create_document"));
-    assert!(names.contains(&"search_library"));
+    assert!(names.contains(&"inspect"));
     assert!(names.contains(&"help"));
 }
 
@@ -383,7 +385,7 @@ fn tools_for_set_unknown_returns_empty() {
 fn action_manual_contains_key_sections() {
     let manual = generate_action_manual();
     assert!(manual.contains("## Actions"));
-    assert!(manual.contains("go_to_board"));
+    assert!(manual.contains("go_to"));
     assert!(manual.contains("## Consumable Items"));
     assert!(manual.contains("coffee"));
     assert!(manual.contains("## Tips"));
@@ -1003,7 +1005,7 @@ fn supervisor_event_logging_round_trip() {
         &SessionEvent::ToolCallRequested(ToolCallRequest {
             id: "c1".into(),
             name: "game_action".into(),
-            arguments: serde_json::json!({"action": "wander"}),
+            arguments: serde_json::json!({"action": "go_to", "x": 5, "y": 8}),
         }),
     );
     supervisor.log_event(

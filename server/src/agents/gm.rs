@@ -57,7 +57,10 @@ pub struct SystemAiState {
     pub spawning: bool,
     pub queued_reviews: VecDeque<SystemReviewRequest>,
     pub current_review: Option<SystemReviewRequest>,
+    pub current_review_dispatched_at: Option<u64>,
     pub tokens_since_compact: u32,
+    /// Backoff state for failed GM session spawns.
+    pub spawn_backoff: super::ai::SpawnBackoff,
 }
 
 impl SystemAiState {
@@ -78,6 +81,7 @@ impl SystemAiState {
             .is_some_and(|review| review.bounty_id == bounty_id)
         {
             self.current_review = None;
+            self.current_review_dispatched_at = None;
         }
 
         let mut filtered = VecDeque::new();
@@ -101,6 +105,9 @@ impl SystemAiState {
         self.token_rx = None;
         self.spawning = false;
         self.tokens_since_compact = 0;
+        // Requeue any in-flight review so it isn't lost when the session restarts.
+        self.requeue_current_review();
+        self.current_review_dispatched_at = None;
     }
 
     /// Send a compaction command to the System AI session.
@@ -124,6 +131,7 @@ pub fn spawn_system_ai_session_system(
     mut registry: ResMut<SessionRegistry>,
     relays: Res<SystemRelayResource>,
     llm_config: Res<LlmConfig>,
+    tick: Res<crate::tick::TickCount>,
     server_port: Option<Res<crate::network::ws::ServerPort>>,
     proc_registry: Option<Res<crate::process_manager::ProcessRegistryRes>>,
 ) {
@@ -132,6 +140,18 @@ pub fn spawn_system_ai_session_system(
     }
     // Skip if no profiles configured (e.g. test harness with empty LlmConfig).
     if llm_config.profiles.is_empty() {
+        return;
+    }
+    // Check backoff from prior spawn failures.
+    // The GM is essential — without it, no bounties can be verified.
+    if system_ai.spawn_backoff.gave_up() {
+        panic!(
+            "[SystemAI] FATAL: Game Master failed to spawn after {} attempts. \
+             The game cannot function without the GM. Check LLM provider configuration.",
+            system_ai.spawn_backoff.failures
+        );
+    }
+    if !system_ai.spawn_backoff.should_retry(tick.0) {
         return;
     }
 
@@ -185,7 +205,7 @@ pub fn spawn_system_ai_session_system(
             system_relay: Some(relays.clone()),
         };
 
-        let mut bridge = match crate::llm::supervisor::spawn_session(
+        let bridge = match crate::llm::supervisor::spawn_session(
             &llm_config_clone, spawn_params,
         ).await {
             Ok(b) => b,
@@ -193,8 +213,23 @@ pub fn spawn_system_ai_session_system(
                 tracing::error!("[SystemAI] Failed to spawn: {}", e);
                 ctx.run_on_main_thread(|main_ctx| {
                     let world = main_ctx.world;
+                    let current_tick = world.resource::<crate::tick::TickCount>().0;
                     let mut system_ai = world.resource_mut::<SystemAiState>();
                     system_ai.spawning = false;
+                    system_ai.spawn_backoff.record_failure(current_tick);
+                    if system_ai.spawn_backoff.gave_up() {
+                        tracing::error!(
+                            "[SystemAI] Giving up after {} failures",
+                            system_ai.spawn_backoff.failures
+                        );
+                    } else {
+                        tracing::warn!(
+                            "[SystemAI] Will retry after tick {} (attempt {}/{})",
+                            system_ai.spawn_backoff.retry_after_tick,
+                            system_ai.spawn_backoff.failures,
+                            super::ai::SpawnBackoff::MAX_RETRIES
+                        );
+                    }
                 }).await;
                 return;
             }
@@ -205,11 +240,39 @@ pub fn spawn_system_ai_session_system(
         if !crate::agents::ai::wait_for_connected(&mut connected_rx, "SystemAI", 90).await {
             ctx.run_on_main_thread(|main_ctx| {
                 let world = main_ctx.world;
+                let current_tick = world.resource::<crate::tick::TickCount>().0;
                 let mut system_ai = world.resource_mut::<SystemAiState>();
                 system_ai.spawning = false;
+                system_ai.spawn_backoff.record_failure(current_tick);
+                if system_ai.spawn_backoff.gave_up() {
+                    tracing::error!(
+                        "[SystemAI] Giving up after {} connection failures",
+                        system_ai.spawn_backoff.failures
+                    );
+                } else {
+                    tracing::warn!(
+                        "[SystemAI] Connection timeout, will retry after tick {} (attempt {}/{})",
+                        system_ai.spawn_backoff.retry_after_tick,
+                        system_ai.spawn_backoff.failures,
+                        super::ai::SpawnBackoff::MAX_RETRIES
+                    );
+                }
             }).await;
             return;
         }
+
+        // Spawn succeeded — clear any backoff state.
+        ctx.run_on_main_thread(|main_ctx| {
+            let world = main_ctx.world;
+            let mut system_ai = world.resource_mut::<SystemAiState>();
+            if system_ai.spawn_backoff.failures > 0 {
+                tracing::info!(
+                    "[SystemAI] Connected after {} prior failures",
+                    system_ai.spawn_backoff.failures
+                );
+            }
+            system_ai.spawn_backoff.reset();
+        }).await;
 
         let prompt_tx_for_main = bridge.prompt_tx.clone();
         let token_rx_for_main = Arc::new(Mutex::new(bridge.token_rx));
@@ -275,8 +338,32 @@ pub fn enqueue_gm_reviews_system(
 }
 
 /// System: dispatch the next bounty review to the persistent System AI session.
-pub fn dispatch_system_ai_reviews_system(mut system_ai: ResMut<SystemAiState>) {
-    if system_ai.current_review.is_some() {
+/// If a review has been pending longer than `gm_review_timeout_ticks`, requeue it.
+pub fn dispatch_system_ai_reviews_system(
+    mut system_ai: ResMut<SystemAiState>,
+    tick: Res<crate::tick::TickCount>,
+) {
+    // Check for stuck reviews — if the current review has been pending too long,
+    // requeue it so the pipeline doesn't block forever.
+    if let (Some(review), Some(dispatched_at)) = (
+        system_ai.current_review.as_ref(),
+        system_ai.current_review_dispatched_at,
+    ) {
+        let elapsed = tick.0.saturating_sub(dispatched_at);
+        let timeout = config::gm_review_timeout_ticks();
+        if elapsed >= timeout {
+            tracing::warn!(
+                "[SystemAI] Review for bounty {} stuck for {} ticks (timeout={}), requeuing",
+                review.bounty_id,
+                elapsed,
+                timeout,
+            );
+            system_ai.requeue_current_review();
+            system_ai.current_review_dispatched_at = None;
+        } else {
+            return;
+        }
+    } else if system_ai.current_review.is_some() {
         return;
     }
 
@@ -291,10 +378,12 @@ pub fn dispatch_system_ai_reviews_system(mut system_ai: ResMut<SystemAiState>) {
     match prompt_tx.try_send(prompt) {
         Ok(()) => {
             tracing::info!(
-                "[SystemAI] Sent review prompt for bounty {}",
-                review.bounty_id
+                "[SystemAI] Sent review prompt for bounty {} (tick={})",
+                review.bounty_id,
+                tick.0,
             );
             system_ai.current_review = Some(review);
+            system_ai.current_review_dispatched_at = Some(tick.0);
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             system_ai.queued_reviews.push_front(review);
@@ -307,7 +396,7 @@ pub fn dispatch_system_ai_reviews_system(mut system_ai: ResMut<SystemAiState>) {
 }
 
 /// System: drain and discard System AI relay text so the channel never backs up.
-pub fn system_ai_response_drain_system(mut system_ai: ResMut<SystemAiState>) {
+pub fn system_ai_response_drain_system(system_ai: ResMut<SystemAiState>) {
     let Some(response_rx) = system_ai.response_rx.as_ref().cloned() else {
         return;
     };
@@ -366,7 +455,7 @@ pub fn spawn_research_system(
         let agent_uuid = agent_id.0.to_string();
         let config = llm_config.clone();
 
-        tracing::info!(
+        tracing::debug!(
             "[Research] Spawning research agent for {} — topic: {}",
             name,
             topic,
@@ -394,7 +483,7 @@ Write the document in markdown format. Keep it concise but factual. Include at l
 Output ONLY the markdown document, nothing else."#
     );
 
-    tracing::info!(
+    tracing::debug!(
         "[Research] Launching research for {} (agent: {})",
         topic,
         agent_name
@@ -409,7 +498,7 @@ Output ONLY the markdown document, nothing else."#
     };
 
     let title = format!("research_{}.md", &agent_id[..6]);
-    tracing::info!(
+    tracing::debug!(
         "[Research] {} produced document '{}' ({} chars)",
         agent_name,
         title,
@@ -443,7 +532,7 @@ Tool rules:
 - query_world_state only accepts focused queries.
 - Allowed query formats are exactly: agent:<name>, bounty:<uuid>, dropbox:<agent_name>, structure:<name>
 - Never request a full world dump.
-- If you need more evidence, ask for another focused query. Do not wander.
+- If you need more evidence, ask for another focused query. Do not ask for irrelevant or broad queries.
 - If any submitted documents exist, you must inspect every submitted document with read_document before calling approve or reject.
 - grant_gold is for explicit rule-based exceptions only. Use it sparingly, with exact amounts, and only when the evidence clearly identifies who earned it.
 - Reject placeholder output. A clarification request, error message, refusal, meta-commentary, or "please specify" document is not valid bounty proof.

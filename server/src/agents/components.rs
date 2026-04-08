@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::agents::action_log::ActionLog;
@@ -53,8 +53,13 @@ pub struct AgentAnimation(pub AnimState);
 #[derive(Component, Default)]
 pub struct ThoughtBubble(pub String);
 
+/// Explicit marker used to end a running shift without relying on transient goal changes.
+#[derive(Component, Default)]
+pub struct WantsToLeaveShift;
+
 /// Tiles per second.
 #[derive(Component)]
+#[allow(dead_code)]
 pub struct Speed(pub f32);
 
 /// Accumulates time between tile moves.
@@ -84,6 +89,7 @@ pub enum AgentGoal {
     /// Walking to the bounty board to get a bounty.
     GoingToBoard,
     /// Waiting in queue at the board.
+    #[allow(dead_code)]
     WaitingAtBoard,
     /// Interacting with the board (has exclusive access).
     InteractingWithBoard,
