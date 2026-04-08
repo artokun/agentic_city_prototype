@@ -1,8 +1,7 @@
 /target
-client/node_modules
+node_modules/
 client/dist
 .vite
-client/.vite
 **/.DS_Store
 .env
 
