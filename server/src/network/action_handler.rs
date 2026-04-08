@@ -297,10 +297,14 @@ pub fn process_gm_verdicts_system(
         );
     }
     for (bounty_id, approved, reason) in verdicts.verdicts.drain(..) {
+        let time_to_verdict = tick
+            .0
+            .saturating_sub(system_ai.current_review_dispatched_at.unwrap_or(tick.0));
         tracing::info!(
-            "[GM VERDICT PROCESSING] bounty={} approved={}",
+            "[GM VERDICT] bounty={} time_to_verdict={} ticks approved={}",
             bounty_id,
-            approved
+            time_to_verdict,
+            approved,
         );
         system_ai.mark_review_complete(bounty_id);
         let bounty = bounty_registry.tokens.get(&bounty_id).cloned();
@@ -1133,7 +1137,7 @@ pub fn process_deposits_system(
 }
 
 /// Parse an item name string into an ItemType.
-fn parse_item_name(name: &str) -> Option<crate::items::ItemType> {
+pub fn parse_item_name(name: &str) -> Option<crate::items::ItemType> {
     match name.to_lowercase().as_str() {
         "gold_egg" | "goldegg" | "golden_egg" => Some(crate::items::ItemType::GoldEgg),
         "gold_coin" | "goldcoin" => Some(crate::items::ItemType::GoldCoin),
@@ -2005,11 +2009,29 @@ pub fn apply_mcp_actions_system(
                         } else if let Some(p) = pathfinding::bfs(&map, *pos, target) {
                             let tiles = p.len();
                             commands.entity(entity).insert(Path(p));
-                            // Preserve ExecutingBounty goal — don't lose the active bounty context.
+
+                            // Check if target matches a building entrance — auto-enter if so.
+                            let matched_building = structure_list.iter().find(|(_, ent_pos, _)| {
+                                ent_pos.x == x && ent_pos.y == y
+                            });
+
                             if !matches!(*goal, AgentGoal::ExecutingBounty(_)) {
-                                *goal = AgentGoal::Wandering;
+                                if let Some((bld_entity, _, bld_name)) = matched_building {
+                                    *goal = AgentGoal::GoingToService {
+                                        building: *bld_entity,
+                                        service: "".into(),
+                                    };
+                                    thought.0 = format!(
+                                        "Walking to {} entrance at ({},{}) — {} tiles. You'll be able to act once you arrive.",
+                                        bld_name, x, y, tiles
+                                    );
+                                } else {
+                                    *goal = AgentGoal::Wandering;
+                                    thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
+                                }
+                            } else {
+                                thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
                             }
-                            thought.0 = format!("Walking to ({},{}) — {} tiles.", x, y, tiles);
                         } else {
                             thought.0 = format!(
                                 "ERROR: Can't find path to ({},{}). The map is 40x200.",
@@ -2071,6 +2093,9 @@ pub fn apply_mcp_actions_system(
                         && b.state == crate::world::bounty::BountyState::Claimed
                 }) {
                     thought.0 = "ERROR: You already have an active bounty. Complete or cancel it before claiming another. You can only hold one bounty token at a time.".into();
+                    if let Some(session) = sessions.sessions.get(&entity) {
+                        let _ = session.prompt_tx.try_send(thought.0.clone());
+                    }
                 } else {
                     let keyword = mcp_action
                         .text
@@ -2152,6 +2177,9 @@ pub fn apply_mcp_actions_system(
                         } else {
                             thought.0 =
                                 "Couldn't claim that bounty — it may already be taken.".into();
+                            if let Some(session) = sessions.sessions.get(&entity) {
+                                let _ = session.prompt_tx.try_send(thought.0.clone());
+                            }
                         }
                     } else {
                         let avail = bounty_registry.available().len();
@@ -2159,6 +2187,9 @@ pub fn apply_mcp_actions_system(
                             thought.0 = "No bounties available right now. Check back later or work a shift to earn gold while you wait.".into();
                         } else {
                             thought.0 = format!("No bounty matching '{}'. {} bounties available — try claim_bounty without a keyword to grab the first one.", keyword, avail);
+                        }
+                        if let Some(session) = sessions.sessions.get(&entity) {
+                            let _ = session.prompt_tx.try_send(thought.0.clone());
                         }
                     }
                 }

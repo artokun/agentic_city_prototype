@@ -139,11 +139,11 @@ mod tests {
     }
 
     #[test]
-    fn mcp_system_tools_have_five_tools() {
+    fn mcp_system_tools_have_expected_tools() {
         let tools = tools_for_set("system");
         let mcp = to_mcp_tools_list(&tools);
         let tool_list = mcp["tools"].as_array().unwrap();
-        assert_eq!(tool_list.len(), 5);
+        assert_eq!(tool_list.len(), 11);
         let names: Vec<&str> = tool_list
             .iter()
             .map(|t| t["name"].as_str().unwrap())
@@ -153,6 +153,12 @@ mod tests {
         assert!(names.contains(&"reject"));
         assert!(names.contains(&"read_document"));
         assert!(names.contains(&"grant_gold"));
+        assert!(names.contains(&"broadcast_message"));
+        assert!(names.contains(&"direct_message"));
+        assert!(names.contains(&"create_bounty"));
+        assert!(names.contains(&"grant_item"));
+        assert!(names.contains(&"modify_need"));
+        assert!(names.contains(&"query_agent_logs"));
     }
 
     #[test]
@@ -173,7 +179,7 @@ mod tests {
     fn openai_system_functions_format() {
         let tools = tools_for_set("system");
         let funcs = to_openai_functions(&tools);
-        assert_eq!(funcs.len(), 5);
+        assert_eq!(funcs.len(), 11);
         for func in &funcs {
             assert_eq!(func["type"], "function");
             assert!(func["name"].as_str().is_some());

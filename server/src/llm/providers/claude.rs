@@ -587,8 +587,8 @@ pub enum RelayEvent {
     },
     /// Assistant thinking text.
     AssistantText(String),
-    /// Assistant tool use call (for logging).
-    ToolUse(String),
+    /// Assistant tool use call (for logging): name + JSON arguments.
+    ToolUse { name: String, arguments: String },
     /// Assistant thinking block (extended thinking, e.g. from Opus).
     ThinkingBlock(String),
 }
@@ -682,7 +682,14 @@ pub fn process_ndjson_line(line: &str) -> Vec<RelayEvent> {
                         }
                         "tool_use" => {
                             if let Some(tool) = block.get("name").and_then(|n| n.as_str()) {
-                                events.push(RelayEvent::ToolUse(tool.to_string()));
+                                let arguments = block
+                                    .get("input")
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
+                                events.push(RelayEvent::ToolUse {
+                                    name: tool.to_string(),
+                                    arguments,
+                                });
                             }
                         }
                         "thinking" => {

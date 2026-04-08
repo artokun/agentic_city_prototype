@@ -128,6 +128,59 @@ pub fn execute_system_tool(
             });
             forward_post(&format!("{base}/api/gm/grant_gold"), &body)
         }
+        "broadcast_message" => {
+            let body = json!({
+                "message": arguments.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+            });
+            forward_post(&format!("{base}/api/gm/broadcast"), &body)
+        }
+        "direct_message" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "message": arguments.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+            });
+            forward_post(&format!("{base}/api/gm/direct_message"), &body)
+        }
+        "create_bounty" => {
+            let body = json!({
+                "description": arguments.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                "reward_gold": arguments.get("reward_gold").and_then(|r| r.as_u64()).unwrap_or(5),
+                "objective": null,
+            });
+            forward_post(&format!("{base}/api/bounties"), &body)
+        }
+        "grant_item" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "item": arguments.get("item").and_then(|i| i.as_str()).unwrap_or(""),
+                "quantity": arguments.get("quantity").and_then(|q| q.as_u64()).unwrap_or(1),
+            });
+            forward_post(&format!("{base}/api/gm/grant_item"), &body)
+        }
+        "modify_need" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "need": arguments.get("need").and_then(|n| n.as_str()).unwrap_or(""),
+                "amount": arguments.get("amount").and_then(|a| a.as_f64()).unwrap_or(0.0),
+            });
+            forward_post(&format!("{base}/api/gm/modify_need"), &body)
+        }
+        "query_agent_logs" => {
+            let agent = arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or("");
+            let count = arguments.get("count").and_then(|c| c.as_u64()).unwrap_or(20);
+            let client = reqwest::blocking::Client::new();
+            match client
+                .get(format!("{base}/api/gm/agent_logs"))
+                .query(&[("agent", agent), ("count", &count.to_string())])
+                .send()
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    Ok(resp.text().unwrap_or_else(|_| "Empty response".into()))
+                }
+                Ok(resp) => Err(format!("Server error: {}", resp.status())),
+                Err(e) => Err(format!("Connection error: {e}")),
+            }
+        }
         _ => Err(format!("Unknown system tool: {tool_name}")),
     };
 
@@ -385,6 +438,60 @@ pub async fn execute_system_tool_async(
                 "message": arguments.get("message").and_then(|m| m.as_str()).unwrap_or(""),
             });
             forward_post_async(&format!("{base}/api/gm/grant_gold"), &body).await
+        }
+        "broadcast_message" => {
+            let body = json!({
+                "message": arguments.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+            });
+            forward_post_async(&format!("{base}/api/gm/broadcast"), &body).await
+        }
+        "direct_message" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "message": arguments.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+            });
+            forward_post_async(&format!("{base}/api/gm/direct_message"), &body).await
+        }
+        "create_bounty" => {
+            let body = json!({
+                "description": arguments.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                "reward_gold": arguments.get("reward_gold").and_then(|r| r.as_u64()).unwrap_or(5),
+                "objective": null,
+            });
+            forward_post_async(&format!("{base}/api/bounties"), &body).await
+        }
+        "grant_item" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "item": arguments.get("item").and_then(|i| i.as_str()).unwrap_or(""),
+                "quantity": arguments.get("quantity").and_then(|q| q.as_u64()).unwrap_or(1),
+            });
+            forward_post_async(&format!("{base}/api/gm/grant_item"), &body).await
+        }
+        "modify_need" => {
+            let body = json!({
+                "agent_name": arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or(""),
+                "need": arguments.get("need").and_then(|n| n.as_str()).unwrap_or(""),
+                "amount": arguments.get("amount").and_then(|a| a.as_f64()).unwrap_or(0.0),
+            });
+            forward_post_async(&format!("{base}/api/gm/modify_need"), &body).await
+        }
+        "query_agent_logs" => {
+            let agent = arguments.get("agent_name").and_then(|a| a.as_str()).unwrap_or("");
+            let count = arguments.get("count").and_then(|c| c.as_u64()).unwrap_or(20);
+            let client = reqwest::Client::new();
+            match client
+                .get(format!("{base}/api/gm/agent_logs"))
+                .query(&[("agent", agent), ("count", &count.to_string())])
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    Ok(resp.text().await.unwrap_or_default())
+                }
+                Ok(resp) => Err(format!("Server error: {}", resp.status())),
+                Err(e) => Err(format!("Connection error: {e}")),
+            }
         }
         _ => Err(format!("Unknown system tool: {tool_name}")),
     };

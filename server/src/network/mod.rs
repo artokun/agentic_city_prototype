@@ -49,6 +49,10 @@ impl Plugin for NetworkPlugin {
             .init_resource::<commands::PendingVerdicts>()
             .init_resource::<commands::PendingDocuments>()
             .init_resource::<commands::PendingGoldGrants>()
+            .init_resource::<commands::PendingGmBroadcasts>()
+            .init_resource::<commands::PendingGmDirectMessages>()
+            .init_resource::<commands::PendingGmItemGrants>()
+            .init_resource::<commands::PendingGmNeedMods>()
             .insert_resource(broadcast::WorldStateJsonHolder(world_json.clone()))
             .insert_resource(WorldJsonArc(world_json))
             .insert_resource(LibraryJsonArc(library_json))
@@ -64,6 +68,11 @@ impl Plugin for NetworkPlugin {
             .add_systems(Startup, spawn_axum)
             .add_systems(Update, broadcast::broadcast_state)
             .add_systems(Update, commands::process_commands_system)
+            .add_systems(
+                Update,
+                commands::process_gm_commands_system
+                    .after(commands::process_commands_system),
+            )
             .add_systems(Update, action_handler::apply_mcp_actions_system)
             .add_systems(
                 Update,

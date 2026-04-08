@@ -93,6 +93,10 @@ pub fn chat_boredom_boost() -> f32 {
 pub fn gm_review_timeout_ticks() -> u64 {
     env_or("GM_REVIEW_TIMEOUT_TICKS", 60)
 }
+/// Ticks between autonomous GM monitoring checks. 120 = every 2min at 1Hz.
+pub fn gm_monitor_interval() -> u64 {
+    env_or("GM_MONITOR_INTERVAL", 120)
+}
 
 // --- LLM sessions ---
 /// Base directory for durable session state (checkpoints and event logs).

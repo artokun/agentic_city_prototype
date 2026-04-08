@@ -364,15 +364,21 @@ fn tools_for_set_game_returns_game_action() {
 }
 
 #[test]
-fn tools_for_set_system_returns_five_tools() {
+fn tools_for_set_system_returns_expected_tools() {
     let tools = tools_for_set("system");
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 11);
     let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     assert!(names.contains(&"query_world_state"));
     assert!(names.contains(&"read_document"));
     assert!(names.contains(&"approve"));
     assert!(names.contains(&"reject"));
     assert!(names.contains(&"grant_gold"));
+    assert!(names.contains(&"broadcast_message"));
+    assert!(names.contains(&"direct_message"));
+    assert!(names.contains(&"create_bounty"));
+    assert!(names.contains(&"grant_item"));
+    assert!(names.contains(&"modify_need"));
+    assert!(names.contains(&"query_agent_logs"));
 }
 
 #[test]
@@ -419,7 +425,7 @@ fn mcp_schema_game_tool_has_action_enum() {
 fn openai_schema_system_tools_all_have_function_type() {
     let tools = tools_for_set("system");
     let funcs = to_openai_functions(&tools);
-    assert_eq!(funcs.len(), 5);
+    assert_eq!(funcs.len(), 11);
 
     for func in &funcs {
         assert_eq!(func["type"], "function");
@@ -742,7 +748,7 @@ fn ndjson_tool_use_extraction() {
     let line = r#"{"type":"assistant","content":[{"type":"tool_use","name":"game_action","input":{"action":"look_around"}}]}"#;
     let events = process_ndjson_line(line);
     assert!(events.iter().any(|e| matches!(e,
-        server::llm::providers::claude::RelayEvent::ToolUse(name) if name == "game_action"
+        server::llm::providers::claude::RelayEvent::ToolUse { name, .. } if name == "game_action"
     )));
 }
 

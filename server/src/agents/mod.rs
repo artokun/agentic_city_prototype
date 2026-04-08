@@ -77,6 +77,7 @@ impl Plugin for AgentPlugin {
                         gm::system_ai_response_drain_system,
                         gm::system_ai_token_drain_system,
                         gm::spawn_research_system,
+                        gm::gm_autonomous_monitoring_system,
                     )
                         .chain(),
                 )

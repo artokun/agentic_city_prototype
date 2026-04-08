@@ -31,7 +31,7 @@ const DEFAULT_WS_URL: &str = "wss://api.openai.com/v1/responses";
 const API_KEY_ENV: &str = "OPENAI_API_KEY";
 
 /// Maximum tool-call iterations per turn to prevent infinite loops.
-const MAX_TOOL_ITERATIONS: u32 = 20;
+const MAX_TOOL_ITERATIONS: u32 = 100;
 
 // ---------------------------------------------------------------------------
 // OpenAI SSE event types (internal only — never exposed outside this module)
@@ -747,8 +747,8 @@ async fn run_ws_tool_loop(
     loop {
         iteration += 1;
         if iteration > MAX_TOOL_ITERATIONS {
-            tracing::warn!(
-                "[{}] hit max tool iterations ({})",
+            tracing::error!(
+                "[{}] CRITICAL: hit max tool iterations ({}) — agent may be stuck in a loop",
                 config.label,
                 MAX_TOOL_ITERATIONS
             );
@@ -1261,7 +1261,7 @@ mod tests {
     #[test]
     fn compile_tools_from_system_set() {
         let tools = compile_tools(&["system".to_string()]);
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 11);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|t| t["name"].as_str())
@@ -1269,6 +1269,12 @@ mod tests {
         assert!(names.contains(&"query_world_state"));
         assert!(names.contains(&"approve"));
         assert!(names.contains(&"reject"));
+        assert!(names.contains(&"broadcast_message"));
+        assert!(names.contains(&"direct_message"));
+        assert!(names.contains(&"create_bounty"));
+        assert!(names.contains(&"grant_item"));
+        assert!(names.contains(&"modify_need"));
+        assert!(names.contains(&"query_agent_logs"));
     }
 
     #[test]

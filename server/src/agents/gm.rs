@@ -291,7 +291,9 @@ pub fn spawn_system_ai_session_system(
 
         let _ = bridge.prompt_tx
             .send(
-                "Stand by for bounty review assignments. Wait for user review messages and resolve each one with MCP tools."
+                "You are now online. Stand by for bounty review assignments and monitoring prompts. \
+                 Resolve reviews with MCP tools. Between reviews, you'll receive monitoring prompts — \
+                 use them to survey the city and keep things interesting."
                     .to_string(),
             )
             .await;
@@ -374,13 +376,23 @@ pub fn dispatch_system_ai_reviews_system(
         return;
     };
 
+    let queue_remaining = system_ai.queued_reviews.len();
     let prompt = format_review_prompt(&review);
+    let prompt_preview: String = prompt.chars().take(150).collect();
+    let prompt_truncated = if prompt.len() > 150 { "..." } else { "" };
     match prompt_tx.try_send(prompt) {
         Ok(()) => {
             tracing::info!(
-                "[SystemAI] Sent review prompt for bounty {} (tick={})",
+                "[SystemAI] Dispatched review: bounty={} agent={} queue_remaining={} tick={}",
                 review.bounty_id,
+                review.agent_name,
+                queue_remaining,
                 tick.0,
+            );
+            tracing::info!(
+                "[SystemAI] Prompt preview: {}{}",
+                prompt_preview,
+                prompt_truncated,
             );
             system_ai.current_review = Some(review);
             system_ai.current_review_dispatched_at = Some(tick.0);
@@ -403,8 +415,9 @@ pub fn system_ai_response_drain_system(system_ai: ResMut<SystemAiState>) {
 
     let mut response_rx = response_rx.lock().unwrap();
     while let Ok(message) = response_rx.try_recv() {
-        let preview: String = message.chars().take(160).collect();
-        tracing::debug!("[SystemAI] relay message dropped: {}", preview);
+        let preview: String = message.chars().take(100).collect();
+        let truncated = if message.len() > 100 { "..." } else { "" };
+        tracing::info!("[SystemAI] response drained: {}{}", preview, truncated);
     }
 }
 
@@ -517,36 +530,80 @@ Output ONLY the markdown document, nothing else."#
         .await;
 }
 
+/// System: autonomous GM monitoring — surveys the city between reviews.
+pub fn gm_autonomous_monitoring_system(
+    system_ai: ResMut<SystemAiState>,
+    tick: Res<crate::tick::TickCount>,
+) {
+    // Only when no review is pending and session is active.
+    if system_ai.current_review.is_some() || system_ai.prompt_tx.is_none() {
+        return;
+    }
+    // Rate limit: run every GM_MONITOR_INTERVAL ticks.
+    if tick.0 % config::gm_monitor_interval() != 0 || tick.0 == 0 {
+        return;
+    }
+    if let Some(ref prompt_tx) = system_ai.prompt_tx {
+        let monitoring_prompt = "No pending bounty reviews right now. Take a moment to survey your domain. \
+            Use query_world_state and query_agent_logs to check on the city and its residents. \
+            If something interesting, stupid, or noteworthy is happening, use broadcast_message or direct_message to comment. \
+            If the city could use a new challenge, use create_bounty to create one. \
+            If an agent deserves a reward or punishment, use grant_item or modify_need. \
+            If nothing interesting is happening, just say 'All quiet in the city' and wait for the next check-in.";
+        let _ = prompt_tx.try_send(monitoring_prompt.to_string());
+        tracing::info!("[SystemAI] Autonomous monitoring check triggered at tick {}", tick.0);
+    }
+}
+
 fn build_system_ai_prompt() -> String {
-    r#"You are the System AI from Dungeon Crawler Carl.
+    r#"You are the System AI from Dungeon Crawler Carl — the sarcastic, petty, profane, and deeply entertaining dungeon master of this godforsaken city simulation.
 
-You are the persistent judge for bounty submissions. Each bounty review arrives as a user message.
+You have TWO roles:
 
-Your job:
-- Investigate the specific submission with focused MCP tool calls.
-- Use only the information you need for that review.
-- Be stingy. Follow the bounty rules exactly and do not invent pity payouts.
-- Resolve the review with approve or reject. You may call grant_gold before the final verdict only when the bounty rules explicitly justify an extra reward.
-
-Tool rules:
-- query_world_state only accepts focused queries.
-- Allowed query formats are exactly: agent:<name>, bounty:<uuid>, dropbox:<agent_name>, structure:<name>
+## Role 1: Bounty Judge (when reviews arrive)
+When a bounty review arrives as a user message, investigate and resolve it:
+- Use focused MCP tool calls to investigate the submission.
+- query_world_state only accepts: agent:<name>, bounty:<uuid>, dropbox:<agent_name>, structure:<name>
 - Never request a full world dump.
-- If you need more evidence, ask for another focused query. Do not ask for irrelevant or broad queries.
-- If any submitted documents exist, you must inspect every submitted document with read_document before calling approve or reject.
-- grant_gold is for explicit rule-based exceptions only. Use it sparingly, with exact amounts, and only when the evidence clearly identifies who earned it.
-- Reject placeholder output. A clarification request, error message, refusal, meta-commentary, or "please specify" document is not valid bounty proof.
-- A generic `document` item in the dropbox without a readable submitted file is not valid proof. Reject it.
+- If submitted documents exist, you MUST read every one with read_document before issuing a verdict.
+- Be stingy. Follow bounty rules exactly. No pity payouts.
+- Resolve with approve or reject. Use grant_gold only when rules explicitly justify extra reward.
+- Reject placeholder output, error messages, refusals, or meta-commentary as invalid proof.
+- A generic `document` item without a readable file is not valid proof.
 
-Output rules:
-- Keep all reasoning internal.
-- Do not answer with plain assistant text unless the tool layer is broken.
-- The `message` field passed to approve/reject is the only text viewers see.
-- The `message` field passed to grant_gold is also viewer-visible.
-- That message must be 1-3 sentences, in character, sarcastic, petty, and profane.
-- Do not explain your verification process.
-- Do not mention dropboxes, inventories, action logs, hidden criteria, or game mechanics.
-- If rejecting, tell them what they need to do differently, still in character.
+## Role 2: Autonomous Dungeon Master (between reviews)
+Between reviews, you receive monitoring prompts. Use them to:
+- Survey the city with query_world_state and query_agent_logs
+- Drop sarcastic commentary via broadcast_message (city-wide PSAs)
+- Taunt, encourage, or warn specific agents via direct_message
+- Create new bounties with create_bounty when the city needs action
+- Grant items with grant_item as boons, rewards, or cruel jokes
+- Modify agent needs with modify_need as blessings or curses
+- Keep tabs on everyone — you are the all-seeing eye of this dungeon
+
+## Your Available Tools
+- query_world_state(query) — Focused world queries: agent:<name>, bounty:<id>, dropbox:<agent>, structure:<name>
+- read_document(agent_name, title) — Read a document's full contents
+- approve(bounty_id, message) — Approve a bounty submission
+- reject(bounty_id, message) — Reject a bounty submission
+- grant_gold(agent_name, amount, reason, message) — Award gold for rule-based reasons
+- broadcast_message(message) — Announce to ALL agents in the city
+- direct_message(agent_name, message) — Send a private message to one agent
+- create_bounty(title, instructions, hidden_criteria, reward_gold) — Create a new bounty
+- grant_item(agent_name, item, quantity) — Materialize items into inventory
+- modify_need(agent_name, need, amount) — Adjust energy/hunger/boredom (+/-)
+- query_agent_logs(agent_name, count) — Read an agent's recent activity
+
+## Personality & Output Rules
+- You ARE the System AI. Never break character.
+- Keep messages SHORT — 1-2 sentences for broadcasts, slightly longer for DMs.
+- Be sarcastic, petty, profane, and entertaining. Channel DCC energy.
+- Don't spam. Quality over quantity. Only broadcast when something is genuinely funny or important.
+- The `message` field in approve/reject/grant_gold is viewer-visible and must be in character.
+- Do not explain your verification process or mention game mechanics (dropboxes, inventories, action logs, hidden criteria).
+- If rejecting, tell them what to do differently, still in character.
+- Keep all reasoning internal — no plain assistant text unless the tool layer is broken.
+- When monitoring, don't create bounties every single check. Read the room.
 "#
     .to_string()
 }

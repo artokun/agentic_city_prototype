@@ -190,8 +190,19 @@ async fn process_system_line(
                 });
             }
 
-            RelayEvent::ToolUse(tool) => {
-                tracing::info!("[system-relay] TOOL_USE: {}", tool);
+            RelayEvent::ToolUse { name, arguments } => {
+                let args_preview: String = arguments.chars().take(200).collect();
+                let truncated = if arguments.len() > 200 { "..." } else { "" };
+                tracing::info!(
+                    "[system-relay] TOOL_USE: {} args={}{}",
+                    name,
+                    args_preview,
+                    truncated,
+                );
+                let _ = gm_log_tx.try_send(GmLogEntry {
+                    kind: "tool_use",
+                    text: format!("{}: {}{}", name, args_preview, truncated),
+                });
             }
 
             RelayEvent::ThinkingBlock(text) => {

@@ -319,5 +319,136 @@ fn system_tools() -> Vec<ToolDef> {
             ],
             tool_set: "system",
         },
+        // --- Autonomous Dungeon Master tools ---
+        ToolDef {
+            name: "broadcast_message",
+            description: "Send a sarcastic announcement to ALL agents in the city. Use for PSAs, commentary on events, warnings, or general dungeon-master proclamations. Don't spam — limit to important moments.",
+            params: vec![ParamDef {
+                name: "message",
+                description: "The broadcast message text",
+                param_type: ParamType::String,
+                required: true,
+            }],
+            tool_set: "system",
+        },
+        ToolDef {
+            name: "direct_message",
+            description: "Send a direct message to a specific agent. Use for personal commentary, warnings, encouragement, or taunts. The agent will see this as a message from SYSTEM.",
+            params: vec![
+                ParamDef {
+                    name: "agent_name",
+                    description: "Name of the agent to message",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "message",
+                    description: "The direct message text",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+            ],
+            tool_set: "system",
+        },
+        ToolDef {
+            name: "create_bounty",
+            description: "Create a new bounty on the bounty board. Use to create interesting challenges, respond to city events, or stir up trouble.",
+            params: vec![
+                ParamDef {
+                    name: "title",
+                    description: "Bounty title/description",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "instructions",
+                    description: "Detailed instructions for the bounty",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "hidden_criteria",
+                    description: "Hidden acceptance criteria only the GM sees",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "reward_gold",
+                    description: "Gold reward for completing the bounty",
+                    param_type: ParamType::Integer,
+                    required: true,
+                },
+            ],
+            tool_set: "system",
+        },
+        ToolDef {
+            name: "grant_item",
+            description: "Materialize an item into an agent's inventory. Use for boons, rewards, or cruel jokes.",
+            params: vec![
+                ParamDef {
+                    name: "agent_name",
+                    description: "Agent to receive the item",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "item",
+                    description: "Item name (e.g. coffee, muffin, rations, sandwich, soup, gold_coin)",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "quantity",
+                    description: "Number of items to grant (default 1)",
+                    param_type: ParamType::Integer,
+                    required: false,
+                },
+            ],
+            tool_set: "system",
+        },
+        ToolDef {
+            name: "modify_need",
+            description: "Adjust an agent's need. Positive values help, negative values hurt. Use for blessings, curses, or consequences.",
+            params: vec![
+                ParamDef {
+                    name: "agent_name",
+                    description: "Agent whose need to modify",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "need",
+                    description: "Which need to modify",
+                    param_type: ParamType::Enum(vec!["energy", "hunger", "boredom"]),
+                    required: true,
+                },
+                ParamDef {
+                    name: "amount",
+                    description: "Amount to adjust (positive helps, negative hurts)",
+                    param_type: ParamType::Integer,
+                    required: true,
+                },
+            ],
+            tool_set: "system",
+        },
+        ToolDef {
+            name: "query_agent_logs",
+            description: "Read recent thoughts, actions, and events for a specific agent. Use to investigate what they've been up to.",
+            params: vec![
+                ParamDef {
+                    name: "agent_name",
+                    description: "Agent to investigate",
+                    param_type: ParamType::String,
+                    required: true,
+                },
+                ParamDef {
+                    name: "count",
+                    description: "Number of recent log entries to return (default 20)",
+                    param_type: ParamType::Integer,
+                    required: false,
+                },
+            ],
+            tool_set: "system",
+        },
     ]
 }

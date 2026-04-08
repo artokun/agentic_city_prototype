@@ -72,6 +72,11 @@ pub async fn start_server_on_port(state: AppState, port: u16) {
         .route("/api/gm/verdict", post(gm_verdict))
         .route("/api/gm/grant_gold", post(gm_grant_gold))
         .route("/api/gm/document", post(gm_document))
+        .route("/api/gm/broadcast", post(gm_broadcast))
+        .route("/api/gm/direct_message", post(gm_direct_message))
+        .route("/api/gm/grant_item", post(gm_grant_item))
+        .route("/api/gm/modify_need", post(gm_modify_need))
+        .route("/api/gm/agent_logs", get(gm_agent_logs))
         .route("/api/debug", get(debug_feed))
         .route("/api/library", get(list_library))
         .route("/api/documents", get(list_documents))
@@ -1257,6 +1262,127 @@ async fn gm_grant_gold(
         "amount": req.amount,
     }))
     .into_response()
+}
+
+// --- GM Autonomous tools endpoints ---
+
+#[derive(Deserialize)]
+struct GmBroadcastRequest {
+    message: String,
+}
+
+async fn gm_broadcast(
+    State(state): State<AppState>,
+    Json(req): Json<GmBroadcastRequest>,
+) -> impl IntoResponse {
+    let cmd = GameCommand::GmBroadcast {
+        message: req.message.clone(),
+    };
+    let _ = state.command_tx.send(cmd).await;
+    Json(serde_json::json!({
+        "result": format!("Broadcast sent: {}", req.message),
+    }))
+}
+
+#[derive(Deserialize)]
+struct GmDirectMessageRequest {
+    agent_name: String,
+    message: String,
+}
+
+async fn gm_direct_message(
+    State(state): State<AppState>,
+    Json(req): Json<GmDirectMessageRequest>,
+) -> impl IntoResponse {
+    let cmd = GameCommand::GmDirectMessage {
+        agent_name: req.agent_name.clone(),
+        message: req.message.clone(),
+    };
+    let _ = state.command_tx.send(cmd).await;
+    Json(serde_json::json!({
+        "result": format!("DM sent to {}", req.agent_name),
+    }))
+}
+
+#[derive(Deserialize)]
+struct GmGrantItemRequest {
+    agent_name: String,
+    item: String,
+    quantity: Option<u32>,
+}
+
+async fn gm_grant_item(
+    State(state): State<AppState>,
+    Json(req): Json<GmGrantItemRequest>,
+) -> impl IntoResponse {
+    let quantity = req.quantity.unwrap_or(1);
+    let cmd = GameCommand::GrantItem {
+        agent_name: req.agent_name.clone(),
+        item: req.item.clone(),
+        quantity,
+    };
+    let _ = state.command_tx.send(cmd).await;
+    Json(serde_json::json!({
+        "result": format!("Granted {}x {} to {}", quantity, req.item, req.agent_name),
+    }))
+}
+
+#[derive(Deserialize)]
+struct GmModifyNeedRequest {
+    agent_name: String,
+    need: String,
+    amount: f32,
+}
+
+async fn gm_modify_need(
+    State(state): State<AppState>,
+    Json(req): Json<GmModifyNeedRequest>,
+) -> impl IntoResponse {
+    let cmd = GameCommand::ModifyNeed {
+        agent_name: req.agent_name.clone(),
+        need: req.need.clone(),
+        amount: req.amount,
+    };
+    let _ = state.command_tx.send(cmd).await;
+    Json(serde_json::json!({
+        "result": format!("Modified {}'s {} by {:+.1}", req.agent_name, req.need, req.amount),
+    }))
+}
+
+/// GET /api/gm/agent_logs — query agent event logs for the GM.
+async fn gm_agent_logs(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let agent_filter = params.get("agent").map(|s| s.to_lowercase());
+    let count: usize = params
+        .get("count")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+
+    let log = state
+        .debug_log
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let filtered: Vec<&DebugEntry> = log
+        .iter()
+        .filter(|e| {
+            agent_filter
+                .as_ref()
+                .map(|f| e.agent.to_lowercase().contains(f))
+                .unwrap_or(true)
+        })
+        .collect();
+
+    let total = filtered.len();
+    let entries: Vec<&DebugEntry> = filtered.into_iter().rev().take(count).collect();
+
+    Json(serde_json::json!({
+        "total": total,
+        "returned": entries.len(),
+        "entries": entries,
+    }))
 }
 
 #[cfg(test)]

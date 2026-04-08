@@ -218,8 +218,16 @@ async fn process_agent_line(
                 let _ = response_tx.send(msg).await;
             }
 
-            RelayEvent::ToolUse(tool) => {
-                tracing::info!("[relay:{}] TOOL_USE: {}", agent_id, tool);
+            RelayEvent::ToolUse { name, arguments } => {
+                let args_preview: String = arguments.chars().take(200).collect();
+                let truncated = if arguments.len() > 200 { "..." } else { "" };
+                tracing::info!(
+                    "[relay:{}] TOOL_USE: {} args={}{}",
+                    agent_id,
+                    name,
+                    args_preview,
+                    truncated,
+                );
             }
 
             RelayEvent::ThinkingBlock(_) => {

@@ -2,7 +2,10 @@ use bevy::prelude::*;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::items::ItemType;
+use crate::agents::components::AgentName;
+use crate::agents::event_log::{AgentEventLog, LogEvent, LogKind};
+use crate::agents::needs::Needs;
+use crate::items::{Inventory, ItemType};
 use crate::network::action_handler::{MpcAction, PendingActions};
 use crate::world::bounty::{
     Bounty, BountyBoard, BountyObjective, BountyStep, BountyTokenStore, StepCondition,
@@ -44,6 +47,23 @@ pub enum GameCommand {
         reason: String,
         message: Option<String>,
     },
+    GmBroadcast {
+        message: String,
+    },
+    GmDirectMessage {
+        agent_name: String,
+        message: String,
+    },
+    GrantItem {
+        agent_name: String,
+        item: String,
+        quantity: u32,
+    },
+    ModifyNeed {
+        agent_name: String,
+        need: String,
+        amount: f32,
+    },
 }
 
 /// Step definition from the API.
@@ -83,6 +103,30 @@ pub struct PendingGoldGrants {
     pub grants: Vec<(String, u32, String, Option<String>)>,
 }
 
+/// Resource: pending GM broadcast messages.
+#[derive(Resource, Default)]
+pub struct PendingGmBroadcasts {
+    pub messages: Vec<String>,
+}
+
+/// Resource: pending GM direct messages.
+#[derive(Resource, Default)]
+pub struct PendingGmDirectMessages {
+    pub messages: Vec<(String, String)>, // (agent_name, message)
+}
+
+/// Resource: pending GM item grants.
+#[derive(Resource, Default)]
+pub struct PendingGmItemGrants {
+    pub grants: Vec<(String, String, u32)>, // (agent_name, item_name, quantity)
+}
+
+/// Resource: pending GM need modifications.
+#[derive(Resource, Default)]
+pub struct PendingGmNeedMods {
+    pub mods: Vec<(String, String, f32)>, // (agent_name, need, amount)
+}
+
 /// System: drain commands from the REST API and apply them to the world.
 pub fn process_commands_system(
     mut receiver: ResMut<CommandReceiver>,
@@ -91,6 +135,10 @@ pub fn process_commands_system(
     mut pending_verdicts: ResMut<PendingVerdicts>,
     mut pending_docs: ResMut<PendingDocuments>,
     mut pending_gold_grants: ResMut<PendingGoldGrants>,
+    mut pending_broadcasts: ResMut<PendingGmBroadcasts>,
+    mut pending_dms: ResMut<PendingGmDirectMessages>,
+    mut pending_item_grants: ResMut<PendingGmItemGrants>,
+    mut pending_need_mods: ResMut<PendingGmNeedMods>,
     tick: Res<crate::tick::TickCount>,
 ) {
     let Some(mut bounty_registry) = boards.iter_mut().next() else {
@@ -281,6 +329,170 @@ pub fn process_commands_system(
                     .grants
                     .push((agent_name, amount, reason, message));
             }
+
+            GameCommand::GmBroadcast { message } => {
+                tracing::info!("[GM] Broadcast: {}", message);
+                pending_broadcasts.messages.push(message);
+            }
+
+            GameCommand::GmDirectMessage {
+                agent_name,
+                message,
+            } => {
+                tracing::info!("[GM] DM to {}: {}", agent_name, message);
+                pending_dms.messages.push((agent_name, message));
+            }
+
+            GameCommand::GrantItem {
+                agent_name,
+                item,
+                quantity,
+            } => {
+                tracing::info!(
+                    "[GM] Grant item: {}x {} to {}",
+                    quantity,
+                    item,
+                    agent_name
+                );
+                pending_item_grants.grants.push((agent_name, item, quantity));
+            }
+
+            GameCommand::ModifyNeed {
+                agent_name,
+                need,
+                amount,
+            } => {
+                tracing::info!(
+                    "[GM] Modify need: {} {} {:+.1}",
+                    agent_name,
+                    need,
+                    amount
+                );
+                pending_need_mods.mods.push((agent_name, need, amount));
+            }
+        }
+    }
+}
+
+/// System: process GM autonomous commands (broadcasts, DMs, item grants, need mods).
+/// Runs after process_commands_system to handle the pending resources it populates.
+pub fn process_gm_commands_system(
+    mut pending_broadcasts: ResMut<PendingGmBroadcasts>,
+    mut pending_dms: ResMut<PendingGmDirectMessages>,
+    mut pending_item_grants: ResMut<PendingGmItemGrants>,
+    mut pending_need_mods: ResMut<PendingGmNeedMods>,
+    mut event_log: ResMut<AgentEventLog>,
+    agent_sessions: Res<crate::agents::ai::AgentSessions>,
+    mut agents: Query<(Entity, &AgentName, &mut Inventory, &mut Needs)>,
+    tick: Res<crate::tick::TickCount>,
+) {
+    // --- Broadcasts ---
+    for message in pending_broadcasts.messages.drain(..) {
+        event_log.push(LogEvent {
+            tick: tick.0,
+            agent: "SYSTEM".into(),
+            kind: LogKind::Speech,
+            text: format!("[BROADCAST] {}", message),
+        });
+        let formatted = format!("[SYSTEM BROADCAST] {}", message);
+        for (_entity, _name, _inv, _needs) in agents.iter() {
+            // We iterate agents to log, but send via sessions below.
+        }
+        for (_entity, _session) in agent_sessions.sessions.iter() {
+            let _ = _session.prompt_tx.try_send(formatted.clone());
+        }
+        tracing::info!("[GM] Broadcast sent to {} sessions", agent_sessions.sessions.len());
+    }
+
+    // --- Direct Messages ---
+    for (target_name, message) in pending_dms.messages.drain(..) {
+        let mut found = false;
+        for (entity, name, _inv, _needs) in agents.iter() {
+            if name.0.eq_ignore_ascii_case(&target_name) {
+                if let Some(session) = agent_sessions.sessions.get(&entity) {
+                    let formatted = format!("[SYSTEM DM] {}", message);
+                    let _ = session.prompt_tx.try_send(formatted);
+                    found = true;
+                }
+                break;
+            }
+        }
+        event_log.push(LogEvent {
+            tick: tick.0,
+            agent: "SYSTEM".into(),
+            kind: LogKind::Speech,
+            text: format!("[to {}] {}", target_name, message),
+        });
+        if !found {
+            tracing::warn!("[GM] DM target '{}' not found or has no session", target_name);
+        }
+    }
+
+    // --- Item Grants ---
+    for (target_name, item_name, quantity) in pending_item_grants.grants.drain(..) {
+        let item_type = crate::network::action_handler::parse_item_name(&item_name);
+        match item_type {
+            Some(item) => {
+                let mut granted = false;
+                for (_entity, name, mut inv, _needs) in agents.iter_mut() {
+                    if name.0.eq_ignore_ascii_case(&target_name) {
+                        inv.add(item, quantity);
+                        granted = true;
+                        break;
+                    }
+                }
+                if granted {
+                    event_log.push(LogEvent {
+                        tick: tick.0,
+                        agent: "SYSTEM".into(),
+                        kind: LogKind::System,
+                        text: format!("[GM] Granted {}x {} to {}", quantity, item_name, target_name),
+                    });
+                } else {
+                    tracing::warn!("[GM] Grant item target '{}' not found", target_name);
+                }
+            }
+            None => {
+                tracing::warn!("[GM] Unknown item type '{}' for grant", item_name);
+            }
+        }
+    }
+
+    // --- Need Modifications ---
+    for (target_name, need_name, amount) in pending_need_mods.mods.drain(..) {
+        let mut modified = false;
+        for (_entity, name, _inv, mut needs) in agents.iter_mut() {
+            if name.0.eq_ignore_ascii_case(&target_name) {
+                match need_name.to_lowercase().as_str() {
+                    "energy" => {
+                        needs.energy = (needs.energy + amount).clamp(0.0, 100.0);
+                    }
+                    "hunger" => {
+                        needs.hunger = (needs.hunger + amount).clamp(0.0, 100.0);
+                    }
+                    "boredom" => {
+                        needs.boredom = (needs.boredom + amount).clamp(0.0, 100.0);
+                    }
+                    _ => {
+                        tracing::warn!("[GM] Unknown need '{}' for modify_need", need_name);
+                    }
+                }
+                modified = true;
+                break;
+            }
+        }
+        if modified {
+            event_log.push(LogEvent {
+                tick: tick.0,
+                agent: "SYSTEM".into(),
+                kind: LogKind::System,
+                text: format!(
+                    "[GM] Modified {}'s {} by {:+.1}",
+                    target_name, need_name, amount
+                ),
+            });
+        } else {
+            tracing::warn!("[GM] Modify need target '{}' not found", target_name);
         }
     }
 }
